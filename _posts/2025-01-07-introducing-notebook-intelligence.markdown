@@ -4,7 +4,7 @@ title:  "Introducing Notebook Intelligence!"
 date:   2025-01-07 18:49:32 -0800
 categories: blog
 ---
-I am thrilled to announce the release of [Notebook Intelligence](https://github.com/mbektas/notebook-intelligence) (NBI)! NBI is an AI coding assistant and extensible AI framework for JupyterLab. It uses [GitHub Copilot](https://github.com/features/copilot) under the hood and is inspired by its design principles. NBI greatly boosts the productivity of JupyterLab users with AI assistance powered by GitHub Copilot.
+I am thrilled to announce the release of [Notebook Intelligence](https://github.com/mbektas/notebook-intelligence){:target="_blank"} (NBI)! NBI is an AI coding assistant and extensible AI framework for JupyterLab. It uses [GitHub Copilot](https://github.com/features/copilot){:target="_blank"} under the hood and is inspired by its design principles. NBI greatly boosts the productivity of JupyterLab users with AI assistance powered by GitHub Copilot.
 
 ![Generate code](/notebook-intelligence/assets/images/generate-code.gif)
 
@@ -79,7 +79,7 @@ pip install notebook-intelligence
 
 ## Authentication with GitHub Copilot
 
-Notebook Intelligence requires a [GitHub Copilot](https://github.com/features/copilot) subscription. NBI provides a user friendly interface to sign into your GitHub Copilot account from JupyterLab UI to activate access to your subscription.
+Notebook Intelligence requires a [GitHub Copilot](https://github.com/features/copilot){:target="_blank"} subscription. NBI provides a user friendly interface to sign into your GitHub Copilot account from JupyterLab UI to activate access to your subscription.
 
 ![GitHub Copilot authentication](/notebook-intelligence/assets/images/github-auth.gif)
 
@@ -89,13 +89,8 @@ Notebook Intelligence provides APIs to let developers extend its capabilities. Y
 
 ## Try it out and share your feedback!
 
-[Notebook Intelligence](https://github.com/mbektas/notebook-intelligence) is currently in beta and designed for Python (support for more languages coming soon). Please try it out and share your feedback and any feature requests using project's [GitHub issues](https://github.com/mbektas/notebook-intelligence/issues)! User feedback from the community will shape the project's roadmap.
+[Notebook Intelligence](https://github.com/mbektas/notebook-intelligence){:target="_blank"} is currently in beta and designed for Python (support for more languages coming soon). Please try it out and share your feedback and any feature requests using project's [GitHub issues](https://github.com/mbektas/notebook-intelligence/issues){:target="_blank"}. User feedback from the community will shape the project's roadmap.
 
 ## About the Author
 
-[Mehmet Bektas](https://www.linkedin.com/in/mehmet-bektas) is a Senior Software Engineer at Netflix and a Jupyter Distinguished Contributor. He is the author of Notebook Intelligence, and contributes to JupyterLab, JupyterLab Desktop and several other projects in the Jupyter eco-system.
-
-
-[jekyll-docs]: https://jekyllrb.com/docs/home
-[jekyll-gh]:   https://github.com/jekyll/jekyll
-[jekyll-talk]: https://talk.jekyllrb.com/
+[Mehmet Bektas](https://www.linkedin.com/in/mehmet-bektas){:target="_blank"} is a Senior Software Engineer at Netflix and a Jupyter Distinguished Contributor. He is the author of Notebook Intelligence, and contributes to JupyterLab, JupyterLab Desktop and several other projects in the Jupyter eco-system.

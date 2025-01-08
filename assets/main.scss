@@ -2,10 +2,23 @@
 ---
 /* Override theme defaults */
 $base-font-family: medium-content-sans-serif-font, -apple-system, "system-ui", "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-// $base-font-size: 16px;
+// $base-line-height: 2;
 
 /* load _sass/minima.scss */
 @import "minima";
 
 /* Put any custom CSS here */
 
+body {
+    font-size: 18px;
+    line-height: 1.6;
+}
+
+h2 {
+    padding-top: 20px;
+}
+
+img {
+    padding-top: 20px;
+    padding-bottom: 20px;
+}
