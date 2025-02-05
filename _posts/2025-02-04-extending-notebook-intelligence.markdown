@@ -136,6 +136,14 @@ response.stream(MarkdownData("Hello world!"))
 
 ![Markdown response type](/assets/images/response-types/response-type-markdown.png){: width="400" }
 
+Markdown response can contain code sections. Code sections will be rendered in a special frame with action buttons on the header area for easy integration into the workspace.
+
+```python
+response.stream(MarkdownData("""Here is a Python method I generated. \n```python\ndef show_message():\n  print('Hello world!')\n```\n"""))
+```
+
+![Markdown code response](/assets/images/response-types/response-type-markdown-code.png){: width="400" }
+
 #### HTMLFrame
 
 HTML content can be sent using this message type. Note that the content will always be rendered in a sandboxed iframe that allows scripts. You can also specify height of the frame in pixels as it won't auto resize to content.
@@ -244,6 +252,8 @@ async def handle_chat_request(self, request: ChatRequest, response: ChatResponse
     response.stream(MarkdownData("Handled chat request"))
     response.finish()
 ```
+
+![Cancelling request](/assets/images/canceling-chat-request.gif)
 
 ## Try it out and share your feedback!
 
