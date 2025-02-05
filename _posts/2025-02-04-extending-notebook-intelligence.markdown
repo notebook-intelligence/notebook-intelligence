@@ -25,7 +25,7 @@ NBI extensions are executed in the backend as part of Jupyter server process. NB
 
 Extensions can add custom chat participants and commands specific to that participant.
 
-![Extension demo](/assets/images/response-types-demo.gif)
+![Extension demo](/notebook-intelligence/assets/images/response-types-demo.gif)
 
 ### UI Access by extensions
 
@@ -82,7 +82,7 @@ class ExampleExtension(NotebookIntelligenceExtension):
 
 NBI lists all available chat participants with their commands in the prompt auto-complete list. Chat participants are identified by `@participant-id`. If a chat prompt starts with `@participant-id` the request is routed to the particular chat participant with that id.
 
-![Chat participants](/assets/images/chat-participants.png){: width="400" }
+![Chat participants](/notebook-intelligence/assets/images/chat-participants.png){: width="400" }
 
 Extensions can define chat participants to handle the chat requests. Chat participants can define commands. Commands start with `/` and they can be designed to work with or without a prompt. It lets the chat participant developer have more control over the prompt handling. Commands defined by chat participants are listed in the prompt auto-complete list as well.
 
@@ -134,7 +134,7 @@ This is the most common response type, any text response with formatting can be 
 response.stream(MarkdownData("Hello world!"))
 ```
 
-![Markdown response type](/assets/images/response-types/response-type-markdown.png){: width="400" }
+![Markdown response type](/notebook-intelligence/assets/images/response-types/response-type-markdown.png){: width="400" }
 
 Markdown response can contain code sections. Code sections will be rendered in a special frame with action buttons on the header area for easy integration into the workspace.
 
@@ -142,7 +142,7 @@ Markdown response can contain code sections. Code sections will be rendered in a
 response.stream(MarkdownData("""Here is a Python method I generated. \n```python\ndef show_message():\n  print('Hello world!')\n```\n"""))
 ```
 
-![Markdown code response](/assets/images/response-types/response-type-markdown-code.png){: width="400" }
+![Markdown code response](/notebook-intelligence/assets/images/response-types/response-type-markdown-code.png){: width="400" }
 
 #### HTMLFrame
 
@@ -156,7 +156,7 @@ response.stream(HTMLFrameData(f"""
     """, height=400))
 ```
 
-![HTMLFrame response type](/assets/images/response-types/response-type-htmlframe.png){: width="400" }
+![HTMLFrame response type](/notebook-intelligence/assets/images/response-types/response-type-htmlframe.png){: width="400" }
 
 #### Button
 This response type lets you show an action button on chat interface. You can specify the title of the button, the UI command ID to trigger when the button is clicked and also any arguments to pass to the UI command. The example button below shows a notification message on JupyterLab UI when clicked.
@@ -173,7 +173,7 @@ response.stream(ButtonData(
 )
 ```
 
-![Button response type](/assets/images/response-types/response-type-button.png)
+![Button response type](/notebook-intelligence/assets/images/response-types/response-type-button.png)
 
 #### Anchor
 Anchor response type lets you show a link on the chat interface. You can specify the URL and the title of the link. These links are always opened on a new browser tab.
@@ -181,7 +181,7 @@ Anchor response type lets you show a link on the chat interface. You can specify
 ```python
 response.stream(AnchorData("https://www.jupyter.org", "Click me! I am a link!"))
 ```
-![Anchor response type](/assets/images/response-types/response-type-anchor.png){: width="400" }
+![Anchor response type](/notebook-intelligence/assets/images/response-types/response-type-anchor.png){: width="400" }
 
 #### Progress
 Progress response type lets you show a progress message. You can send this response before executing a long running task. It will be automatically removed once a new response is received by the UI.
@@ -190,7 +190,7 @@ Progress response type lets you show a progress message. You can send this respo
 response.stream(ProgressData("Running..."))
 ```
 
-![Progress response type](/assets/images/response-types/response-type-progress.png){: width="400" }
+![Progress response type](/notebook-intelligence/assets/images/response-types/response-type-progress.png){: width="400" }
 
 #### Confirmation
 Confirmation response type shows a confirmation message with confirm and cancel buttons on the chat UI and waits for the user to click an option. You can use this before applying irreversible changes or time consuming tasks for example.
@@ -215,7 +215,7 @@ else:
     response.finish()
 ```
 
-![Confirmation response type](/assets/images/response-types/response-type-confirmation.gif)
+![Confirmation response type](/notebook-intelligence/assets/images/response-types/response-type-confirmation.gif)
 
 ### Running UI Commands
 You can trigger Jupyter UI commands directly from your extension when processing prompt requests. You can do that by calling `response.run_ui_command` method. The response for the command will be returned if any.
@@ -253,7 +253,7 @@ async def handle_chat_request(self, request: ChatRequest, response: ChatResponse
     response.finish()
 ```
 
-![Cancelling request](/assets/images/canceling-chat-request.gif)
+![Cancelling request](/notebook-intelligence/assets/images/canceling-chat-request.gif)
 
 ## Try it out and share your feedback!
 

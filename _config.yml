@@ -24,6 +24,7 @@ description: >- # this means to ignore newlines until "baseurl:"
   AI coding assistant and extensible AI framework for JupyterLab
 domain: notebook-intelligence.github.io       # if you want to force HTTPS, specify the domain without the http at the start, e.g. example.com
 url: https://notebook-intelligence.github.io  # the base hostname and protocol for your site, e.g. http://example.com
+baseurl: /notebook-intelligence/
 twitter_username: mbektash
 github_username:  mbektas
 
