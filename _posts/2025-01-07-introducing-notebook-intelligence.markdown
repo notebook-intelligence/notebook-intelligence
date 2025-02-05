@@ -4,70 +4,70 @@ title:  "Introducing Notebook Intelligence!"
 date:   2025-01-07 18:49:32 -0800
 categories: blog
 ---
-I am thrilled to announce the release of [Notebook Intelligence](https://github.com/mbektas/notebook-intelligence){:target="_blank"} (NBI)! NBI is an AI coding assistant and extensible AI framework for JupyterLab. It uses [GitHub Copilot](https://github.com/features/copilot){:target="_blank"} under the hood and is inspired by its design principles. NBI greatly boosts the productivity of JupyterLab users with AI assistance powered by GitHub Copilot.
+I am thrilled to announce the release of [Notebook Intelligence](https://github.com/notebook-intelligence/notebook-intelligence){:target="_blank"} (NBI)! NBI is an AI coding assistant and extensible AI framework for JupyterLab. It uses [GitHub Copilot](https://github.com/features/copilot){:target="_blank"} under the hood and is inspired by its design principles. NBI greatly boosts the productivity of JupyterLab users with AI assistance powered by GitHub Copilot.
 
-![Generate code](/notebook-intelligence/assets/images/generate-code.gif)
+![Generate code](/assets/images/generate-code.gif)
 
 ## Generate code, iterate on it
 NBI integrates tightly with the notebook document. Using cell toolbar item "Generate code" or keyboard shortcut "Cmd + G" / "Ctrl + G", you can launch the inline coding assistant popover to generate code cells.
 
-![Generate code popover](/notebook-intelligence/assets/images/generate-code-popover.png)
+![Generate code popover](/assets/images/generate-code-popover.png)
 
 If the inline coding assistant is launched for a cell with existing code, then the generated code is shown in a diff view for approval.
 
-![Generate code with diff viewer](/notebook-intelligence/assets/images/generate-code4-cropped.png)
+![Generate code with diff viewer](/assets/images/generate-code4-cropped.png)
 
 If you are not satisfied with the generated code, you can re-generate with an updated prompt. Diff viewer also lets you edit the generated code manually before accepting it.
 
-![Fix code in cell with NBI](/notebook-intelligence/assets/images/fix-diff.gif)
+![Fix code in cell with NBI](/assets/images/fix-diff.gif)
 
 ## Explain and fix code, troubleshoot errors reported
 
 NBI adds a new sub menu to notebook cell context menu. Copilot can explain code in a cell or suggest fixes for any issues in it. Clicking these menu items opens Copilot Chat and generates a suggestion.
 
-![Copilot context menu](/notebook-intelligence/assets/images/copilot-context-menu.png)
+![Copilot context menu](/assets/images/copilot-context-menu.png)
 
 If the code cell has an output you can ask Copilot to explain it. If there are any errors reported, you can have Copilot to troubleshoot as well. These actions also take you to Copilot Chat interface.
 
-![Explain, fix, troubleshoot](/notebook-intelligence/assets/images/explain-fix-troubleshoot.gif)
+![Explain, fix, troubleshoot](/assets/images/explain-fix-troubleshoot.gif)
 
 ## Inline Completions
 
 Notebook Intelligence integrates with JupyterLab's inline completion APIs and provides code suggestions as you type in a code cell or a Python file.
 
-![Inline completions](/notebook-intelligence/assets/images/inline-completion.png)
+![Inline completions](/assets/images/inline-completion.png)
 
 Code suggestions are generated using GitHub Copilot. They are blazing fast and relevant to document you are working on. In addition to the code cell you are working on, the code in the surrounding cells are also used as context when generating suggestions.
 
-![Inline completions example](/notebook-intelligence/assets/images/inline-completions.gif)
+![Inline completions example](/assets/images/inline-completions.gif)
 
 ## Copilot Chat
 
 NBI provides a user friendly chat interface to chat with GitHub Copilot. You can ask questions related to coding.
 
-![Copilot Chat](/notebook-intelligence/assets/images/copilot-chat.gif)
+![Copilot Chat](/assets/images/copilot-chat.gif)
 
 If Copilot generates code snippets, they are rendered in a special format in a section with an action toolbar. Toolbar will have buttons to copy, insert, create new Python file and notebook from the snippet. Using these you can easily integrate the generated code into your project.
 
-![Copilot Chat toolbar actions](/notebook-intelligence/assets/images/copilot-chat-toolbar.gif)
+![Copilot Chat toolbar actions](/assets/images/copilot-chat-toolbar.gif)
 
 ## Chat Commands
 
 Chat interface also provides commands to generate new notebooks and Python code files based on your task described in the prompt. Commands start with "/" and a command auto-complete list is shown as you type. You can navigate between the commands using keyboard and choose a suggestion using "Enter" or "Tab" keys.
 
-![Chat command auto-complete](/notebook-intelligence/assets/images/copilot-chat.png)
+![Chat command auto-complete](/assets/images/copilot-chat.png)
 
 ### /newNotebook command
 
 You can generate new notebooks from a prompt with the **/newNotebook** command. Notebook generation is shown interactively, a new empty notebook is created and opened, then code and markdown cells are added onto the notebook as they are generated by NBI and GitHub Copilot.
 
-![Generate notebook example](/notebook-intelligence/assets/images/new-notebook.gif)
+![Generate notebook example](/assets/images/new-notebook.gif)
 
 ### /newPythonFile command
 
 You can also create new Python files from a prompt using the **/newPythonFile** command.
 
-![Generate Python file example](/notebook-intelligence/assets/images/new-python-file.gif)
+![Generate Python file example](/assets/images/new-python-file.gif)
 
 ## Getting Started with Notebook Intelligence
 
@@ -81,7 +81,7 @@ pip install notebook-intelligence
 
 Notebook Intelligence requires a [GitHub Copilot](https://github.com/features/copilot){:target="_blank"} subscription. NBI provides a user friendly interface to sign into your GitHub Copilot account from JupyterLab UI to activate access to your subscription.
 
-![GitHub Copilot authentication](/notebook-intelligence/assets/images/github-auth.gif)
+![GitHub Copilot authentication](/assets/images/github-auth.gif)
 
 ## Extensible Framework
 
@@ -89,7 +89,7 @@ Notebook Intelligence provides APIs to let developers extend its capabilities. Y
 
 ## Try it out and share your feedback!
 
-[Notebook Intelligence](https://github.com/mbektas/notebook-intelligence){:target="_blank"} is currently in beta and designed for Python (support for more languages coming soon). Please try it out and share your feedback and any feature requests using project's [GitHub issues](https://github.com/mbektas/notebook-intelligence/issues){:target="_blank"}. User feedback from the community will shape the project's roadmap.
+[Notebook Intelligence](https://github.com/notebook-intelligence/notebook-intelligence){:target="_blank"} is currently in beta and designed for Python (support for more languages coming soon). Please try it out and share your feedback and any feature requests using project's [GitHub issues](https://github.com/notebook-intelligence/notebook-intelligence/issues){:target="_blank"}. User feedback from the community will shape the project's roadmap.
 
 ## About the Author
 
