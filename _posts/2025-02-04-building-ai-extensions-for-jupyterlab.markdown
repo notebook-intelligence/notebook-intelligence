@@ -257,7 +257,7 @@ async def handle_chat_request(self, request: ChatRequest, response: ChatResponse
 
 ## Try it out and share your feedback!
 
-I am looking forward to seeing the extensions built by the community. Please try the extension APIs and share your feedback using project's [GitHub issues](https://github.com/notebook-intelligence/notebook-intelligence/issues)! User feedback from the community will shape the project's roadmap. Please note that [Notebook Intelligence](https://github.com/notebook-intelligence/notebook-intelligence) is currently in beta and extension APIs are subject to change.
+I am looking forward to seeing the extensions built by the community. Please try the extension APIs and share your feedback using project's [GitHub issues](https://github.com/notebook-intelligence/notebook-intelligence/issues)! User feedback from the community will shape the project's roadmap.
 
 ## About the Author
 
