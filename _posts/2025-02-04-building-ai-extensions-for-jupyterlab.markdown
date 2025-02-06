@@ -1,13 +1,13 @@
 ---
 layout: post
-title:  "Extending Copilot Chat in JupyterLab"
+title:  "Building AI Extensions for JupyterLab"
 date:   2025-02-04 18:49:32 -0800
 categories: blog
 ---
 
-[Notebook Intelligence](https://github.com/notebook-intelligence/notebook-intelligence) (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. NBI can be extented to provide custom chat participants and AI tool integrations. For an introduction to NBI see [Introducing Notebook Intelligence blog post]({% post_url 2025-01-07-introducing-notebook-intelligence %}) first.
+[Notebook Intelligence](https://github.com/notebook-intelligence/notebook-intelligence) (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. For an introduction to NBI see [Introducing Notebook Intelligence blog post]({% post_url 2025-01-07-introducing-notebook-intelligence %}) first.
 
-GitHub Copilot and other AI coding assistants generate chat responses based on publicly available knowledge and they do not have access to your workspace, tools and services. By extending NBI, you can build custom chat interactions and provide access to proprietary or external data, tools and services. This lets you build custom, AI powered chat experiences, natural language interface to JupyterLab and your tools.
+GitHub Copilot and other AI coding assistants generate chat responses based on publicly available knowledge and they do not have access to your workspace, tools and services. NBI provides Extension APIs to build AI extensions for JupyterLab. By extending NBI, you can build custom chat interactions and provide access to proprietary or external data, tools and services. This lets you build custom, AI powered chat experiences, natural language interface to JupyterLab and your tools.
 
 ## NBI Extensions Overview
 
