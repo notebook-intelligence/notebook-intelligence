@@ -259,7 +259,7 @@ async def handle_chat_request(self, request: ChatRequest, response: ChatResponse
 
 I am looking forward to seeing the extensions built by the community. Please try the extension APIs and share your feedback using project's [GitHub issues](https://github.com/notebook-intelligence/notebook-intelligence/issues)! User feedback from the community will shape the project's roadmap.
 
-## About the Author
+## About the Author
 
 [Mehmet Bektas](https://www.linkedin.com/in/mehmet-bektas) is a Senior Software Engineer at Netflix and a Jupyter Distinguished Contributor. He is the author of Notebook Intelligence, and contributes to JupyterLab, JupyterLab Desktop and several other projects in the Jupyter eco-system.
 
