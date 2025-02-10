@@ -213,7 +213,7 @@ Notice that in this extension example MapResponseGeneratorTool and MapNotebookCr
 
 ## Chat Participant
 
-In NBI AI framework, Tools are tied to Chat Participants. For our extension we create `AIAgentChatParticipant` as our participant (for more details on NBI extensions and chat participants see [this blog]({{site.baseurl}}{% post_url 2025-02-04-building-ai-extensions-for-jupyterlab %})). Our chat participant returns list of tools it defines from the `tools` property.
+In NBI AI framework, AI Agents are defined as chat participants and tools are tied to specific chat participants. For our extension we create `AIAgentChatParticipant` as our participant (for more details on NBI extensions and chat participants see [this blog]({{site.baseurl}}{% post_url 2025-02-04-building-ai-extensions-for-jupyterlab %})). Our chat participant returns list of tools it defines from the `tools` property.
 
 In `handle_chat_request` method our chat participant passes the request to the base `ChatParticipant` class to handle tool calling for us.
 
