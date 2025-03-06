@@ -67,6 +67,8 @@ class LLMProviderExtension(NotebookIntelligenceExtension):
         log.info("Custom LLM Provider extension activated")
 ```
 
+For building NBI extensions see [Building AI Extensions for JupyterLab]({{site.baseurl}}{% post_url 2025-02-04-building-ai-extensions-for-jupyterlab %}) blog post.
+
 ## Try it out and share your feedback!
 
 Please try the LLM provider and model options and share your feedback using project's [GitHub issues](https://github.com/notebook-intelligence/notebook-intelligence/issues)! User feedback from the community will shape the project's roadmap.
