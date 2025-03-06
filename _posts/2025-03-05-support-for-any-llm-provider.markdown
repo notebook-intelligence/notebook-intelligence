@@ -11,6 +11,8 @@ Notebook Intelligence now supports any LLM Provider and compatible model for cha
 
 GitHub Copilot is still the recommended and the default model provider. Now, you can choose which model to use from the options provided by GitHub Copilot service.
 
+![which AI model prompt](/notebook-intelligence/assets/images/llm-providers/llm-provider-model.gif){: width="600" }
+
 ## Notebook Intelligence Settings Dialog
 
 You can configure the model provider and model options using the Notebook Intelligence Settings dialog. You can access this dialog from JupyterLab Settings menu -> `Notebook Intelligence Settings`, using `/settings` command in Copilot Chat or by using the command palette.
