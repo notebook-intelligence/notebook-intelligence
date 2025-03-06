@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Notebook Intelligence now supports any LLM Provider and Model!"
+title:  "Notebook Intelligence now supports any LLM Provider and AI Model!"
 date:   2025-03-05 01:00:00 -0800
 categories: blog
 ---
