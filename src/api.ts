@@ -93,9 +93,25 @@ export class NBIAPI {
     );
 
     this._webSocket = new WebSocket(wsUrl);
+
+    // Wait for the WebSocket to open
+    await new Promise<void>((resolve, reject) => {
+      this._webSocket.onopen = () => resolve();
+      this._webSocket.onerror = (err) => reject(err);
+    });
+
     this._webSocket.onmessage = msg => {
       this._messageReceived.emit(msg.data);
     };
+  }
+
+  static async safeSend(data: any) {
+    // Check websocket is open before sending data
+    if (this._webSocket.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket is not open. Reinitializing...');
+      await NBIAPI.initializeWebsocket();
+    }
+    this._webSocket.send(data);
   }
 
   static getLoginStatus(): GitHubCopilotLoginStatus {
@@ -222,7 +238,7 @@ export class NBIAPI {
         responseEmitter.emit(msg);
       }
     });
-    this._webSocket.send(
+    this.safeSend(
       JSON.stringify({
         id: messageId,
         type: RequestDataType.ChatRequest,
@@ -248,7 +264,7 @@ export class NBIAPI {
         responseEmitter.emit(msg);
       }
     });
-    this._webSocket.send(
+    this.safeSend(
       JSON.stringify({
         id: messageId,
         type: RequestDataType.GenerateCode,
@@ -266,7 +282,7 @@ export class NBIAPI {
   }
 
   static async sendChatUserInput(messageId: string, data: any) {
-    this._webSocket.send(
+    this.safeSend(
       JSON.stringify({
         id: messageId,
         type: RequestDataType.ChatUserInput,
@@ -280,7 +296,7 @@ export class NBIAPI {
     messageType: RequestDataType,
     data: any
   ) {
-    this._webSocket.send(
+    this.safeSend(
       JSON.stringify({ id: messageId, type: messageType, data })
     );
   }
@@ -300,7 +316,7 @@ export class NBIAPI {
         responseEmitter.emit(msg);
       }
     });
-    this._webSocket.send(
+    this.safeSend(
       JSON.stringify({
         id: messageId,
         type: RequestDataType.InlineCompletionRequest,
