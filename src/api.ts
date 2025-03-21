@@ -15,6 +15,7 @@ import {
 } from './tokens';
 
 const LOGIN_STATUS_UPDATE_INTERVAL = 2000;
+const WEBSOCKET_STATUS_CHECK_INTERVAL = 2000;
 
 export enum GitHubCopilotLoginStatus {
   NotLoggedIn = 'NOT_LOGGED_IN',
@@ -81,7 +82,12 @@ export class NBIAPI {
       this.updateGitHubLoginStatus();
     }, LOGIN_STATUS_UPDATE_INTERVAL);
 
-    NBIAPI.initializeWebsocket();
+    setInterval(() => {
+      if (!this._webSocket || this._webSocket.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket is not open. Opening...');
+        NBIAPI.initializeWebsocket();
+      }
+    }, WEBSOCKET_STATUS_CHECK_INTERVAL);
   }
 
   static async initializeWebsocket() {
