@@ -92,7 +92,7 @@ export class NBIAPI {
       'copilot'
     );
 
-    this._webSocket = new WebSocket(wsUrl);
+    this._webSocket = new serverSettings.WebSocket(wsUrl);
     this._webSocket.onmessage = msg => {
       this._messageReceived.emit(msg.data);
     };
