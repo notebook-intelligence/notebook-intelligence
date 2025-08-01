@@ -87,6 +87,8 @@ namespace CommandIDs {
   export const createNewFile = 'notebook-intelligence:create-new-file';
   export const createNewNotebookFromPython =
     'notebook-intelligence:create-new-notebook-from-py';
+  export const renameNotebookFromPython =
+    'notebook-intelligence:rename-notebook-from-py';
   export const addCodeCellToNotebook =
     'notebook-intelligence:add-code-cell-to-notebook';
   export const addMarkdownCellToNotebook =
@@ -785,6 +787,26 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         return newNBFile;
       }
     });
+
+    app.commands.addCommand(CommandIDs.renameNotebookFromPython, {
+      execute: async args => {
+        const activeWidget = app.shell.currentWidget;
+        if (activeWidget instanceof NotebookPanel) {
+          const oldPath = activeWidget.context.path;
+          const newPath = args.newName as string;
+
+          if (!newPath.toLowerCase().endsWith('.ipynb')) {
+            return 'Invalid extension for a notebook';
+          }
+
+          await app.serviceManager.contents.rename(oldPath, newPath);
+          return 'Successfully renamed notebook';
+        } else {
+          return 'Cannot rename non notebook files';
+        }
+      }
+    });
+
 
     const isNewEmptyNotebook = (model: ISharedNotebook) => {
       return (
