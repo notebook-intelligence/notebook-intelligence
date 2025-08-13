@@ -915,7 +915,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
         const newCellIndex = isNewEmptyNotebook(model)
           ? 0
-          : model.cells.length - 1;
+          : model.cells.length;
         model.insertCell(newCellIndex, {
           cell_type: 'markdown',
           metadata: { trusted: true },
@@ -937,7 +937,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
         const newCellIndex = isNewEmptyNotebook(model)
           ? 0
-          : model.cells.length - 1;
+          : model.cells.length;
         model.insertCell(newCellIndex, {
           cell_type: 'code',
           metadata: { trusted: true },
