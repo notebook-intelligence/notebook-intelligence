@@ -43,6 +43,10 @@ class NBIConfig:
         self.save()
 
     @property
+    def default_chat_mode(self):
+        return self.get('default_chat_mode', 'ask')
+
+    @property
     def chat_model(self):
         return self.get('chat_model', {'provider': 'github-copilot', 'model': 'gpt-4.1'})
 

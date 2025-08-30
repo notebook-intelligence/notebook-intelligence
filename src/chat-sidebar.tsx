@@ -725,7 +725,8 @@ function SidebarComponent(props: any) {
     useState<IActiveDocumentInfo | null>(null);
   const [currentFileContextTitle, setCurrentFileContextTitle] = useState('');
   const telemetryEmitter: ITelemetryEmitter = props.getTelemetryEmitter();
-  const [chatMode, setChatMode] = useState('ask');
+  const [chatMode, setChatMode] = useState(NBIAPI.config.defaultChatMode);
+
   const [toolSelectionTitle, setToolSelectionTitle] =
     useState('Tool selection');
   const [selectedToolCount, setSelectedToolCount] = useState(0);
@@ -2497,6 +2498,7 @@ function ConfigurationDialogBodyComponent(props: any) {
 
   const handleSaveClick = async () => {
     const config: any = {
+      default_chat_mode: defaultChatMode,
       chat_model: {
         provider: chatModelProvider,
         model: chatModel,
@@ -2531,6 +2533,9 @@ function ConfigurationDialogBodyComponent(props: any) {
   );
   const [inlineCompletionModelProvider, setInlineCompletionModelProvider] =
     useState(nbiConfig.inlineCompletionModel.provider || 'none');
+  const [defaultChatMode, setDefaultChatMode] = useState<string>(
+    nbiConfig.defaultChatMode
+  );
   const [chatModel, setChatModel] = useState<string>(nbiConfig.chatModel.model);
   const [chatModelProperties, setChatModelProperties] = useState<any[]>([]);
   const [inlineCompletionModelProperties, setInlineCompletionModelProperties] =
@@ -2629,6 +2634,27 @@ function ConfigurationDialogBodyComponent(props: any) {
   return (
     <div className="config-dialog">
       <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Default chat mode</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <select
+                    className="jp-mod-styled"
+                    value={defaultChatMode}
+                    onChange={event => setDefaultChatMode(event.target.value)}
+                  >
+                    <option value="ask">Ask</option>
+                    <option value="agent">Agent</option>
+                  </select>
+                </div>
+              </div>
+              <div className="model-config-section-column"> </div>
+            </div>
+          </div>
+        </div>
+
         <div className="model-config-section">
           <div className="model-config-section-header">Chat model</div>
           <div className="model-config-section-body">

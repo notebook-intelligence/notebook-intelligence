@@ -11,7 +11,6 @@ import uuid
 import threading
 import logging
 import tiktoken
-from mcp.client.sse import sse_client
 
 from jupyter_server.extension.application import ExtensionApp
 from jupyter_server.base.handlers import APIHandler
@@ -87,7 +86,8 @@ class GetCapabilitiesHandler(APIHandler):
                 "builtinToolsets": allowed_builtin_toolsets,
                 "mcpServers": mcp_server_tools,
                 "extensions": extensions
-            }
+            },
+            "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
             participant = ai_service_manager.chat_participants[participant_id]
@@ -104,7 +104,7 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["chat_model", "inline_completion_model", "store_github_access_token"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token"])
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])

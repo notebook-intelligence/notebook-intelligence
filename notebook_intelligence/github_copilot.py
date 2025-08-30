@@ -19,6 +19,10 @@ from ._version import __version__ as NBI_VERSION
 
 log = logging.getLogger(__name__)
 
+GHE_SUBDOMAIN = os.getenv("NBI_GHE_SUBDOMAIN", "")
+GH_WEB_BASE_URL = "https://github.com" if GHE_SUBDOMAIN == "" else f"https://{GHE_SUBDOMAIN}.ghe.com"
+GH_REST_API_BASE_URL = "https://api.github.com" if GHE_SUBDOMAIN == "" else f"https://api.{GHE_SUBDOMAIN}.ghe.com"
+
 EDITOR_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 EDITOR_PLUGIN_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 USER_AGENT = f"NotebookIntelligence/{NBI_VERSION}"
@@ -183,7 +187,7 @@ def get_device_verification_info():
         "scope": "read:user"
     }
     try:
-        resp = requests.post('https://github.com/login/device/code',
+        resp = requests.post(f'{GH_WEB_BASE_URL}/login/device/code',
             headers={
                 'accept': 'application/json',
                 'editor-version': EDITOR_VERSION,
@@ -231,7 +235,7 @@ def wait_for_user_access_token_thread_func():
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
         }
         try:
-            resp = requests.post('https://github.com/login/oauth/access_token',
+            resp = requests.post(f'{GH_WEB_BASE_URL}/login/oauth/access_token',
                 headers={
                 'accept': 'application/json',
                 'editor-version': EDITOR_VERSION,
@@ -268,7 +272,7 @@ def get_token():
     github_auth["status"] = LoginStatus.LOGGING_IN
 
     try:
-        resp = requests.get('https://api.github.com/copilot_internal/v2/token', headers={
+        resp = requests.get(f'{GH_REST_API_BASE_URL}/copilot_internal/v2/token', headers={
             'authorization': f'token {access_token}',
             'editor-version': EDITOR_VERSION,
             'editor-plugin-version': EDITOR_PLUGIN_VERSION,

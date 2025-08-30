@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import json
 import threading
 from typing import Any, Union
-from fastmcp.client import SSETransport, StdioTransport
+from fastmcp.client import StdioTransport, StreamableHttpTransport
 from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
@@ -96,15 +96,15 @@ class MCPTool(Tool):
             return f"Error occurred while calling MCP tool: {str(e)}"
 
 @dataclass
-class SSEServerParameters:
+class StreamableHttpServerParameters:
     url: str
     headers: dict[str, Any] | None = None
 
 class MCPServerImpl(MCPServer):
-    def __init__(self, name: str, stdio_params: StdioServerParameters = None, sse_params: SSEServerParameters = None, auto_approve_tools: list[str] = []):
+    def __init__(self, name: str, stdio_params: StdioServerParameters = None, streamable_http_params: StreamableHttpServerParameters = None, auto_approve_tools: list[str] = []):
         self._name: str = name
         self._stdio_params: StdioServerParameters = stdio_params
-        self._sse_params: SSEServerParameters = sse_params
+        self._streamable_http_params: StreamableHttpServerParameters = streamable_http_params
         self._auto_approve_tools: set[str] = set(auto_approve_tools)
         self._tried_to_get_tool_list = False
         self._mcp_tools = []
@@ -122,10 +122,10 @@ class MCPServerImpl(MCPServer):
                 args=self._stdio_params.args,
                 env=self._stdio_params.env
             ))
-        elif self._sse_params is not None:
-            return Client(transport=SSETransport(
-                url=self._sse_params.url,
-                headers=self._sse_params.headers
+        elif self._streamable_http_params is not None:
+            return Client(transport=StreamableHttpTransport(
+                url=self._streamable_http_params.url,
+                headers=self._streamable_http_params.headers
             ))
 
     async def get_client(self) -> Client:
@@ -308,7 +308,11 @@ class MCPManager:
             server_url = server_config["url"]
             headers = server_config.get("headers", None)
 
-            return MCPServerImpl(server_name, sse_params=SSEServerParameters(url=server_url, headers=headers), auto_approve_tools=auto_approve_tools)
+            return MCPServerImpl(
+                server_name,
+                streamable_http_params=StreamableHttpServerParameters(url=server_url, headers=headers),
+                auto_approve_tools=auto_approve_tools
+            )
 
         log.error(f"Invalid MCP server configuration for: {server_name}")
         return None

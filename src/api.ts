@@ -50,6 +50,10 @@ export class NBIConfig {
     return this.capabilities.inline_completion_models;
   }
 
+  get defaultChatMode(): string {
+    return this.capabilities.default_chat_mode;
+  }
+
   get chatModel(): any {
     return this.capabilities.chat_model;
   }
