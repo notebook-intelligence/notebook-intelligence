@@ -3,7 +3,7 @@
 import json
 from typing import Any
 from notebook_intelligence.api import ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, CancelToken, ChatResponse, CompletionContext, LLMProviderProperty
-from openai import OpenAI
+from openai import NOT_GIVEN, OpenAI
 
 DEFAULT_CONTEXT_WINDOW = 4096
 
@@ -43,13 +43,14 @@ class OpenAICompatibleChatModel(ChatModel):
         base_url = base_url_prop.value if base_url_prop is not None else None
         base_url = base_url if base_url.strip() != "" else None
         api_key = self.get_property("api_key").value
+        has_tools = tools is not None and len(tools) > 0
 
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
             model=model_id,
             messages=messages.copy(),
-            tools=tools,
-            tool_choice=options.get("tool_choice", None),
+            tools=tools if has_tools else NOT_GIVEN,
+            tool_choice=options.get("tool_choice", None) if has_tools else NOT_GIVEN,
             stream=stream,
         )
 
