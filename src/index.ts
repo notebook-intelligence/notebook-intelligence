@@ -44,7 +44,7 @@ import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
   ChatSidebar,
-  ConfigurationDialogBody,
+  SettingsDialogBody,
   GitHubCopilotLoginDialogBody,
   GitHubCopilotStatusBarItem,
   InlinePromptWidget,
@@ -1230,7 +1230,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
 
     const createNewSettingsWidget = () => {
-      const dialogBody = new ConfigurationDialogBody({
+      const dialogBody = new SettingsDialogBody({
         onSave: () => {
           NBIAPI.fetchCapabilities();
         },

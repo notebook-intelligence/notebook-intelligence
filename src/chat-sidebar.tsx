@@ -264,7 +264,7 @@ export class GitHubCopilotLoginDialogBody extends ReactWidget {
   private _onLoggedIn: () => void;
 }
 
-export class ConfigurationDialogBody extends ReactWidget {
+export class SettingsDialogBody extends ReactWidget {
   constructor(options: {
     onSave: () => void;
     onEditMCPConfigClicked: () => void;
@@ -277,7 +277,7 @@ export class ConfigurationDialogBody extends ReactWidget {
 
   render(): JSX.Element {
     return (
-      <ConfigurationDialogBodyComponent
+      <SettingsDialogBodyComponent
         onEditMCPConfigClicked={this._onEditMCPConfigClicked}
         onSave={this._onSave}
       />
@@ -2498,7 +2498,7 @@ function GitHubCopilotLoginDialogBodyComponent(props: any) {
   );
 }
 
-function ConfigurationDialogBodyComponent(props: any) {
+function SettingsDialogBodyComponent(props: any) {
   const nbiConfig = NBIAPI.config;
   const llmProviders = nbiConfig.llmProviders;
   const [chatModels, setChatModels] = useState([]);
