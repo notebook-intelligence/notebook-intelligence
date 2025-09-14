@@ -19,5 +19,5 @@
     "strictNullChecks": false,
     "target": "ES2018"
   },
-  "include": ["src/*"]
+  "include": ["src/**/*"]
 }

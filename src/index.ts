@@ -44,7 +44,6 @@ import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
   ChatSidebar,
-  SettingsDialogBody,
   GitHubCopilotLoginDialogBody,
   GitHubCopilotStatusBarItem,
   InlinePromptWidget,
@@ -81,6 +80,7 @@ import {
 import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
+import { SettingsPanelContentGeneral } from './components/settings-panel';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -1230,7 +1230,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
 
     const createNewSettingsWidget = () => {
-      const dialogBody = new SettingsDialogBody({
+      const settingsPanelContentGeneral = new SettingsPanelContentGeneral({
         onSave: () => {
           NBIAPI.fetchCapabilities();
         },
@@ -1244,7 +1244,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       settingsPanel.title.label = 'NBI Settings';
       settingsPanel.title.closable = true;
       settingsPanel.addWidget(new Widget());
-      settingsPanel.addWidget(dialogBody);
+      settingsPanel.addWidget(settingsPanelContentGeneral);
 
       const widget = new MainAreaWidget({ content: settingsPanel });
       widget.id = 'nbi-settings';
