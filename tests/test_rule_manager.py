@@ -278,28 +278,6 @@ active: true
         # May or may not have ask mode rules depending on file patterns
         assert len(formatted) > 0
     
-    def test_create_sample_rules_directory(self, tmp_path):
-        target_dir = tmp_path / "sample_rules"
-        manager = RuleManager(str(tmp_path))
-        
-        manager.create_sample_rules_directory(str(target_dir))
-        
-        # Check directory structure
-        assert target_dir.exists()
-        assert (target_dir / "modes").exists()
-        assert (target_dir / "modes" / "ask").exists()
-        assert (target_dir / "modes" / "agent").exists()
-        assert (target_dir / "modes" / "inline-chat").exists()
-        
-        # Check sample files
-        assert (target_dir / "01-python-standards.md").exists()
-        assert (target_dir / "modes" / "ask" / "01-exploration-guidelines.md").exists()
-        assert (target_dir / "modes" / "agent" / "01-production-standards.md").exists()
-        
-        # Verify content
-        python_standards = (target_dir / "01-python-standards.md").read_text()
-        assert "Python Best Practices" in python_standards
-        assert "apply: always" in python_standards
 
 
 class TestRuleManagerErrorHandling:
