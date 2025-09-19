@@ -38,7 +38,7 @@ import { ContentsManager, KernelSpecManager } from '@jupyterlab/services';
 
 import { LabIcon } from '@jupyterlab/ui-components';
 
-import { Menu, Panel, SplitPanel, Widget } from '@lumino/widgets';
+import { Menu, Panel, Widget } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { IStatusBar } from '@jupyterlab/statusbar';
 
@@ -80,7 +80,7 @@ import {
 import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
-import { SettingsPanelContentGeneral } from './components/settings-panel';
+import { SettingsPanel } from './components/settings-panel';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -1230,7 +1230,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
 
     const createNewSettingsWidget = () => {
-      const settingsPanelContentGeneral = new SettingsPanelContentGeneral({
+      const settingsPanel = new SettingsPanel({
         onSave: () => {
           NBIAPI.fetchCapabilities();
         },
@@ -1238,13 +1238,6 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           app.commands.execute('notebook-intelligence:open-mcp-config-editor');
         }
       });
-
-      const settingsPanel = new SplitPanel();
-      settingsPanel.id = 'nbi-settings';
-      settingsPanel.title.label = 'NBI Settings';
-      settingsPanel.title.closable = true;
-      settingsPanel.addWidget(new Widget());
-      settingsPanel.addWidget(settingsPanelContentGeneral);
 
       const widget = new MainAreaWidget({ content: settingsPanel });
       widget.id = 'nbi-settings';

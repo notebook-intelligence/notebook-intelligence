@@ -15,28 +15,83 @@ const OPENAI_COMPATIBLE_INLINE_COMPLETION_MODEL_ID =
 const LITELLM_COMPATIBLE_INLINE_COMPLETION_MODEL_ID =
   'litellm-compatible-inline-completion-model';
 
-export class SettingsPanelContentGeneral extends ReactWidget {
+export class SettingsPanel extends ReactWidget {
   constructor(options: {
     onSave: () => void;
     onEditMCPConfigClicked: () => void;
   }) {
     super();
 
-    this._onEditMCPConfigClicked = options.onEditMCPConfigClicked;
     this._onSave = options.onSave;
+    this._onEditMCPConfigClicked = options.onEditMCPConfigClicked;
   }
 
   render(): JSX.Element {
     return (
-      <SettingsPanelComponentGeneral
-        onEditMCPConfigClicked={this._onEditMCPConfigClicked}
+      <SettingsPanelComponent
         onSave={this._onSave}
+        onEditMCPConfigClicked={this._onEditMCPConfigClicked}
       />
     );
   }
 
-  private _onEditMCPConfigClicked: () => void;
   private _onSave: () => void;
+  private _onEditMCPConfigClicked: () => void;
+}
+
+function SettingsPanelComponent(props: any) {
+  const [activeTab, setActiveTab] = useState('general');
+
+  const onTabSelected = (tab: string) => {
+    setActiveTab(tab);
+  };
+
+  return (
+    <div className="nbi-settings-panel">
+      <div className="nbi-settings-panel-tabs">
+        <SettingsPanelTabsComponent
+          onTabSelected={onTabSelected}
+          activeTab={activeTab}
+        />
+      </div>
+      <div className="nbi-settings-panel-tab-content">
+        {activeTab === 'general' && (
+          <SettingsPanelComponentGeneral
+            onSave={props.onSave}
+            onEditMCPConfigClicked={props.onEditMCPConfigClicked}
+          />
+        )}
+        {activeTab === 'mcp-servers' && <SettingsPanelComponentMCPServers />}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanelTabsComponent(props: any) {
+  const [activeTab, setActiveTab] = useState(props.activeTab);
+
+  return (
+    <div>
+      <div
+        className={`nbi-settings-panel-tab ${activeTab === 'general' ? 'active' : ''}`}
+        onClick={() => {
+          setActiveTab('general');
+          props.onTabSelected('general');
+        }}
+      >
+        General
+      </div>
+      <div
+        className={`nbi-settings-panel-tab ${activeTab === 'mcp-servers' ? 'active' : ''}`}
+        onClick={() => {
+          setActiveTab('mcp-servers');
+          props.onTabSelected('mcp-servers');
+        }}
+      >
+        MCP Servers
+      </div>
+    </div>
+  );
 }
 
 function SettingsPanelComponentGeneral(props: any) {
@@ -559,6 +614,14 @@ function SettingsPanelComponentGeneral(props: any) {
           <div className="jp-Dialog-buttonLabel">Save</div>
         </button>
       </div>
+    </div>
+  );
+}
+
+function SettingsPanelComponentMCPServers(props: any) {
+  return (
+    <div>
+      <div>MCP Servers</div>
     </div>
   );
 }
