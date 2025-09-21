@@ -128,7 +128,7 @@ class MCPServerImpl(MCPServer):
                 headers=self._streamable_http_params.headers
             ))
 
-    async def get_client(self) -> Client:
+    async def _get_client(self) -> Client:
         if self._stdio_params is None and self._streamable_http_params is None:
             raise ValueError("Failed to create MCP client. Either stdio_params or sse_params must be provided")
         if self._client is None:
@@ -142,12 +142,12 @@ class MCPServerImpl(MCPServer):
         return self._client
 
     async def update_tool_list(self):
-        async with await self.get_client() as client:
+        async with await self._get_client() as client:
             self._mcp_tools = await client.list_tools()
 
     async def call_tool(self, tool_name: str, tool_args: dict):
         try:
-            async with await self.get_client() as client:
+            async with await self._get_client() as client:
                 result = await client.call_tool(tool_name, tool_args)
                 return result
         except Exception as e:
