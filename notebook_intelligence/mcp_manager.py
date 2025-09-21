@@ -3,15 +3,18 @@
 import asyncio
 from dataclasses import dataclass
 import json
+from queue import Queue
 import threading
 from typing import Any, Union
+import uuid
 from fastmcp.client import StdioTransport, StreamableHttpTransport
 from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
-from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MarkdownData, ProgressData, Tool, ToolPreInvokeResponse
+from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
+from enum import Enum
 from fastmcp import Client
 
 log = logging.getLogger(__name__)
@@ -20,6 +23,9 @@ MCP_ICON_SRC = 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAAPBUlEQVR4nOydf2wT
 MCP_ICON_URL = f"data:image/png;base64,{MCP_ICON_SRC}"
 MCP_TOOL_TIMEOUT = 60
 
+class MCPServerEventType(str, Enum):
+    ListTools = 'list-tools'
+    CallTool = 'call-tool'
 
 class MCPTool(Tool):
     def __init__(self, server: 'MCPServer', name, description, schema, auto_approve=False):
@@ -110,10 +116,39 @@ class MCPServerImpl(MCPServer):
         self._mcp_tools = []
         self._session = None
         self._client = None
+        self._client_queue = Queue()
+        self._client_thread_signal: SignalImpl = SignalImpl()
+        self._client_thread = threading.Thread(
+            name="MCP Server Thread",
+            target=asyncio.run,
+            daemon=True,
+            args=(self._client_thread_func(),)
+        )
+        self._client_thread.start()
 
     @property
     def name(self) -> str:
         return self._name
+
+    async def _client_thread_func(self):
+        async with await self._get_client() as client:
+            while True:
+                event = self._client_queue.get(block=True)
+                event_id = event["id"]
+                if event["type"] == MCPServerEventType.ListTools:
+                    tool_list = await client.list_tools()
+                    self._client_thread_signal.emit({
+                        "id": event_id,
+                        "data": tool_list
+                    })
+                elif event["type"] == MCPServerEventType.CallTool:
+                    result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                    self._client_thread_signal.emit({
+                        "id": event_id,
+                        "data": result
+                    })
+                else:
+                    log.error(f"Unknown event type {event}")
 
     def _create_client(self) -> Client:
         if self._stdio_params is not None:
@@ -141,18 +176,36 @@ class MCPServerImpl(MCPServer):
                 self._client = self._create_client()
         return self._client
 
+    async def _send_mcp_request(self, event_type: MCPServerEventType, event_args: dict = None):
+        event_id = uuid.uuid4().hex
+        event = {
+            "id": event_id,
+            "type": event_type,
+            "args": event_args,
+        }
+        self._client_queue.put(event)
+
+        resp = {"data": None}
+        def _on_client_response(data: dict):
+            if data['id'] == event_id:
+                resp["data"] = data['data']
+
+        self._client_thread_signal.connect(_on_client_response)
+
+        while True:
+            if resp["data"] is not None:
+                self._client_thread_signal.disconnect(_on_client_response)
+                return resp["data"]
+            await asyncio.sleep(0.1)
+
     async def update_tool_list(self):
-        async with await self._get_client() as client:
-            self._mcp_tools = await client.list_tools()
+        self._mcp_tools = await self._send_mcp_request(MCPServerEventType.ListTools)
 
     async def call_tool(self, tool_name: str, tool_args: dict):
-        try:
-            async with await self._get_client() as client:
-                result = await client.call_tool(tool_name, tool_args)
-                return result
-        except Exception as e:
-            log.error(f"Error calling tool '{tool_name}' on server '{self.name}': {e}")
-            return None
+        return await self._send_mcp_request(MCPServerEventType.CallTool,{
+            "tool_name": tool_name,
+            "tool_args": tool_args
+        })
 
     # TODO: optimize this
     def get_tools(self) -> list[Tool]:
