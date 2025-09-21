@@ -52,9 +52,8 @@ import {
   VscTrash
 } from 'react-icons/vsc';
 
-import { MdOutlineCheckBoxOutlineBlank, MdCheckBox } from 'react-icons/md';
-
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
+import { CheckBoxItem } from './components/checkbox';
 
 export enum RunChatCompletionType {
   Chat,
@@ -649,30 +648,6 @@ async function submitCompletionRequest(
         responseEmitter
       );
   }
-}
-
-function CheckBoxItem(props: any) {
-  const indent = props.indent || 0;
-
-  return (
-    <div
-      className={`checkbox-item checkbox-item-indent-${indent} ${props.header ? 'checkbox-item-header' : ''}`}
-      title={props.title}
-      onClick={event => props.onClick(event)}
-    >
-      <div className="checkbox-item-toggle">
-        {props.checked ? (
-          <MdCheckBox className="checkbox-icon" />
-        ) : (
-          <MdOutlineCheckBoxOutlineBlank className="checkbox-icon" />
-        )}
-        {props.label}
-      </div>
-      {props.title && (
-        <div className="checkbox-item-description">{props.title}</div>
-      )}
-    </div>
-  );
 }
 
 function SidebarComponent(props: any) {

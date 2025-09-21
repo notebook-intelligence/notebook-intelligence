@@ -7,6 +7,8 @@ import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
 import { NBIAPI } from '../api';
+import { CheckBoxItem } from './checkbox';
+import { PillItem } from './pill';
 
 const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
 const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
@@ -584,9 +586,53 @@ function SettingsPanelComponentMCPServers(props: any) {
     nbiConfig.toolConfig.mcpServers?.map((server: any) => server.id) || []
   );
 
+  const [mcpServerEnabledState, setMCPServerEnabledState] = useState(
+    new Map<string, Set<string>>()
+  );
+
   const handleReloadMCPServersClick = async () => {
     const data = await NBIAPI.reloadMCPServerList();
     setMcpServerNames(data.mcpServers?.map((server: any) => server.id) || []);
+  };
+
+  const setMCPServerEnabled = (serverId: string, enabled: boolean) => {
+    const currentState = new Map(mcpServerEnabledState);
+    if (enabled) {
+      if (!(serverId in currentState)) {
+        currentState.set(serverId, new Set<string>());
+      }
+    } else {
+      currentState.delete(serverId);
+    }
+
+    setMCPServerEnabledState(currentState);
+  };
+
+  const getMCPServerEnabled = (serverId: string) => {
+    return mcpServerEnabledState.has(serverId);
+  };
+
+  const getMCPServerToolEnabled = (serverId: string, toolName: string) => {
+    return (
+      mcpServerEnabledState.has(serverId) &&
+      mcpServerEnabledState.get(serverId).has(toolName)
+    );
+  };
+
+  const setMCPServerToolEnabled = (
+    serverId: string,
+    toolName: string,
+    enabled: boolean
+  ) => {
+    const currentState = new Map(mcpServerEnabledState);
+    const serverState = currentState.get(serverId);
+    if (enabled) {
+      serverState.add(toolName);
+    } else {
+      serverState.delete(toolName);
+    }
+
+    setMCPServerEnabledState(currentState);
   };
 
   return (
@@ -601,29 +647,70 @@ function SettingsPanelComponentMCPServers(props: any) {
             ]
           </div>
           <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {mcpServerNames.length === 0 && (
+            {mcpServerNames.length === 0 && (
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
                   <div>
                     No MCP servers found. Add MCP servers in the configuration
                     file.
                   </div>
-                )}
-                {mcpServerNames.length > 0 && (
-                  <div>{mcpServerNames.sort().join(', ')}</div>
-                )}
+                </div>
               </div>
-              <div
-                className="model-config-section-column"
-                style={{ flexGrow: 'initial' }}
+            )}
+            {mcpServerNames.length > 0 && (
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  {nbiConfig.toolConfig.mcpServers.map((server: any) => (
+                    <div key={server.id}>
+                      <div>
+                        <CheckBoxItem
+                          header={true}
+                          label={server.id}
+                          checked={getMCPServerEnabled(server.id)}
+                          onClick={() => {
+                            setMCPServerEnabled(
+                              server.id,
+                              !getMCPServerEnabled(server.id)
+                            );
+                          }}
+                        ></CheckBoxItem>
+                      </div>
+                      {getMCPServerEnabled(server.id) && (
+                        <div>
+                          {server.tools.map((tool: any) => (
+                            <PillItem
+                              label={tool.name}
+                              title={tool.description}
+                              checked={getMCPServerToolEnabled(
+                                server.id,
+                                tool.name
+                              )}
+                              onClick={() => {
+                                setMCPServerToolEnabled(
+                                  server.id,
+                                  tool.name,
+                                  !getMCPServerToolEnabled(server.id, tool.name)
+                                );
+                              }}
+                            ></PillItem>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div
+              className="model-config-section-column"
+              style={{ flexGrow: 'initial' }}
+            >
+              <button
+                className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                onClick={handleReloadMCPServersClick}
               >
-                <button
-                  className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-                  onClick={handleReloadMCPServersClick}
-                >
-                  <div className="jp-Dialog-buttonLabel">Reload</div>
-                </button>
-              </div>
+                <div className="jp-Dialog-buttonLabel">Reload</div>
+              </button>
             </div>
           </div>
         </div>
