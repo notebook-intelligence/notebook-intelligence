@@ -602,7 +602,6 @@ body[data-jp-theme-light='false'] .inline-popover {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: 10px 0;
   gap: 15px;
 }
 
@@ -847,6 +846,8 @@ svg.access-token-warning {
 .nbi-settings-panel-tab {
   cursor: pointer;
   padding: 10px;
+  border-radius: 4px;
+  font-size: 15px;
 }
 
 .nbi-settings-panel-tab:hover {
@@ -855,9 +856,10 @@ svg.access-token-warning {
 
 .nbi-settings-panel-tab.active {
   background-color: var(--jp-layout-color1);
+  font-weight: bold;
 }
 
 .nbi-settings-panel-tab-content {
   flex-grow: 1;
-  padding: 10px;
+  padding: 20px;
 }

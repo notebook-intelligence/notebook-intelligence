@@ -61,7 +61,11 @@ function SettingsPanelComponent(props: any) {
             onEditMCPConfigClicked={props.onEditMCPConfigClicked}
           />
         )}
-        {activeTab === 'mcp-servers' && <SettingsPanelComponentMCPServers />}
+        {activeTab === 'mcp-servers' && (
+          <SettingsPanelComponentMCPServers
+            onEditMCPConfigClicked={props.onEditMCPConfigClicked}
+          />
+        )}
       </div>
     </div>
   );
@@ -99,9 +103,6 @@ function SettingsPanelComponentGeneral(props: any) {
   const llmProviders = nbiConfig.llmProviders;
   const [chatModels, setChatModels] = useState([]);
   const [inlineCompletionModels, setInlineCompletionModels] = useState([]);
-  const [mcpServerNames, setMcpServerNames] = useState(
-    nbiConfig.toolConfig.mcpServers?.map((server: any) => server.id) || []
-  );
 
   const handleSaveClick = async () => {
     const config: any = {
@@ -223,11 +224,6 @@ function SettingsPanelComponentGeneral(props: any) {
     } else {
       setInlineCompletionModelProperties(updatedProperties);
     }
-  };
-
-  const handleReloadMCPServersClick = async () => {
-    const data = await NBIAPI.reloadMCPServerList();
-    setMcpServerNames(data.mcpServers?.map((server: any) => server.id) || []);
   };
 
   useEffect(() => {
@@ -521,42 +517,6 @@ function SettingsPanelComponentGeneral(props: any) {
         )}
 
         <div className="model-config-section">
-          <div className="model-config-section-header">
-            MCP Servers ({mcpServerNames.length}) [
-            <a href="javascript:void(0)" onClick={props.onEditMCPConfigClicked}>
-              edit
-            </a>
-            ]
-          </div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {mcpServerNames.length === 0 && (
-                  <div>
-                    No MCP servers found. Add MCP servers in the configuration
-                    file.
-                  </div>
-                )}
-                {mcpServerNames.length > 0 && (
-                  <div>{mcpServerNames.sort().join(', ')}</div>
-                )}
-              </div>
-              <div
-                className="model-config-section-column"
-                style={{ flexGrow: 'initial' }}
-              >
-                <button
-                  className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-                  onClick={handleReloadMCPServersClick}
-                >
-                  <div className="jp-Dialog-buttonLabel">Reload</div>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
           <div className="model-config-section-header">Config file path</div>
           <div className="model-config-section-body">
             <div className="model-config-section-row">
@@ -619,9 +579,55 @@ function SettingsPanelComponentGeneral(props: any) {
 }
 
 function SettingsPanelComponentMCPServers(props: any) {
+  const nbiConfig = NBIAPI.config;
+  const [mcpServerNames, setMcpServerNames] = useState(
+    nbiConfig.toolConfig.mcpServers?.map((server: any) => server.id) || []
+  );
+
+  const handleReloadMCPServersClick = async () => {
+    const data = await NBIAPI.reloadMCPServerList();
+    setMcpServerNames(data.mcpServers?.map((server: any) => server.id) || []);
+  };
+
   return (
-    <div>
-      <div>MCP Servers</div>
+    <div className="config-dialog">
+      <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            MCP Servers ({mcpServerNames.length}) [
+            <a href="javascript:void(0)" onClick={props.onEditMCPConfigClicked}>
+              edit
+            </a>
+            ]
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                {mcpServerNames.length === 0 && (
+                  <div>
+                    No MCP servers found. Add MCP servers in the configuration
+                    file.
+                  </div>
+                )}
+                {mcpServerNames.length > 0 && (
+                  <div>{mcpServerNames.sort().join(', ')}</div>
+                )}
+              </div>
+              <div
+                className="model-config-section-column"
+                style={{ flexGrow: 'initial' }}
+              >
+                <button
+                  className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                  onClick={handleReloadMCPServersClick}
+                >
+                  <div className="jp-Dialog-buttonLabel">Reload</div>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
