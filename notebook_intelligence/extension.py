@@ -631,6 +631,7 @@ class NotebookIntelligence(ExtensionApp):
     async def stop_extension(self):
         log.info(f"Stopping {self.name} extension...")
         github_copilot.handle_stop_request()
+        ai_service_manager.handle_stop_request()
 
     def _setup_handlers(self, web_app):
         host_pattern = ".*$"

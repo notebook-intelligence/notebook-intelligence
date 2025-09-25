@@ -5,12 +5,14 @@ from dataclasses import dataclass
 import json
 from queue import Queue
 import threading
+import time
 from typing import Any, Union
 import uuid
 from fastmcp.client import StdioTransport, StreamableHttpTransport
 from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
+from tornado import ioloop
 from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
@@ -26,6 +28,7 @@ MCP_TOOL_TIMEOUT = 60
 class MCPServerEventType(str, Enum):
     ListTools = 'list-tools'
     CallTool = 'call-tool'
+    StopServer = 'stop-server'
 
 class MCPTool(Tool):
     def __init__(self, server: 'MCPServer', name, description, schema, auto_approve=False):
@@ -80,7 +83,7 @@ class MCPTool(Tool):
                 call_args[key] = tool_args.get(key)
 
         try:
-            result = await self._server.call_tool(self.name, call_args)
+            result = self._server.call_tool(self.name, call_args)
             if hasattr(result, "content") and isinstance(result.content, list):
                 if len(result.content) > 0:
                     text_contents = []
@@ -116,6 +119,22 @@ class MCPServerImpl(MCPServer):
         self._mcp_tools = []
         self._session = None
         self._client = None
+        self._client_queue = None
+        self._client_thread_signal = None
+        self._client_thread = None
+        self.connect()
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def is_connected(self):
+        return self._client_thread is not None
+
+    def connect(self):
+        if self.is_connected():
+            return
+        
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
         self._client_thread = threading.Thread(
@@ -126,27 +145,40 @@ class MCPServerImpl(MCPServer):
         )
         self._client_thread.start()
 
-    @property
-    def name(self) -> str:
-        return self._name
+    def disconnect(self):
+        if not self.is_connected():
+            return
+
+        self._send_mcp_request(MCPServerEventType.StopServer)
+
+        self._client_queue = None
+        self._client_thread_signal = None
+        self._client_thread = None
 
     async def _client_thread_func(self):
         async with await self._get_client() as client:
             while True:
                 event = self._client_queue.get(block=True)
                 event_id = event["id"]
-                if event["type"] == MCPServerEventType.ListTools:
+                event_type = event["type"]
+                if event_type == MCPServerEventType.ListTools:
                     tool_list = await client.list_tools()
                     self._client_thread_signal.emit({
                         "id": event_id,
                         "data": tool_list
                     })
-                elif event["type"] == MCPServerEventType.CallTool:
-                    result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                elif event_type == MCPServerEventType.CallTool:
+                    result = client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
                     self._client_thread_signal.emit({
                         "id": event_id,
                         "data": result
                     })
+                elif event_type == MCPServerEventType.StopServer:
+                    self._client_thread_signal.emit({
+                        "id": event_id,
+                        "data": "stopped"
+                    })
+                    return
                 else:
                     log.error(f"Unknown event type {event}")
 
@@ -176,7 +208,7 @@ class MCPServerImpl(MCPServer):
                 self._client = self._create_client()
         return self._client
 
-    async def _send_mcp_request(self, event_type: MCPServerEventType, event_args: dict = None):
+    def _send_mcp_request(self, event_type: MCPServerEventType, event_args: dict = None):
         event_id = uuid.uuid4().hex
         event = {
             "id": event_id,
@@ -196,13 +228,13 @@ class MCPServerImpl(MCPServer):
             if resp["data"] is not None:
                 self._client_thread_signal.disconnect(_on_client_response)
                 return resp["data"]
-            await asyncio.sleep(0.1)
+            time.sleep(0.1)
 
-    async def update_tool_list(self):
-        self._mcp_tools = await self._send_mcp_request(MCPServerEventType.ListTools)
+    def update_tool_list(self):
+        self._mcp_tools = self._send_mcp_request(MCPServerEventType.ListTools)
 
-    async def call_tool(self, tool_name: str, tool_args: dict):
-        return await self._send_mcp_request(MCPServerEventType.CallTool,{
+    def call_tool(self, tool_name: str, tool_args: dict):
+        return self._send_mcp_request(MCPServerEventType.CallTool,{
             "tool_name": tool_name,
             "tool_args": tool_args
         })
@@ -373,15 +405,15 @@ class MCPManager:
     def get_mcp_participants(self):
         return self._mcp_participants
 
-    async def init_tool_lists_async(self):
+    def init_tool_lists_async(self):
         for server in self._mcp_servers:
             try:
-                await server.update_tool_list()
+                server.update_tool_list()
             except Exception as e:
                 log.error(f"Error initializing tool list for server {server.name}: {e}")
     
     def init_tool_lists(self):
-        asyncio.run(self.init_tool_lists_async())
+        self.init_tool_lists_async()
 
     def get_mcp_servers(self):
         return self._mcp_servers
@@ -391,3 +423,7 @@ class MCPManager:
             if server.name == server_name:
                 return server
         return None
+
+    def handle_stop_request(self):
+        for server in self._mcp_servers:
+            server.disconnect()

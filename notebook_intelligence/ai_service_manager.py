@@ -370,3 +370,6 @@ class AIServiceManager(Host):
             if extension.id == extension_id:
                 return extension
         return None
+
+    def handle_stop_request(self):
+        self._mcp_manager.handle_stop_request()

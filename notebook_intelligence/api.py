@@ -377,13 +377,13 @@ class MCPServer:
     def name(self) -> str:
         return NotImplemented
     
-    async def connect(self):
+    def connect(self):
         return NotImplemented
 
-    async def disconnect(self):
+    def disconnect(self):
         return NotImplemented
 
-    async def update_tool_list(self):
+    def update_tool_list(self):
         return NotImplemented
     
     def get_tools(self) -> list[Tool]:
