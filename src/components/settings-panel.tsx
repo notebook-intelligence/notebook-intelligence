@@ -729,7 +729,10 @@ function SettingsPanelComponentMCPServers(props: any) {
                             );
                           }}
                         ></CheckBoxItem>
-                        <div>({server.status})</div>
+                        <div
+                          className={`server-status-indicator ${server.status}`}
+                          title={server.status}
+                        ></div>
                       </div>
                       {getMCPServerEnabled(server.id) && (
                         <div>

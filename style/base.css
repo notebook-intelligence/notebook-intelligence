@@ -881,3 +881,25 @@ svg.access-token-warning {
 .pill-item.checked {
   background-color: var(--jp-layout-color3);
 }
+
+.server-status-indicator {
+  width: 10px;
+  height: 10px;
+  margin: 2px;
+  border-radius: 50%;
+  background-color: var(--jp-brand-color0);
+}
+
+.server-status-indicator.connected {
+  background-color: var(--jp-success-color1);
+}
+
+.server-status-indicator.connecting,
+.server-status-indicator.disconnecting {
+  background-color: var(--jp-warn-color1);
+}
+
+.server-status-indicator.not-connected,
+.server-status-indicator.failed-to-connect {
+  background-color: var(--jp-error-color1);
+}
