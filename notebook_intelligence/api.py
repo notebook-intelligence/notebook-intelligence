@@ -28,6 +28,7 @@ class BackendMessageType(str, Enum):
     StreamEnd = 'stream-end'
     RunUICommand = 'run-ui-command'
     GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
+    MCPServerStatusChange = 'mcp-server-status-change'
 
 class ResponseStreamDataType(str, Enum):
     LLMRaw = 'llm-raw'
@@ -51,6 +52,7 @@ class BuiltinToolset(str, Enum):
 class MCPServerStatus(str, Enum):
     NotConnected = 'not-connected'
     Connecting = 'connecting'
+    Disconnecting = 'disconnecting'
     FailedToConnect = 'failed-to-connect'
     Connected = 'connected'
 

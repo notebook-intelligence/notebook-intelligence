@@ -692,6 +692,10 @@ function SettingsPanelComponentMCPServers(props: any) {
     setMCPServerEnabledState(currentState);
   };
 
+  nbiConfig.changed.connect(() => {
+    setRenderCount(renderCount => renderCount + 1);
+  });
+
   return (
     <div className="config-dialog">
       <div className="config-dialog-body">

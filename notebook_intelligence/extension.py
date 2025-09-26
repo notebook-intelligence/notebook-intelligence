@@ -27,6 +27,7 @@ from notebook_intelligence.util import ThreadSafeWebSocketConnector
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
+thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
 class GetCapabilitiesHandler(APIHandler):
     notebook_execute_tool = 'enabled'
@@ -464,7 +465,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
         # TODO: cleanup
         self._messageCallbackHandlers: dict[str, MessageCallbackHandlers] = {}
         self.chat_history = ChatHistory()
-        github_copilot.websocket_connector = ThreadSafeWebSocketConnector(self)
+        ws_connector = ThreadSafeWebSocketConnector(self)
+        ai_service_manager.websocket_connector = ws_connector
+        github_copilot.websocket_connector = ws_connector
 
     def open(self):
         pass

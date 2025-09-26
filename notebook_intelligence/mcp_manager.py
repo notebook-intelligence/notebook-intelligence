@@ -13,11 +13,13 @@ from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
 from tornado import ioloop
-from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MCPServerStatus, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
+from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MCPServerStatus, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
 from enum import Enum
 from fastmcp import Client
+
+from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +112,8 @@ class StreamableHttpServerParameters:
     headers: dict[str, Any] | None = None
 
 class MCPServerImpl(MCPServer):
-    def __init__(self, name: str, stdio_params: StdioServerParameters = None, streamable_http_params: StreamableHttpServerParameters = None, auto_approve_tools: list[str] = []):
+    def __init__(self, manager: "MCPManager", name: str, stdio_params: StdioServerParameters = None, streamable_http_params: StreamableHttpServerParameters = None, auto_approve_tools: list[str] = []):
+        self._manager = manager
         self._name: str = name
         self._stdio_params: StdioServerParameters = stdio_params
         self._streamable_http_params: StreamableHttpServerParameters = streamable_http_params
@@ -140,7 +143,7 @@ class MCPServerImpl(MCPServer):
         if self.is_connected():
             return
 
-        self._status = MCPServerStatus.Connecting
+        self._set_status(MCPServerStatus.Connecting)
         
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
@@ -156,15 +159,27 @@ class MCPServerImpl(MCPServer):
         if not self.is_connected():
             return
 
+        self._set_status(MCPServerStatus.Disconnecting)
+
         self._send_mcp_request(MCPServerEventType.StopServer)
+        self._set_status(MCPServerStatus.NotConnected)
 
         self._client_queue = None
         self._client_thread_signal = None
         self._client_thread = None
 
+    
+    def _set_status(self, status: MCPServerStatus):
+        self._status = status
+        if self._manager.websocket_connector is not None:
+            self._manager.websocket_connector.write_message({
+                "type": BackendMessageType.MCPServerStatusChange,
+                "data": {}
+            })
+
     async def _client_thread_func(self):
         async with await self._get_client() as client:
-            self._status = MCPServerStatus.Connected
+            self._set_status(MCPServerStatus.Connected)
             while True:
                 event = self._client_queue.get(block=True)
                 event_id = event["id"]
@@ -186,7 +201,6 @@ class MCPServerImpl(MCPServer):
                         "id": event_id,
                         "data": "stopped"
                     })
-                    self._status = MCPServerStatus.NotConnected
                     return
                 else:
                     log.error(f"Unknown event type {event}")
@@ -319,7 +333,16 @@ class MCPChatParticipant(BaseChatParticipant):
 
 class MCPManager:
     def __init__(self, mcp_config: dict):
+        self._websocket_connector: ThreadSafeWebSocketConnector = None
         self.update_mcp_servers(mcp_config)
+
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return self._websocket_connector
+    
+    @websocket_connector.setter
+    def websocket_connector(self, _websocket_connector: ThreadSafeWebSocketConnector):
+        self._websocket_connector = _websocket_connector
 
     def update_mcp_servers(self, mcp_config):
         # TODO: dont reuse servers, recreate with same config
@@ -393,7 +416,7 @@ class MCPManager:
                 server_env = mcp_get_default_environment()
                 server_env.update(env)
 
-            return MCPServerImpl(server_name, stdio_params=StdioServerParameters(
+            return MCPServerImpl(self, server_name, stdio_params=StdioServerParameters(
                 command = command,
                 args = args,
                 env = server_env
@@ -403,6 +426,7 @@ class MCPManager:
             headers = server_config.get("headers", None)
 
             return MCPServerImpl(
+                self,
                 server_name,
                 streamable_http_params=StreamableHttpServerParameters(url=server_url, headers=headers),
                 auto_approve_tools=auto_approve_tools
