@@ -120,3 +120,7 @@ class NBIConfig:
     def using_github_copilot_service(self) -> bool:
         return self.chat_model.get("provider") == 'github-copilot' or \
             self.inline_completion_model.get("provider") == 'github-copilot'
+
+    @property
+    def mcp_server_settings(self):
+        return self.get('mcp_server_settings', {})

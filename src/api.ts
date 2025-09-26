@@ -76,6 +76,10 @@ export class NBIConfig {
     return this.capabilities.tool_config;
   }
 
+  get mcpServerSettings(): any {
+    return this.capabilities.mcp_server_settings;
+  }
+
   capabilities: any = {};
   chatParticipants: IChatParticipant[] = [];
 

@@ -88,6 +88,7 @@ class GetCapabilitiesHandler(APIHandler):
                 "mcpServers": mcp_server_tools,
                 "extensions": extensions
             },
+            "mcp_server_settings": nbi_config.mcp_server_settings,
             "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
@@ -105,7 +106,7 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings"])
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
@@ -114,6 +115,14 @@ class ConfigHandler(APIHandler):
                         github_copilot.store_github_access_token()
                     else:
                         github_copilot.delete_stored_github_access_token()
+                elif key == "mcp_server_settings":
+                    disabled_mcp_servers = []
+                    for server_id in data[key]:
+                        server_settings = data[key][server_id]
+                        if server_settings.get("disabled") == True:
+                            disabled_mcp_servers.append(server_id)
+                    ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
+
         ai_service_manager.nbi_config.save()
         ai_service_manager.update_models_from_config()
         self.finish(json.dumps({}))

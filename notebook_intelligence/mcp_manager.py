@@ -427,3 +427,20 @@ class MCPManager:
     def handle_stop_request(self):
         for server in self._mcp_servers:
             server.disconnect()
+
+    def update_mcp_server_connections(self, disabled_mcp_servers: list[str]):
+        for server in self._mcp_servers:
+            if server.name in disabled_mcp_servers:
+                server.disconnect()
+            else:
+                server.connect()
+
+    def connect_mcp_server(self, server_name: str):
+        server = self.get_mcp_server(server_name)
+        if server is not None:
+            server.connect()
+
+    def disconnect_mcp_server(self, server_name: str):
+        server = self.get_mcp_server(server_name)
+        if server is not None:
+            server.disconnect()

@@ -373,3 +373,12 @@ class AIServiceManager(Host):
 
     def handle_stop_request(self):
         self._mcp_manager.handle_stop_request()
+
+    def update_mcp_server_connections(self, disabled_mcp_servers: list[str]):
+        self._mcp_manager.update_mcp_server_connections(disabled_mcp_servers)
+
+    def connect_mcp_server(self, server_name: str):
+        self._mcp_manager.connect_mcp_server(server_name)
+    
+    def disconnect_mcp_server(self, server_name: str):
+        self._mcp_manager.disconnect_mcp_server(server_name)
