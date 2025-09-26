@@ -582,9 +582,6 @@ function SettingsPanelComponentGeneral(props: any) {
 
 function SettingsPanelComponentMCPServers(props: any) {
   const nbiConfig = NBIAPI.config;
-  const [mcpServerNames, setMcpServerNames] = useState(
-    nbiConfig.toolConfig.mcpServers?.map((server: any) => server.id) || []
-  );
   const [mcpServerSettings, setMcpServerSettings] = useState(
     nbiConfig.mcpServerSettings
   );
@@ -654,11 +651,6 @@ function SettingsPanelComponentMCPServers(props: any) {
     setRenderCount(renderCount => renderCount + 1);
   }, [mcpServerEnabledState]);
 
-  const handleReloadMCPServersClick = async () => {
-    const data = await NBIAPI.reloadMCPServerList();
-    setMcpServerNames(data.mcpServers?.map((server: any) => server.id) || []);
-  };
-
   const setMCPServerEnabled = (serverId: string, enabled: boolean) => {
     const currentState = new Map(mcpServerEnabledState);
     if (enabled) {
@@ -703,15 +695,9 @@ function SettingsPanelComponentMCPServers(props: any) {
     <div className="config-dialog">
       <div className="config-dialog-body">
         <div className="model-config-section">
-          <div className="model-config-section-header">
-            MCP Servers ({mcpServerNames.length}) [
-            <a href="javascript:void(0)" onClick={props.onEditMCPConfigClicked}>
-              edit
-            </a>
-            ]
-          </div>
+          <div className="model-config-section-header">MCP Servers</div>
           <div className="model-config-section-body">
-            {mcpServerNames.length === 0 && renderCount > 0 && (
+            {mcpServerEnabledState.size === 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
                   <div>
@@ -721,7 +707,7 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </div>
               </div>
             )}
-            {mcpServerNames.length > 0 && renderCount > 0 && (
+            {mcpServerEnabledState.size > 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
                   {nbiConfig.toolConfig.mcpServers.map((server: any) => (
@@ -765,16 +751,19 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </div>
               </div>
             )}
-            <div
-              className="model-config-section-column"
-              style={{ flexGrow: 'initial' }}
-            >
-              <button
-                className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-                onClick={handleReloadMCPServersClick}
+            <div className="model-config-section-row">
+              <div
+                className="model-config-section-column"
+                style={{ flexGrow: 'initial' }}
               >
-                <div className="jp-Dialog-buttonLabel">Reload</div>
-              </button>
+                <button
+                  className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                  style={{ width: 'max-content' }}
+                  onClick={props.onEditMCPConfigClicked}
+                >
+                  <div className="jp-Dialog-buttonLabel">Add / Edit</div>
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -107,6 +107,7 @@ class ConfigHandler(APIHandler):
     def post(self):
         data = json.loads(self.request.body)
         valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings"])
+        has_model_change = "chat_model" in data or "inline_completion_model" in data
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
@@ -124,7 +125,8 @@ class ConfigHandler(APIHandler):
                     ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
 
         ai_service_manager.nbi_config.save()
-        ai_service_manager.update_models_from_config()
+        if has_model_change:
+            ai_service_manager.update_models_from_config()
         self.finish(json.dumps({}))
 
 class UpdateProviderModelsHandler(APIHandler):
