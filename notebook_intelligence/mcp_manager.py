@@ -13,7 +13,7 @@ from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
 from tornado import ioloop
-from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
+from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MCPServerStatus, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
 from enum import Enum
@@ -122,11 +122,16 @@ class MCPServerImpl(MCPServer):
         self._client_queue = None
         self._client_thread_signal = None
         self._client_thread = None
+        self._status = MCPServerStatus.NotConnected
         self.connect()
 
     @property
     def name(self) -> str:
         return self._name
+    
+    @property
+    def status(self) -> MCPServerStatus:
+        return self._status
 
     def is_connected(self):
         return self._client_thread is not None
@@ -134,6 +139,8 @@ class MCPServerImpl(MCPServer):
     def connect(self):
         if self.is_connected():
             return
+
+        self._status = MCPServerStatus.Connecting
         
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
@@ -157,6 +164,7 @@ class MCPServerImpl(MCPServer):
 
     async def _client_thread_func(self):
         async with await self._get_client() as client:
+            self._status = MCPServerStatus.Connected
             while True:
                 event = self._client_queue.get(block=True)
                 event_id = event["id"]
@@ -178,6 +186,7 @@ class MCPServerImpl(MCPServer):
                         "id": event_id,
                         "data": "stopped"
                     })
+                    self._status = MCPServerStatus.NotConnected
                     return
                 else:
                     log.error(f"Unknown event type {event}")

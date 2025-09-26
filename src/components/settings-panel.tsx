@@ -582,6 +582,7 @@ function SettingsPanelComponentGeneral(props: any) {
 
 function SettingsPanelComponentMCPServers(props: any) {
   const nbiConfig = NBIAPI.config;
+  const mcpServers = nbiConfig.toolConfig.mcpServers;
   const [mcpServerSettings, setMcpServerSettings] = useState(
     nbiConfig.mcpServerSettings
   );
@@ -697,7 +698,7 @@ function SettingsPanelComponentMCPServers(props: any) {
         <div className="model-config-section">
           <div className="model-config-section-header">MCP Servers</div>
           <div className="model-config-section-body">
-            {mcpServerEnabledState.size === 0 && renderCount > 0 && (
+            {mcpServers.length === 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
                   <div>
@@ -707,12 +708,12 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </div>
               </div>
             )}
-            {mcpServerEnabledState.size > 0 && renderCount > 0 && (
+            {mcpServers.length > 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
-                  {nbiConfig.toolConfig.mcpServers.map((server: any) => (
+                  {mcpServers.map((server: any) => (
                     <div key={server.id}>
-                      <div>
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
                         <CheckBoxItem
                           header={true}
                           label={server.id}
@@ -724,6 +725,7 @@ function SettingsPanelComponentMCPServers(props: any) {
                             );
                           }}
                         ></CheckBoxItem>
+                        <div>({server.status})</div>
                       </div>
                       {getMCPServerEnabled(server.id) && (
                         <div>

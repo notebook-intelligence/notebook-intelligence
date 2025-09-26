@@ -1,7 +1,6 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
-import json
 from typing import Any, Callable, Dict, Union
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -48,6 +47,12 @@ class BuiltinToolset(str, Enum):
     NotebookEdit = 'nbi-notebook-edit'
     NotebookExecute = 'nbi-notebook-execute'
     PythonFileEdit = 'nbi-python-file-edit'
+
+class MCPServerStatus(str, Enum):
+    NotConnected = 'not-connected'
+    Connecting = 'connecting'
+    FailedToConnect = 'failed-to-connect'
+    Connected = 'connected'
 
 class Signal:
     def __init__(self):
@@ -375,6 +380,10 @@ class SimpleTool(Tool):
 class MCPServer:
     @property
     def name(self) -> str:
+        return NotImplemented
+
+    @property
+    def status(self) -> MCPServerStatus:
         return NotImplemented
     
     def connect(self):
