@@ -138,15 +138,6 @@ class UpdateProviderModelsHandler(APIHandler):
             ai_service_manager.ollama_llm_provider.update_chat_model_list()
         self.finish(json.dumps({}))
 
-class ReloadMCPServersHandler(APIHandler):
-    @tornado.web.authenticated
-    def post(self):
-        ai_service_manager.nbi_config.load()
-        ai_service_manager.update_mcp_servers()
-        self.finish(json.dumps({
-            "mcpServers": [{"id": server.name} for server in ai_service_manager.get_mcp_servers()]
-        }))
-
 class MCPConfigFileHandler(APIHandler):
     @tornado.web.authenticated
     def get(self):
@@ -654,7 +645,6 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
-        route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
         route_pattern_emit_telemetry_event = url_path_join(base_url, "notebook-intelligence", "emit-telemetry-event")
         route_pattern_github_login_status = url_path_join(base_url, "notebook-intelligence", "gh-login-status")
@@ -666,7 +656,6 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
-            (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_emit_telemetry_event, EmitTelemetryEventHandler),
             (route_pattern_github_login_status, GetGitHubLoginStatusHandler),
