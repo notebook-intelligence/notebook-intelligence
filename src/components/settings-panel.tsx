@@ -693,7 +693,7 @@ function SettingsPanelComponentMCPServers(props: any) {
   };
 
   nbiConfig.changed.connect(() => {
-    setRenderCount(renderCount => renderCount + 1);
+    setMCPServerEnabledState(mcpServerSettingsToEnabledState());
   });
 
   return (

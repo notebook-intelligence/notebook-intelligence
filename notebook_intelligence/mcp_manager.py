@@ -334,6 +334,8 @@ class MCPChatParticipant(BaseChatParticipant):
 class MCPManager:
     def __init__(self, mcp_config: dict):
         self._websocket_connector: ThreadSafeWebSocketConnector = None
+        self._mcp_participants: list[MCPChatParticipant] = []
+        self._mcp_servers: list[MCPServer] = []
         self.update_mcp_servers(mcp_config)
 
     @property
@@ -348,8 +350,10 @@ class MCPManager:
         # TODO: dont reuse servers, recreate with same config
         servers_config = mcp_config.get("mcpServers", {})
         participants_config = mcp_config.get("participants", {})
-        self._mcp_participants: list[MCPChatParticipant] = []
-        self._mcp_servers: list[MCPServer] = []
+        self._mcp_participants = []
+        for server in self._mcp_servers:
+            server.disconnect()
+        self._mcp_servers = []
 
         # parse MCP participants
         for participant_id in participants_config:
