@@ -185,17 +185,27 @@ class MCPServerImpl(MCPServer):
                 event_id = event["id"]
                 event_type = event["type"]
                 if event_type == MCPServerEventType.ListTools:
-                    tool_list = await client.list_tools()
-                    self._client_thread_signal.emit({
-                        "id": event_id,
-                        "data": tool_list
-                    })
+                    try:
+                        tool_list = await client.list_tools()
+                    except Exception as e:
+                        log.error(f"Error occurred while listing MCP tools: {str(e)}")
+                        tool_list = []
+                    finally:
+                        self._client_thread_signal.emit({
+                            "id": event_id,
+                            "data": tool_list
+                        })
                 elif event_type == MCPServerEventType.CallTool:
-                    result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
-                    self._client_thread_signal.emit({
-                        "id": event_id,
-                        "data": result
-                    })
+                    try:
+                        result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                    except Exception as e:
+                        result = f"Error occurred while calling MCP tool {event['args']['tool_name']}: {str(e)}"
+                        log.error(result)
+                    finally:
+                        self._client_thread_signal.emit({
+                            "id": event_id,
+                            "data": result
+                        })
                 elif event_type == MCPServerEventType.StopServer:
                     self._client_thread_signal.emit({
                         "id": event_id,
