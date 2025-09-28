@@ -191,7 +191,7 @@ class MCPServerImpl(MCPServer):
                         "data": tool_list
                     })
                 elif event_type == MCPServerEventType.CallTool:
-                    result = client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                    result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
                     self._client_thread_signal.emit({
                         "id": event_id,
                         "data": result

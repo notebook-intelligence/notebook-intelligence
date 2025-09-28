@@ -709,9 +709,11 @@ function SidebarComponent(props: any) {
   const [lastScrollTime, setLastScrollTime] = useState(0);
   const [scrollPending, setScrollPending] = useState(false);
 
-  NBIAPI.configChanged.connect(() => {
-    setToolConfig(NBIAPI.config.toolConfig);
-  });
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      setToolConfig(NBIAPI.config.toolConfig);
+    });
+  }, []);
 
   useEffect(() => {
     let hasTools = false;
@@ -1671,10 +1673,12 @@ function SidebarComponent(props: any) {
   const [ghLoginRequired, setGHLoginRequired] = useState(getGHLoginRequired());
   const [chatEnabled, setChatEnabled] = useState(getChatEnabled());
 
-  NBIAPI.configChanged.connect(() => {
-    setGHLoginRequired(getGHLoginRequired());
-    setChatEnabled(getChatEnabled());
-  });
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      setGHLoginRequired(getGHLoginRequired());
+      setChatEnabled(getChatEnabled());
+    });
+  }, []);
 
   useEffect(() => {
     setGHLoginRequired(getGHLoginRequired());

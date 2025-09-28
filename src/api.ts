@@ -209,11 +209,21 @@ export class NBIAPI {
     return new Promise<void>((resolve, reject) => {
       requestAPI<any>('capabilities', { method: 'GET' })
         .then(data => {
+          const oldConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
           this.config.capabilities = structuredClone(data);
           this.config.chatParticipants = structuredClone(
             data.chat_participants
           );
-          this.configChanged.emit();
+          const newConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
+          if (JSON.stringify(newConfig) !== JSON.stringify(oldConfig)) {
+            this.configChanged.emit();
+          }
           resolve();
         })
         .catch(reason => {

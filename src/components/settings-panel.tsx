@@ -1,6 +1,6 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ReactWidget } from '@jupyterlab/apputils';
 import { VscWarning } from 'react-icons/vsc';
 import * as path from 'path';
@@ -583,33 +583,53 @@ function SettingsPanelComponentGeneral(props: any) {
 function SettingsPanelComponentMCPServers(props: any) {
   const nbiConfig = NBIAPI.config;
   const mcpServers = nbiConfig.toolConfig.mcpServers;
-  const [mcpServerSettings, setMcpServerSettings] = useState(
-    nbiConfig.mcpServerSettings
-  );
+  const mcpServerSettingsRef = useRef<any>(nbiConfig.mcpServerSettings);
   const [renderCount, setRenderCount] = useState(1);
 
   const mcpServerSettingsToEnabledState = () => {
     const mcpServerEnabledState = new Map<string, Set<string>>();
     for (const server of nbiConfig.toolConfig.mcpServers) {
-      if (mcpServerSettings[server.id]) {
-        const serverSettings = mcpServerSettings[server.id];
-        if (!serverSettings.disabled) {
-          mcpServerEnabledState.set(server.id, new Set<string>());
-          for (const tool of server.tools) {
-            if (!serverSettings.disabled_tools?.includes(tool.name)) {
-              mcpServerEnabledState.get(server.id).add(tool.name);
-            }
-          }
-        }
-      } else {
-        mcpServerEnabledState.set(server.id, new Set<string>());
-        for (const tool of server.tools) {
-          mcpServerEnabledState.get(server.id).add(tool.name);
-        }
+      const mcpServerToolEnabledState =
+        mcpServerSettingsToServerToolEnabledState(server.id);
+      if (mcpServerToolEnabledState) {
+        mcpServerEnabledState.set(server.id, mcpServerToolEnabledState);
       }
     }
 
     return mcpServerEnabledState;
+  };
+
+  const mcpServerSettingsToServerToolEnabledState = (serverId: string) => {
+    const server = nbiConfig.toolConfig.mcpServers.find(
+      (server: any) => server.id === serverId
+    );
+
+    let mcpServerToolEnabledState: Set<string> | null = null;
+
+    if (!server) {
+      return mcpServerToolEnabledState;
+    }
+
+    const mcpServerSettings = mcpServerSettingsRef.current;
+
+    if (mcpServerSettings[server.id]) {
+      const serverSettings = mcpServerSettings[server.id];
+      if (!serverSettings.disabled) {
+        mcpServerToolEnabledState = new Set<string>();
+        for (const tool of server.tools) {
+          if (!serverSettings.disabled_tools?.includes(tool.name)) {
+            mcpServerToolEnabledState.add(tool.name);
+          }
+        }
+      }
+    } else {
+      mcpServerToolEnabledState = new Set<string>();
+      for (const tool of server.tools) {
+        mcpServerToolEnabledState.add(tool.name);
+      }
+    }
+
+    return mcpServerToolEnabledState;
   };
 
   const [mcpServerEnabledState, setMCPServerEnabledState] = useState(
@@ -639,16 +659,16 @@ function SettingsPanelComponentMCPServers(props: any) {
 
   const syncSettingsToServerState = () => {
     NBIAPI.setConfig({
-      mcp_server_settings: mcpServerSettings
+      mcp_server_settings: mcpServerSettingsRef.current
     });
   };
 
   useEffect(() => {
     syncSettingsToServerState();
-  }, [mcpServerSettings]);
+  }, [mcpServerSettingsRef.current]);
 
   useEffect(() => {
-    setMcpServerSettings(mcpServerEnabledStateToMcpServerSettings());
+    mcpServerSettingsRef.current = mcpServerEnabledStateToMcpServerSettings();
     setRenderCount(renderCount => renderCount + 1);
   }, [mcpServerEnabledState]);
 
@@ -656,7 +676,14 @@ function SettingsPanelComponentMCPServers(props: any) {
     const currentState = new Map(mcpServerEnabledState);
     if (enabled) {
       if (!(serverId in currentState)) {
-        currentState.set(serverId, new Set<string>());
+        currentState.set(
+          serverId,
+          new Set<string>(
+            nbiConfig.toolConfig.mcpServers
+              .find((server: any) => server.id === serverId)
+              ?.tools.map((tool: any) => tool.name)
+          )
+        );
       }
     } else {
       currentState.delete(serverId);
@@ -692,9 +719,13 @@ function SettingsPanelComponentMCPServers(props: any) {
     setMCPServerEnabledState(currentState);
   };
 
-  nbiConfig.changed.connect(() => {
-    setMCPServerEnabledState(mcpServerSettingsToEnabledState());
-  });
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      mcpServerSettingsRef.current = nbiConfig.mcpServerSettings;
+      const newMcpServerEnabledState = mcpServerSettingsToEnabledState();
+      setMCPServerEnabledState(newMcpServerEnabledState);
+    });
+  }, []);
 
   return (
     <div className="config-dialog">

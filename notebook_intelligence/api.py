@@ -403,7 +403,7 @@ class MCPServer:
     def get_tool(self, tool_name: str) -> Tool:
         return NotImplemented
 
-    async def call_tool(self, tool_name: str, tool_args: dict):
+    def call_tool(self, tool_name: str, tool_args: dict):
         return NotImplemented
 
 def auto_approve(tool: SimpleTool):
