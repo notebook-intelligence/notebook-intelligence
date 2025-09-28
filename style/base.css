@@ -889,12 +889,14 @@ svg.access-token-warning {
   background-color: var(--jp-brand-color0);
 }
 
-.server-status-indicator.connected {
+.server-status-indicator.connected,
+.server-status-indicator.updated-tool-list {
   background-color: var(--jp-success-color1);
 }
 
 .server-status-indicator.connecting,
-.server-status-indicator.disconnecting {
+.server-status-indicator.disconnecting,
+.server-status-indicator.updating-tool-list {
   background-color: var(--jp-warn-color1);
 }
 

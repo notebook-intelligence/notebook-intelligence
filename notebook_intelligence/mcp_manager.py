@@ -276,7 +276,9 @@ class MCPServerImpl(MCPServer):
     def update_tool_list(self):
         if not self.is_connected():
             return
+        self._set_status(MCPServerStatus.UpdatingToolList)
         self._mcp_tools = self._send_mcp_request(MCPServerEventType.ListTools)
+        self._set_status(MCPServerStatus.UpdatedToolList)
 
     def call_tool(self, tool_name: str, tool_args: dict):
         if not self.is_connected():

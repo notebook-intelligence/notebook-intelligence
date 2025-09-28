@@ -58,7 +58,9 @@ export enum MCPServerStatus {
   Connecting = 'connecting',
   Disconnecting = 'disconnecting',
   FailedToConnect = 'failed-to-connect',
-  Connected = 'connected'
+  Connected = 'connected',
+  UpdatingToolList = 'updating-tool-list',
+  UpdatedToolList = 'updated-tool-list'
 }
 
 export interface IContextItem {

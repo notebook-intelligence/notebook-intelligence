@@ -55,6 +55,8 @@ class MCPServerStatus(str, Enum):
     Disconnecting = 'disconnecting'
     FailedToConnect = 'failed-to-connect'
     Connected = 'connected'
+    UpdatingToolList = 'updating-tool-list'
+    UpdatedToolList = 'updated-tool-list'
 
 class Signal:
     def __init__(self):

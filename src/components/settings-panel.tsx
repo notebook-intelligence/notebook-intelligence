@@ -582,13 +582,13 @@ function SettingsPanelComponentGeneral(props: any) {
 
 function SettingsPanelComponentMCPServers(props: any) {
   const nbiConfig = NBIAPI.config;
-  const mcpServers = nbiConfig.toolConfig.mcpServers;
+  const mcpServersRef = useRef<any>(nbiConfig.toolConfig.mcpServers);
   const mcpServerSettingsRef = useRef<any>(nbiConfig.mcpServerSettings);
   const [renderCount, setRenderCount] = useState(1);
 
   const mcpServerSettingsToEnabledState = () => {
     const mcpServerEnabledState = new Map<string, Set<string>>();
-    for (const server of nbiConfig.toolConfig.mcpServers) {
+    for (const server of mcpServersRef.current) {
       const mcpServerToolEnabledState =
         mcpServerSettingsToServerToolEnabledState(server.id);
       if (mcpServerToolEnabledState) {
@@ -600,7 +600,7 @@ function SettingsPanelComponentMCPServers(props: any) {
   };
 
   const mcpServerSettingsToServerToolEnabledState = (serverId: string) => {
-    const server = nbiConfig.toolConfig.mcpServers.find(
+    const server = mcpServersRef.current.find(
       (server: any) => server.id === serverId
     );
 
@@ -638,7 +638,7 @@ function SettingsPanelComponentMCPServers(props: any) {
 
   const mcpServerEnabledStateToMcpServerSettings = () => {
     const mcpServerSettings: any = {};
-    for (const mcpServer of nbiConfig.toolConfig.mcpServers) {
+    for (const mcpServer of mcpServersRef.current) {
       if (mcpServerEnabledState.has(mcpServer.id)) {
         const disabledTools = [];
         for (const tool of mcpServer.tools) {
@@ -679,7 +679,7 @@ function SettingsPanelComponentMCPServers(props: any) {
         currentState.set(
           serverId,
           new Set<string>(
-            nbiConfig.toolConfig.mcpServers
+            mcpServersRef.current
               .find((server: any) => server.id === serverId)
               ?.tools.map((tool: any) => tool.name)
           )
@@ -721,6 +721,7 @@ function SettingsPanelComponentMCPServers(props: any) {
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
+      mcpServersRef.current = nbiConfig.toolConfig.mcpServers;
       mcpServerSettingsRef.current = nbiConfig.mcpServerSettings;
       const newMcpServerEnabledState = mcpServerSettingsToEnabledState();
       setMCPServerEnabledState(newMcpServerEnabledState);
@@ -733,7 +734,7 @@ function SettingsPanelComponentMCPServers(props: any) {
         <div className="model-config-section">
           <div className="model-config-section-header">MCP Servers</div>
           <div className="model-config-section-body">
-            {mcpServers.length === 0 && renderCount > 0 && (
+            {mcpServersRef.current.length === 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
                   <div>
@@ -743,10 +744,10 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </div>
               </div>
             )}
-            {mcpServers.length > 0 && renderCount > 0 && (
+            {mcpServersRef.current.length > 0 && renderCount > 0 && (
               <div className="model-config-section-row">
                 <div className="model-config-section-column">
-                  {mcpServers.map((server: any) => (
+                  {mcpServersRef.current.map((server: any) => (
                     <div key={server.id}>
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <CheckBoxItem
