@@ -147,13 +147,18 @@ class MCPServerImpl(MCPServer):
         
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
-        self._client_thread = threading.Thread(
-            name="MCP Server Thread",
-            target=asyncio.run,
-            daemon=True,
-            args=(self._client_thread_func(),)
-        )
-        self._client_thread.start()
+        try:
+            self._client_thread = threading.Thread(
+                name="MCP Server Thread",
+                target=asyncio.run,
+                daemon=True,
+                args=(self._client_thread_func(),)
+            )
+            self._client_thread.start()
+        except Exception as e:
+            self._client_thread = None
+            log.error(f"Error occurred while connecting to MCP server: {str(e)}")
+            self._set_status(MCPServerStatus.FailedToConnect)
 
     def disconnect(self):
         if not self.is_connected():
@@ -178,42 +183,47 @@ class MCPServerImpl(MCPServer):
             })
 
     async def _client_thread_func(self):
-        async with await self._get_client() as client:
-            self._set_status(MCPServerStatus.Connected)
-            while True:
-                event = self._client_queue.get(block=True)
-                event_id = event["id"]
-                event_type = event["type"]
-                if event_type == MCPServerEventType.ListTools:
-                    try:
-                        tool_list = await client.list_tools()
-                    except Exception as e:
-                        log.error(f"Error occurred while listing MCP tools: {str(e)}")
-                        tool_list = []
-                    finally:
+        try:
+            async with await self._get_client() as client:
+                self._set_status(MCPServerStatus.Connected)
+                while True:
+                    event = self._client_queue.get(block=True)
+                    event_id = event["id"]
+                    event_type = event["type"]
+                    if event_type == MCPServerEventType.ListTools:
+                        try:
+                            tool_list = await client.list_tools()
+                        except Exception as e:
+                            log.error(f"Error occurred while listing MCP tools: {str(e)}")
+                            tool_list = []
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": tool_list
+                            })
+                    elif event_type == MCPServerEventType.CallTool:
+                        try:
+                            result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                        except Exception as e:
+                            result = f"Error occurred while calling MCP tool {event['args']['tool_name']}: {str(e)}"
+                            log.error(result)
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": result
+                            })
+                    elif event_type == MCPServerEventType.StopServer:
                         self._client_thread_signal.emit({
                             "id": event_id,
-                            "data": tool_list
+                            "data": "stopped"
                         })
-                elif event_type == MCPServerEventType.CallTool:
-                    try:
-                        result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
-                    except Exception as e:
-                        result = f"Error occurred while calling MCP tool {event['args']['tool_name']}: {str(e)}"
-                        log.error(result)
-                    finally:
-                        self._client_thread_signal.emit({
-                            "id": event_id,
-                            "data": result
-                        })
-                elif event_type == MCPServerEventType.StopServer:
-                    self._client_thread_signal.emit({
-                        "id": event_id,
-                        "data": "stopped"
-                    })
-                    return
-                else:
-                    log.error(f"Unknown event type {event}")
+                        return
+                    else:
+                        log.error(f"Unknown event type {event}")
+        except Exception as e:
+            self._client_thread = None
+            log.error(f"Error occurred while running MCP server thread: {str(e)}")
+            self._set_status(MCPServerStatus.FailedToConnect)
 
     def _create_client(self) -> Client:
         if self._stdio_params is not None:
@@ -264,9 +274,14 @@ class MCPServerImpl(MCPServer):
             time.sleep(0.1)
 
     def update_tool_list(self):
+        if not self.is_connected():
+            return
         self._mcp_tools = self._send_mcp_request(MCPServerEventType.ListTools)
 
     def call_tool(self, tool_name: str, tool_args: dict):
+        if not self.is_connected():
+            return f"MCP server '{self.name}' is not connected"
+
         return self._send_mcp_request(MCPServerEventType.CallTool,{
             "tool_name": tool_name,
             "tool_args": tool_args
