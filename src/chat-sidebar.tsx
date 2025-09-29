@@ -685,7 +685,9 @@ function SidebarComponent(props: any) {
   const [selectedToolCount, setSelectedToolCount] = useState(0);
   const [notebookExecuteToolSelected, setNotebookExecuteToolSelected] =
     useState(false);
-  const [toolConfig, setToolConfig] = useState({
+
+  const [renderCount, setRenderCount] = useState(1);
+  const toolConfigRef = useRef({
     builtinToolsets: [
       { id: BuiltinToolsetType.NotebookEdit, name: 'Notebook edit' },
       { id: BuiltinToolsetType.NotebookExecute, name: 'Notebook execute' }
@@ -711,20 +713,21 @@ function SidebarComponent(props: any) {
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
-      setToolConfig(NBIAPI.config.toolConfig);
+      toolConfigRef.current = NBIAPI.config.toolConfig;
+      setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
 
   useEffect(() => {
     let hasTools = false;
-    for (const extension of toolConfig.extensions) {
+    for (const extension of toolConfigRef.current.extensions) {
       if (extension.toolsets.length > 0) {
         hasTools = true;
         break;
       }
     }
     setHasExtensionTools(hasTools);
-  }, [toolConfig]);
+  }, [toolConfigRef.current]);
 
   useEffect(() => {
     const builtinToolSelCount = toolSelections.builtinToolsets.length;
@@ -806,7 +809,9 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const mcpServer = toolConfig.mcpServers.find(server => server.id === id);
+    const mcpServer = toolConfigRef.current.mcpServers.find(
+      server => server.id === id
+    );
 
     const selectedServerTools: string[] = toolSelections.mcpServers[id];
 
@@ -825,7 +830,9 @@ function SidebarComponent(props: any) {
       delete newConfig.mcpServers[id];
       setToolSelections(newConfig);
     } else {
-      const mcpServer = toolConfig.mcpServers.find(server => server.id === id);
+      const mcpServer = toolConfigRef.current.mcpServers.find(
+        server => server.id === id
+      );
       const newConfig = { ...toolSelections };
       newConfig.mcpServers[id] = structuredClone(
         mcpServer.tools.map((tool: any) => tool.name)
@@ -875,7 +882,7 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const extension = toolConfig.extensions.find(
+    const extension = toolConfigRef.current.extensions.find(
       extension => extension.id === extensionId
     );
 
@@ -900,7 +907,9 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const extension = toolConfig.extensions.find(ext => ext.id === extensionId);
+    const extension = toolConfigRef.current.extensions.find(
+      ext => ext.id === extensionId
+    );
     const extensionToolset = extension.toolsets.find(
       (toolset: any) => toolset.id === toolsetId
     );
@@ -932,7 +941,7 @@ function SidebarComponent(props: any) {
       setToolSelections(newConfig);
     } else {
       const newConfig = { ...toolSelections };
-      const extension = toolConfig.extensions.find(
+      const extension = toolConfigRef.current.extensions.find(
         ext => ext.id === extensionId
       );
       if (extensionId in newConfig.extensions) {
@@ -974,7 +983,7 @@ function SidebarComponent(props: any) {
       }
       setToolSelections(newConfig);
     } else {
-      const extension = toolConfig.extensions.find(
+      const extension = toolConfigRef.current.extensions.find(
         ext => ext.id === extensionId
       );
       const extensionToolset = extension.toolsets.find(
@@ -1138,7 +1147,10 @@ function SidebarComponent(props: any) {
 
   const handleChatToolsButtonClick = async () => {
     if (!showModeTools) {
-      NBIAPI.fetchCapabilities();
+      NBIAPI.fetchCapabilities().then(() => {
+        toolConfigRef.current = NBIAPI.config.toolConfig;
+        setRenderCount(renderCount => renderCount + 1);
+      });
     }
     setShowModeTools(!showModeTools);
   };
@@ -1926,7 +1938,7 @@ function SidebarComponent(props: any) {
               <div className="mode-tools-popover-tool-list">
                 <div className="mode-tools-group-header">Built-in</div>
                 <div className="mode-tools-group mode-tools-group-built-in">
-                  {toolConfig.builtinToolsets.map((toolset: any) => (
+                  {toolConfigRef.current.builtinToolsets.map((toolset: any) => (
                     <CheckBoxItem
                       key={toolset.id}
                       label={toolset.name}
@@ -1941,87 +1953,99 @@ function SidebarComponent(props: any) {
                     />
                   ))}
                 </div>
-                {toolConfig.mcpServers.length > 0 && (
-                  <div className="mode-tools-group-header">MCP Servers</div>
-                )}
-                {toolConfig.mcpServers.map((mcpServer, index: number) => (
-                  <div className="mode-tools-group">
-                    <CheckBoxItem
-                      label={mcpServer.id}
-                      header={true}
-                      checked={getMCPServerState(mcpServer.id)}
-                      onClick={() => onMCPServerClicked(mcpServer.id)}
-                    />
-                    {mcpServer.tools.map((tool: any, index: number) => (
-                      <CheckBoxItem
-                        label={tool.name}
-                        title={tool.description}
-                        indent={1}
-                        checked={getMCPServerToolState(mcpServer.id, tool.name)}
-                        onClick={() =>
-                          setMCPServerToolState(
-                            mcpServer.id,
-                            tool.name,
-                            !getMCPServerToolState(mcpServer.id, tool.name)
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                ))}
-                {hasExtensionTools && (
-                  <div className="mode-tools-group-header">Extension tools</div>
-                )}
-                {toolConfig.extensions.map((extension, index: number) => (
-                  <div className="mode-tools-group">
-                    <CheckBoxItem
-                      label={`${extension.name} (${extension.id})`}
-                      header={true}
-                      checked={getExtensionState(extension.id)}
-                      onClick={() => onExtensionClicked(extension.id)}
-                    />
-                    {extension.toolsets.map((toolset: any, index: number) => (
-                      <>
+                {renderCount > 0 &&
+                  toolConfigRef.current.mcpServers.length > 0 && (
+                    <div className="mode-tools-group-header">MCP Servers</div>
+                  )}
+                {renderCount > 0 &&
+                  toolConfigRef.current.mcpServers.map(
+                    (mcpServer, index: number) => (
+                      <div className="mode-tools-group">
                         <CheckBoxItem
-                          label={`${toolset.name} (${toolset.id})`}
-                          title={toolset.description}
-                          indent={1}
-                          checked={getExtensionToolsetState(
-                            extension.id,
-                            toolset.id
-                          )}
-                          onClick={() =>
-                            onExtensionToolsetClicked(extension.id, toolset.id)
-                          }
+                          label={mcpServer.id}
+                          header={true}
+                          checked={getMCPServerState(mcpServer.id)}
+                          onClick={() => onMCPServerClicked(mcpServer.id)}
                         />
-                        {toolset.tools.map((tool: any, index: number) => (
+                        {mcpServer.tools.map((tool: any, index: number) => (
                           <CheckBoxItem
                             label={tool.name}
                             title={tool.description}
-                            indent={2}
-                            checked={getExtensionToolsetToolState(
-                              extension.id,
-                              toolset.id,
+                            indent={1}
+                            checked={getMCPServerToolState(
+                              mcpServer.id,
                               tool.name
                             )}
                             onClick={() =>
-                              setExtensionToolsetToolState(
-                                extension.id,
-                                toolset.id,
+                              setMCPServerToolState(
+                                mcpServer.id,
                                 tool.name,
-                                !getExtensionToolsetToolState(
-                                  extension.id,
-                                  toolset.id,
-                                  tool.name
-                                )
+                                !getMCPServerToolState(mcpServer.id, tool.name)
                               )
                             }
                           />
                         ))}
-                      </>
-                    ))}
-                  </div>
-                ))}
+                      </div>
+                    )
+                  )}
+                {hasExtensionTools && (
+                  <div className="mode-tools-group-header">Extension tools</div>
+                )}
+                {toolConfigRef.current.extensions.map(
+                  (extension, index: number) => (
+                    <div className="mode-tools-group">
+                      <CheckBoxItem
+                        label={`${extension.name} (${extension.id})`}
+                        header={true}
+                        checked={getExtensionState(extension.id)}
+                        onClick={() => onExtensionClicked(extension.id)}
+                      />
+                      {extension.toolsets.map((toolset: any, index: number) => (
+                        <>
+                          <CheckBoxItem
+                            label={`${toolset.name} (${toolset.id})`}
+                            title={toolset.description}
+                            indent={1}
+                            checked={getExtensionToolsetState(
+                              extension.id,
+                              toolset.id
+                            )}
+                            onClick={() =>
+                              onExtensionToolsetClicked(
+                                extension.id,
+                                toolset.id
+                              )
+                            }
+                          />
+                          {toolset.tools.map((tool: any, index: number) => (
+                            <CheckBoxItem
+                              label={tool.name}
+                              title={tool.description}
+                              indent={2}
+                              checked={getExtensionToolsetToolState(
+                                extension.id,
+                                toolset.id,
+                                tool.name
+                              )}
+                              onClick={() =>
+                                setExtensionToolsetToolState(
+                                  extension.id,
+                                  toolset.id,
+                                  tool.name,
+                                  !getExtensionToolsetToolState(
+                                    extension.id,
+                                    toolset.id,
+                                    tool.name
+                                  )
+                                )
+                              }
+                            />
+                          ))}
+                        </>
+                      ))}
+                    </div>
+                  )
+                )}
               </div>
             </div>
           )}
