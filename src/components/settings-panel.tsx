@@ -9,6 +9,7 @@ import copySvgstr from '../../style/icons/copy.svg';
 import { NBIAPI } from '../api';
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
+import { mcpServerSettingsToEnabledState } from './mcp-util';
 
 const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
 const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
@@ -586,54 +587,13 @@ function SettingsPanelComponentMCPServers(props: any) {
   const mcpServerSettingsRef = useRef<any>(nbiConfig.mcpServerSettings);
   const [renderCount, setRenderCount] = useState(1);
 
-  const mcpServerSettingsToEnabledState = () => {
-    const mcpServerEnabledState = new Map<string, Set<string>>();
-    for (const server of mcpServersRef.current) {
-      const mcpServerToolEnabledState =
-        mcpServerSettingsToServerToolEnabledState(server.id);
-      if (mcpServerToolEnabledState) {
-        mcpServerEnabledState.set(server.id, mcpServerToolEnabledState);
-      }
-    }
-
-    return mcpServerEnabledState;
-  };
-
-  const mcpServerSettingsToServerToolEnabledState = (serverId: string) => {
-    const server = mcpServersRef.current.find(
-      (server: any) => server.id === serverId
-    );
-
-    let mcpServerToolEnabledState: Set<string> | null = null;
-
-    if (!server) {
-      return mcpServerToolEnabledState;
-    }
-
-    const mcpServerSettings = mcpServerSettingsRef.current;
-
-    if (mcpServerSettings[server.id]) {
-      const serverSettings = mcpServerSettings[server.id];
-      if (!serverSettings.disabled) {
-        mcpServerToolEnabledState = new Set<string>();
-        for (const tool of server.tools) {
-          if (!serverSettings.disabled_tools?.includes(tool.name)) {
-            mcpServerToolEnabledState.add(tool.name);
-          }
-        }
-      }
-    } else {
-      mcpServerToolEnabledState = new Set<string>();
-      for (const tool of server.tools) {
-        mcpServerToolEnabledState.add(tool.name);
-      }
-    }
-
-    return mcpServerToolEnabledState;
-  };
-
   const [mcpServerEnabledState, setMCPServerEnabledState] = useState(
-    new Map<string, Set<string>>(mcpServerSettingsToEnabledState())
+    new Map<string, Set<string>>(
+      mcpServerSettingsToEnabledState(
+        mcpServersRef.current,
+        mcpServerSettingsRef.current
+      )
+    )
   );
 
   const mcpServerEnabledStateToMcpServerSettings = () => {
@@ -723,7 +683,10 @@ function SettingsPanelComponentMCPServers(props: any) {
     NBIAPI.configChanged.connect(() => {
       mcpServersRef.current = nbiConfig.toolConfig.mcpServers;
       mcpServerSettingsRef.current = nbiConfig.mcpServerSettings;
-      const newMcpServerEnabledState = mcpServerSettingsToEnabledState();
+      const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
+        mcpServersRef.current,
+        mcpServerSettingsRef.current
+      );
       setMCPServerEnabledState(newMcpServerEnabledState);
     });
   }, []);

@@ -355,7 +355,7 @@ pre:has(.code-block-header) {
   border: 1px solid var(--jp-border-color1);
   flex-direction: column;
   position: absolute;
-  bottom: 98px;
+  bottom: 80px;
   left: 4px;
   gap: 2px;
   /* stylelint-disable */

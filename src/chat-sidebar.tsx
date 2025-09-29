@@ -54,6 +54,7 @@ import {
 
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
+import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 
 export enum RunChatCompletionType {
   Chat,
@@ -695,6 +696,16 @@ function SidebarComponent(props: any) {
     mcpServers: [],
     extensions: []
   });
+  const mcpServerSettingsRef = useRef(NBIAPI.config.mcpServerSettings);
+  const [mcpServerEnabledState, setMCPServerEnabledState] = useState(
+    new Map<string, Set<string>>(
+      mcpServerSettingsToEnabledState(
+        toolConfigRef.current.mcpServers,
+        mcpServerSettingsRef.current
+      )
+    )
+  );
+
   const [showModeTools, setShowModeTools] = useState(false);
   const toolSelectionsInitial: any = {
     builtinToolsets: [BuiltinToolsetType.NotebookEdit],
@@ -706,7 +717,9 @@ function SidebarComponent(props: any) {
     mcpServers: {},
     extensions: {}
   };
-  const [toolSelections, setToolSelections] = useState(toolSelectionsInitial);
+  const [toolSelections, setToolSelections] = useState(
+    structuredClone(toolSelectionsInitial)
+  );
   const [hasExtensionTools, setHasExtensionTools] = useState(false);
   const [lastScrollTime, setLastScrollTime] = useState(0);
   const [scrollPending, setScrollPending] = useState(false);
@@ -714,6 +727,13 @@ function SidebarComponent(props: any) {
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       toolConfigRef.current = NBIAPI.config.toolConfig;
+      mcpServerSettingsRef.current = NBIAPI.config.mcpServerSettings;
+      const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
+        toolConfigRef.current.mcpServers,
+        mcpServerSettingsRef.current
+      );
+      setMCPServerEnabledState(newMcpServerEnabledState);
+      setToolSelections(structuredClone(toolSelectionsInitial));
       setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
@@ -1149,6 +1169,13 @@ function SidebarComponent(props: any) {
     if (!showModeTools) {
       NBIAPI.fetchCapabilities().then(() => {
         toolConfigRef.current = NBIAPI.config.toolConfig;
+        mcpServerSettingsRef.current = NBIAPI.config.mcpServerSettings;
+        const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
+          toolConfigRef.current.mcpServers,
+          mcpServerSettingsRef.current
+        );
+        setMCPServerEnabledState(newMcpServerEnabledState);
+        setToolSelections(structuredClone(toolSelectionsInitial));
         setRenderCount(renderCount => renderCount + 1);
       });
     }
@@ -1834,7 +1861,7 @@ function SidebarComponent(props: any) {
                     if (event.target.value === 'ask') {
                       setToolSelections(toolSelectionsEmpty);
                     } else if (event.target.value === 'agent') {
-                      setToolSelections(toolSelectionsInitial);
+                      setToolSelections(structuredClone(toolSelectionsInitial));
                     }
                     setShowModeTools(false);
                     setChatMode(event.target.value);
@@ -1954,12 +1981,16 @@ function SidebarComponent(props: any) {
                   ))}
                 </div>
                 {renderCount > 0 &&
+                  mcpServerEnabledState.size > 0 &&
                   toolConfigRef.current.mcpServers.length > 0 && (
                     <div className="mode-tools-group-header">MCP Servers</div>
                   )}
                 {renderCount > 0 &&
-                  toolConfigRef.current.mcpServers.map(
-                    (mcpServer, index: number) => (
+                  toolConfigRef.current.mcpServers
+                    .filter(mcpServer =>
+                      mcpServerEnabledState.has(mcpServer.id)
+                    )
+                    .map((mcpServer, index: number) => (
                       <div className="mode-tools-group">
                         <CheckBoxItem
                           label={mcpServer.id}
@@ -1967,27 +1998,35 @@ function SidebarComponent(props: any) {
                           checked={getMCPServerState(mcpServer.id)}
                           onClick={() => onMCPServerClicked(mcpServer.id)}
                         />
-                        {mcpServer.tools.map((tool: any, index: number) => (
-                          <CheckBoxItem
-                            label={tool.name}
-                            title={tool.description}
-                            indent={1}
-                            checked={getMCPServerToolState(
-                              mcpServer.id,
-                              tool.name
-                            )}
-                            onClick={() =>
-                              setMCPServerToolState(
+                        {mcpServer.tools
+                          .filter((tool: any) =>
+                            mcpServerEnabledState
+                              .get(mcpServer.id)
+                              .has(tool.name)
+                          )
+                          .map((tool: any, index: number) => (
+                            <CheckBoxItem
+                              label={tool.name}
+                              title={tool.description}
+                              indent={1}
+                              checked={getMCPServerToolState(
                                 mcpServer.id,
-                                tool.name,
-                                !getMCPServerToolState(mcpServer.id, tool.name)
-                              )
-                            }
-                          />
-                        ))}
+                                tool.name
+                              )}
+                              onClick={() =>
+                                setMCPServerToolState(
+                                  mcpServer.id,
+                                  tool.name,
+                                  !getMCPServerToolState(
+                                    mcpServer.id,
+                                    tool.name
+                                  )
+                                )
+                              }
+                            />
+                          ))}
                       </div>
-                    )
-                  )}
+                    ))}
                 {hasExtensionTools && (
                   <div className="mode-tools-group-header">Extension tools</div>
                 )}
