@@ -1175,7 +1175,6 @@ function SidebarComponent(props: any) {
           mcpServerSettingsRef.current
         );
         setMCPServerEnabledState(newMcpServerEnabledState);
-        setToolSelections(structuredClone(toolSelectionsInitial));
         setRenderCount(renderCount => renderCount + 1);
       });
     }
