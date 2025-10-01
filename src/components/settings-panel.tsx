@@ -107,7 +107,7 @@ function SettingsPanelComponentGeneral(props: any) {
   const [chatModels, setChatModels] = useState([]);
   const [inlineCompletionModels, setInlineCompletionModels] = useState([]);
 
-  const handleSaveClick = async () => {
+  const handleSaveSettings = async () => {
     const config: any = {
       default_chat_mode: defaultChatMode,
       chat_model: {
@@ -236,6 +236,19 @@ function SettingsPanelComponentGeneral(props: any) {
       'inline-completion'
     );
   }, []);
+
+  useEffect(() => {
+    handleSaveSettings();
+  }, [
+    defaultChatMode,
+    chatModelProvider,
+    chatModel,
+    chatModelProperties,
+    inlineCompletionModelProvider,
+    inlineCompletionModel,
+    inlineCompletionModelProperties,
+    storeGitHubAccessToken
+  ]);
 
   return (
     <div className="config-dialog">
@@ -542,40 +555,7 @@ function SettingsPanelComponentGeneral(props: any) {
               </div>
             </div>
           </div>
-          <div className="model-config-section-header">
-            MCP config file path
-          </div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <span
-                  className="user-code-span"
-                  onClick={() => {
-                    navigator.clipboard.writeText(
-                      path.join(NBIAPI.config.userConfigDir, 'mcp.json')
-                    );
-                    return true;
-                  }}
-                >
-                  {path.join(NBIAPI.config.userConfigDir, 'mcp.json')}{' '}
-                  <span
-                    className="copy-icon"
-                    dangerouslySetInnerHTML={{ __html: copySvgstr }}
-                  ></span>
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
-      </div>
-
-      <div className="config-dialog-footer">
-        <button
-          className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-          onClick={handleSaveClick}
-        >
-          <div className="jp-Dialog-buttonLabel">Save</div>
-        </button>
       </div>
     </div>
   );
@@ -768,6 +748,28 @@ function SettingsPanelComponentMCPServers(props: any) {
                   <div className="jp-Dialog-buttonLabel">Add / Edit</div>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+        <div className="model-config-section-header">MCP config file path</div>
+        <div className="model-config-section-body">
+          <div className="model-config-section-row">
+            <div className="model-config-section-column">
+              <span
+                className="user-code-span"
+                onClick={() => {
+                  navigator.clipboard.writeText(
+                    path.join(NBIAPI.config.userConfigDir, 'mcp.json')
+                  );
+                  return true;
+                }}
+              >
+                {path.join(NBIAPI.config.userConfigDir, 'mcp.json')}{' '}
+                <span
+                  className="copy-icon"
+                  dangerouslySetInnerHTML={{ __html: copySvgstr }}
+                ></span>
+              </span>
             </div>
           </div>
         </div>
