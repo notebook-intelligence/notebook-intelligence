@@ -751,28 +751,6 @@ function SettingsPanelComponentMCPServers(props: any) {
             </div>
           </div>
         </div>
-        <div className="model-config-section-header">MCP config file path</div>
-        <div className="model-config-section-body">
-          <div className="model-config-section-row">
-            <div className="model-config-section-column">
-              <span
-                className="user-code-span"
-                onClick={() => {
-                  navigator.clipboard.writeText(
-                    path.join(NBIAPI.config.userConfigDir, 'mcp.json')
-                  );
-                  return true;
-                }}
-              >
-                {path.join(NBIAPI.config.userConfigDir, 'mcp.json')}{' '}
-                <span
-                  className="copy-icon"
-                  dangerouslySetInnerHTML={{ __html: copySvgstr }}
-                ></span>
-              </span>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

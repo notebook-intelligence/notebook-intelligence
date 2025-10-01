@@ -855,7 +855,11 @@ function SidebarComponent(props: any) {
       );
       const newConfig = { ...toolSelections };
       newConfig.mcpServers[id] = structuredClone(
-        mcpServer.tools.map((tool: any) => tool.name)
+        mcpServer.tools
+          .filter((tool: any) =>
+            mcpServerEnabledState.get(mcpServer.id).has(tool.name)
+          )
+          .map((tool: any) => tool.name)
       );
       setToolSelections(newConfig);
     }
