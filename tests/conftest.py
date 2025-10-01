@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from notebook_intelligence.models import NotebookContext
+from notebook_intelligence.ruleset import NotebookContext
 from notebook_intelligence.config import NBIConfig
 
 
@@ -29,7 +29,6 @@ def sample_notebook_context():
     return NotebookContext(
         filename="test.ipynb",
         kernel="python3",
-        cell_type="code",
         mode="ask"
     )
 

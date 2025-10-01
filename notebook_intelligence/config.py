@@ -135,23 +135,3 @@ class NBIConfig:
     def active_rules(self) -> dict:
         """Get dictionary of active rule states (filename -> bool)."""
         return self.get('active_rules', {})
-
-    @property
-    def rules_auto_reload(self) -> bool:
-        """Check if rules should be automatically reloaded when changed."""
-        return self.get('rules_auto_reload', True)
-
-    @property
-    def rules_context_injection_enabled(self) -> bool:
-        """Check if rule context injection into LLM requests is enabled."""
-        return self.get('rules_context_injection_enabled', True)
-
-    def set_rule_active(self, rule_filename: str, active: bool):
-        """Set the active state of a specific rule."""
-        current_rules = self.active_rules.copy()
-        current_rules[rule_filename] = active
-        self.set('active_rules', current_rules)
-
-    def is_rule_active(self, rule_filename: str) -> bool:
-        """Check if a specific rule is active (defaults to True if not specified)."""
-        return self.active_rules.get(rule_filename, True)

@@ -2,7 +2,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from notebook_intelligence.models import RuleScope, Rule, RuleSet, NotebookContext
+from notebook_intelligence.ruleset import RuleScope, Rule, RuleSet, NotebookContext
 
 
 class TestRuleScope:
@@ -35,20 +35,6 @@ class TestRuleScope:
         assert scope.matches_kernel("python3") is True
         assert scope.matches_kernel("r") is True
         assert scope.matches_kernel("julia") is True
-    
-    def test_matches_cell_type(self):
-        scope = RuleScope(cell_types=["code", "markdown"])
-        
-        assert scope.matches_cell_type("code") is True
-        assert scope.matches_cell_type("markdown") is True
-        assert scope.matches_cell_type("raw") is False
-    
-    def test_matches_cell_type_none_matches_all(self):
-        scope = RuleScope()  # No cell types specified
-        
-        assert scope.matches_cell_type("code") is True
-        assert scope.matches_cell_type("markdown") is True
-        assert scope.matches_cell_type("raw") is True
 
 
 class TestRule:

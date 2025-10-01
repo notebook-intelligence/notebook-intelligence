@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from notebook_intelligence.rule_manager import RuleManager
-from notebook_intelligence.models import Rule, RuleSet, NotebookContext, RuleScope
+from notebook_intelligence.ruleset import Rule, RuleSet, NotebookContext
 
 
 class TestRuleManager:

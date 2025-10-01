@@ -90,7 +90,7 @@ ENV/
 .venv/
 .env/
 venv*/
-
+.vscode/
 # celery beat schedule file
 celerybeat-schedule
 

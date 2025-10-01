@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from .models import Rule, RuleSet, NotebookContext
+from .ruleset import Rule, RuleSet, NotebookContext
 
 log = logging.getLogger(__name__)
 
@@ -123,7 +123,6 @@ class RuleManager:
         return self.ruleset.get_applicable_rules(
             filename=context.basename,
             kernel=context.kernel,
-            cell_type=context.cell_type,
             mode=context.mode
         )
     

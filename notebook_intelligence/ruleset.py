@@ -31,13 +31,6 @@ class RuleScope:
             return True  # No kernels specified means matches all kernels
         
         return kernel_name in self.kernels
-    
-    def matches_cell_type(self, cell_type: str) -> bool:
-        """Check if the cell type matches any of the specified cell types."""
-        if not self.cell_types:
-            return True  # No cell types specified means matches all cell types
-        
-        return cell_type in self.cell_types
 
 @dataclass
 class Rule:
@@ -121,10 +114,7 @@ class Rule:
         
         if kernel and not self.scope.matches_kernel(kernel):
             return False
-        
-        if cell_type and not self.scope.matches_cell_type(cell_type):
-            return False
-        
+
         return True
     
     def to_dict(self) -> Dict[str, Any]:
@@ -255,7 +245,6 @@ class NotebookContext:
     """Context information for rule matching."""
     filename: str
     kernel: Optional[str] = None
-    cell_type: Optional[str] = None
     mode: Optional[str] = None
     directory: Optional[str] = None
     
