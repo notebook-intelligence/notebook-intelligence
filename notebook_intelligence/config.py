@@ -120,3 +120,18 @@ class NBIConfig:
     def using_github_copilot_service(self) -> bool:
         return self.chat_model.get("provider") == 'github-copilot' or \
             self.inline_completion_model.get("provider") == 'github-copilot'
+
+    @property
+    def rules_enabled(self) -> bool:
+        """Check if the ruleset system is enabled."""
+        return self.get('rules_enabled', True)
+
+    @property
+    def rules_directory(self) -> str:
+        """Get the rules directory path."""
+        return os.path.join(self.nbi_user_dir, 'rules')
+
+    @property
+    def active_rules(self) -> dict:
+        """Get dictionary of active rule states (filename -> bool)."""
+        return self.get('active_rules', {})
