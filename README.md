@@ -117,16 +117,16 @@ You can easily add MCP servers to NBI by editing the configuration file [~/.jupy
 
 ```json
 {
-    "mcpServers": {
-        "filesystem": {
-            "command": "npx",
-            "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "/Users/mbektas/mcp-test"
-            ]
-        }
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/mbektas/mcp-test"
+      ]
     }
+  }
 }
 ```
 
