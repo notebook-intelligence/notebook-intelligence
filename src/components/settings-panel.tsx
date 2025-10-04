@@ -603,6 +603,10 @@ function SettingsPanelComponentMCPServers(props: any) {
     });
   };
 
+  const handleReloadMCPServersClick = async () => {
+    await NBIAPI.reloadMCPServers();
+  };
+
   useEffect(() => {
     syncSettingsToServerState();
   }, [mcpServerSettingsRef.current]);
@@ -675,7 +679,20 @@ function SettingsPanelComponentMCPServers(props: any) {
     <div className="config-dialog">
       <div className="config-dialog-body">
         <div className="model-config-section">
-          <div className="model-config-section-header">MCP Servers</div>
+          <div
+            className="model-config-section-header"
+            style={{ display: 'flex' }}
+          >
+            <div style={{ flexGrow: 1 }}>MCP Servers</div>
+            <div>
+              <button
+                className="jp-toast-button jp-mod-small jp-Button"
+                onClick={handleReloadMCPServersClick}
+              >
+                <div className="jp-Dialog-buttonLabel">Reload</div>
+              </button>
+            </div>
+          </div>
           <div className="model-config-section-body">
             {mcpServersRef.current.length === 0 && renderCount > 0 && (
               <div className="model-config-section-row">
@@ -741,7 +758,7 @@ function SettingsPanelComponentMCPServers(props: any) {
                 style={{ flexGrow: 'initial' }}
               >
                 <button
-                  className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                  className="jp-Dialog-button jp-mod-accept jp-mod-styled"
                   style={{ width: 'max-content' }}
                   onClick={props.onEditMCPConfigClicked}
                 >

@@ -326,6 +326,20 @@ export class NBIAPI {
     );
   }
 
+  static async reloadMCPServers(): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      requestAPI<any>('reload-mcp-servers', { method: 'POST' })
+        .then(async data => {
+          await NBIAPI.fetchCapabilities();
+          resolve(data);
+        })
+        .catch(reason => {
+          console.error(`Failed to reload MCP servers.\n${reason}`);
+          reject(reason);
+        });
+    });
+  }
+
   static async generateCode(
     chatId: string,
     prompt: string,
