@@ -41,7 +41,8 @@ class LiteLLMCompatibleChatModel(ChatModel):
         model_id = self.get_property("model_id").value
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
-        api_key = api_key_prop.value if api_key_prop is not None else None
+        api_key = api_key_prop.value if api_key_prop is not None else None        
+
         litellm_resp = litellm.completion(
             model=model_id,
             messages=messages.copy(),
@@ -102,11 +103,20 @@ class LiteLLMCompatibleInlineCompletionModel(InlineCompletionModel):
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
         api_key = api_key_prop.value if api_key_prop is not None else None
+
+        messages = [
+            {"role": "system", "content": "You are a code completion engine. Predict only the next code tokens."},
+            {"role": "user", "content": prefix},
+            {"role": "assistant", "content": suffix}
+        ]
+
         litellm_resp = litellm.completion(
             model=model_id,
-            prompt=prefix,
-            suffix=suffix,
+            messages=messages,
             stream=False,
+            max_completion_tokens = 2000,
+            stop = ['<END>', '```'],
+            top_p = 1,                
             api_base=base_url,
             api_key=api_key,
         )
