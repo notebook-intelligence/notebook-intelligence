@@ -15,6 +15,8 @@ class RuleManager:
         self.rules_directory = Path(rules_directory)
         self.ruleset = RuleSet()
         self._loaded = False
+        self._last_modified_time = None
+        self._auto_reload_enabled = os.environ.get('NBI_RULES_AUTO_RELOAD', 'false').lower() == 'true'
         
     def discover_rules(self, base_path: Optional[str] = None) -> List[Rule]:
         """Discover all rule files in the rules directory structure."""
@@ -56,7 +58,7 @@ class RuleManager:
                 try:
                     rule = Rule.from_file(str(rule_file), mode=None)
                     global_rules.append(rule)
-                    log.debug(f"Loaded global rule: {rule.filename}")
+                    log.info(f"Loaded global rule: {rule.filename}")
                 except Exception as e:
                     log.error(f"Failed to load global rule from {rule_file}: {e}")
         except Exception as e:
@@ -90,16 +92,51 @@ class RuleManager:
                 try:
                     rule = Rule.from_file(str(rule_file), mode=mode_name)
                     mode_rules.append(rule)
-                    log.debug(f"Loaded {mode_name} mode rule: {rule.filename}")
+                    log.info(f"Loaded {mode_name} mode rule: {rule.filename}")
                 except Exception as e:
                     log.error(f"Failed to load {mode_name} rule from {rule_file}: {e}")
         
         return mode_rules
     
+    def _get_rules_directory_mtime(self) -> float:
+        """Get the latest modification time of any file in the rules directory."""
+        if not self.rules_directory.exists():
+            return 0
+        
+        max_mtime = 0
+        for rule_file in self.rules_directory.rglob("*.md"):
+            try:
+                mtime = rule_file.stat().st_mtime
+                max_mtime = max(max_mtime, mtime)
+            except OSError:
+                pass
+        return max_mtime
+    
+    def _should_reload(self) -> bool:
+        """Check if rules should be reloaded based on file modifications."""
+        if not self._auto_reload_enabled:
+            return False
+        
+        if not self._loaded:
+            return True
+        
+        current_mtime = self._get_rules_directory_mtime()
+        if self._last_modified_time is None or current_mtime > self._last_modified_time:
+            log.info(f"Rules directory modified (mtime: {current_mtime} > {self._last_modified_time}), triggering auto-reload")
+            return True
+        
+        log.debug(f"No rule file changes detected (mtime: {current_mtime})")
+        return False
+    
     def load_rules(self, force_reload: bool = False) -> RuleSet:
         """Load all rules into the ruleset."""
         if self._loaded and not force_reload:
             return self.ruleset
+        
+        reload_reason = "auto-reload" if self._auto_reload_enabled and self._loaded else "initial load"
+        if force_reload:
+            reload_reason = "forced reload"
+        log.info(f"Loading rules from {self.rules_directory} ({reload_reason})")
         
         # Clear existing rules
         self.ruleset = RuleSet()
@@ -112,19 +149,30 @@ class RuleManager:
             self.ruleset.add_rule(rule)
         
         self._loaded = True
-        log.info(f"Loaded {len(self.ruleset.get_all_rules())} rules total")
+        self._last_modified_time = self._get_rules_directory_mtime()
+        log.info(f"✓ Successfully loaded {len(self.ruleset.get_all_rules())} rules total")
         return self.ruleset
     
     def get_applicable_rules(self, context: NotebookContext) -> List[Rule]:
         """Get all rules that apply to the given context."""
-        if not self._loaded:
+        # Auto-reload if enabled and files have changed
+        if self._should_reload():
+            log.info("Auto-reload triggered - reloading rules now")
+            self.load_rules(force_reload=True)
+        elif not self._loaded:
             self.load_rules()
         
-        return self.ruleset.get_applicable_rules(
+        applicable_rules = self.ruleset.get_applicable_rules(
             filename=context.basename,
             kernel=context.kernel,
-            mode=context.mode
+            mode=context.mode,
+            directory=context.directory
         )
+        
+        log.debug(f"Found {len(applicable_rules)} applicable rules for context: "
+                 f"file={context.basename}, kernel={context.kernel}, mode={context.mode}, dir={context.directory}")
+        
+        return applicable_rules
     
     def validate_rule_file(self, filepath: str) -> Dict[str, Any]:
         """Validate a rule file and return validation results."""

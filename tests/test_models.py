@@ -182,7 +182,8 @@ active: true
             'scope': {
                 'file_patterns': ['*.py'],
                 'kernels': ['python3'],
-                'cell_types': None
+                'cell_types': None,
+                'directory_patterns': []
             },
             'active': True,
             'content': 'Test content',

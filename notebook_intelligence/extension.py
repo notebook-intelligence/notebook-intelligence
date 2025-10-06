@@ -23,6 +23,7 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector
+from notebook_intelligence.context_factory import NotebookContextFactory
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -200,6 +201,77 @@ class GetGitHubLogoutHandler(APIHandler):
     @tornado.web.authenticated
     def get(self):
         self.finish(json.dumps(github_copilot.logout()))
+
+class RulesListHandler(APIHandler):
+    @tornado.web.authenticated
+    def get(self):
+        """Get list of all rules with their status."""
+        rule_manager = ai_service_manager.get_rule_manager()
+        if not rule_manager:
+            self.finish(json.dumps({"rules": [], "enabled": False}))
+            return
+        
+        rules_summary = rule_manager.get_rules_summary()
+        all_rules = rule_manager.ruleset.get_all_rules()
+        
+        rules_data = []
+        for rule in all_rules:
+            rules_data.append({
+                "filename": rule.filename,
+                "active": rule.active,
+                "mode": rule.mode,
+                "apply": rule.apply,
+                "priority": rule.priority,
+                "scope": rule.scope.__dict__,
+                "content_preview": rule.content[:200] + "..." if len(rule.content) > 200 else rule.content
+            })
+        
+        response = {
+            "enabled": ai_service_manager.nbi_config.rules_enabled,
+            "rules": rules_data,
+            "summary": rules_summary
+        }
+        self.finish(json.dumps(response))
+
+class RulesToggleHandler(APIHandler):
+    @tornado.web.authenticated
+    def put(self, rule_filename):
+        """Toggle a rule's active state."""
+        data = json.loads(self.request.body)
+        active = data.get('active', True)
+        
+        rule_manager = ai_service_manager.get_rule_manager()
+        if not rule_manager:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Rule system not enabled"}))
+            return
+        
+        success = rule_manager.toggle_rule(rule_filename, active)
+        if success:
+            # Also update config
+            ai_service_manager.nbi_config.set_rule_active(rule_filename, active)
+            self.finish(json.dumps({"success": True}))
+        else:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Rule not found"}))
+
+class RulesReloadHandler(APIHandler):
+    @tornado.web.authenticated
+    def post(self):
+        """Reload rules from disk."""
+        rule_manager = ai_service_manager.get_rule_manager()
+        if not rule_manager:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Rule system not enabled"}))
+            return
+        
+        try:
+            rule_manager.load_rules(force_reload=True)
+            summary = rule_manager.get_rules_summary()
+            self.finish(json.dumps({"success": True, "summary": summary}))
+        except Exception as e:
+            self.set_status(500)
+            self.finish(json.dumps({"error": str(e)}))
 
 class ChatHistory:
     """
@@ -460,11 +532,12 @@ class MessageCallbackHandlers:
     cancel_token: CancelTokenImpl
 
 class WebsocketCopilotHandler(websocket.WebSocketHandler):
-    def __init__(self, application, request, **kwargs):
+    def __init__(self, application, request, context_factory=None, **kwargs):
         super().__init__(application, request, **kwargs)
         # TODO: cleanup
         self._messageCallbackHandlers: dict[str, MessageCallbackHandlers] = {}
         self.chat_history = ChatHistory()
+        self._context_factory = context_factory or NotebookContextFactory()
         ws_connector = ThreadSafeWebSocketConnector(self)
         ai_service_manager.websocket_connector = ws_connector
         github_copilot.websocket_connector = ws_connector
@@ -520,7 +593,16 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
-            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token), response_emitter),))
+            
+            # Create notebook context for rule evaluation
+            notebook_context = self._context_factory.from_websocket_data(
+                filename=filename,
+                language=language,
+                chat_mode_id=chat_mode.id,
+                root_dir=NotebookIntelligence.root_dir
+            )
+            
+            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, notebook_context=notebook_context), response_emitter),))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
             data = msg['data']
@@ -543,7 +625,16 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             cancel_token = CancelTokenImpl()
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
             existing_code_message = " Update the existing code section and return a modified version. Don't just return the update, recreate the existing code section with the update." if existing_code != '' else ''
-            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."}),))
+            
+            # Create notebook context for rule evaluation
+            notebook_context = self._context_factory.from_websocket_data(
+                filename=filename,
+                language=language,
+                chat_mode_id=chat_mode.id,
+                root_dir=NotebookIntelligence.root_dir
+            )
+            
+            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, notebook_context=notebook_context), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."}),))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:
             data = msg['data']
@@ -661,6 +752,9 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_github_login = url_path_join(base_url, "notebook-intelligence", "gh-login")
         route_pattern_github_logout = url_path_join(base_url, "notebook-intelligence", "gh-logout")
         route_pattern_copilot = url_path_join(base_url, "notebook-intelligence", "copilot")
+        route_pattern_rules = url_path_join(base_url, "notebook-intelligence", "rules")
+        route_pattern_rules_toggle = url_path_join(base_url, "notebook-intelligence", "rules", r"([^/]+)", "toggle")
+        route_pattern_rules_reload = url_path_join(base_url, "notebook-intelligence", "rules", "reload")
         GetCapabilitiesHandler.notebook_execute_tool = self.notebook_execute_tool
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
@@ -672,6 +766,9 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_github_login_status, GetGitHubLoginStatusHandler),
             (route_pattern_github_login, PostGitHubLoginHandler),
             (route_pattern_github_logout, GetGitHubLogoutHandler),
+            (route_pattern_rules, RulesListHandler),
+            (route_pattern_rules_toggle, RulesToggleHandler),
+            (route_pattern_rules_reload, RulesReloadHandler),
             (route_pattern_copilot, WebsocketCopilotHandler),
         ]
         web_app.add_handlers(host_pattern, NotebookIntelligence.handlers)
