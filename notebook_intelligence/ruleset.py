@@ -13,6 +13,7 @@ class RuleScope:
     """Defines the scope where a rule applies."""
     file_patterns: List[str] = field(default_factory=list)
     kernels: List[str] = field(default_factory=list)
+    directory_patterns: List[str] = field(default_factory=list)
     cell_types: Optional[List[str]] = None
     
     def matches_file(self, filename: str) -> bool:
@@ -22,6 +23,22 @@ class RuleScope:
         
         for pattern in self.file_patterns:
             if fnmatch.fnmatch(filename, pattern):
+                return True
+        return False
+    
+    def matches_directory(self, directory: str) -> bool:
+        """Check if the directory matches any of the directory patterns.
+        
+        Patterns support wildcards (*,?, [seq], [!seq]) via fnmatch.
+        Examples:
+            - "*/private-notebooks/*" matches any path with /private-notebooks/
+            - "*workspace*" matches any path containing "workspace"
+        """
+        if not self.directory_patterns:
+            return True  # No patterns means matches all directories
+        
+        for pattern in self.directory_patterns:
+            if fnmatch.fnmatch(directory, pattern):
                 return True
         return False
     
@@ -86,6 +103,7 @@ class Rule:
         scope = RuleScope(
             file_patterns=scope_data.get('file_patterns', []),
             kernels=scope_data.get('kernels', []),
+            directory_patterns=scope_data.get('directory_patterns', []),
             cell_types=scope_data.get('cell_types')
         )
         
@@ -99,7 +117,7 @@ class Rule:
             priority=priority
         )
     
-    def matches_context(self, filename: str, kernel: str = None, cell_type: str = None, mode: str = None) -> bool:
+    def matches_context(self, filename: str, kernel: str = None, cell_type: str = None, mode: str = None, directory: str = None) -> bool:
         """Check if this rule applies to the given context."""
         if not self.active:
             return False
@@ -114,6 +132,9 @@ class Rule:
         
         if kernel and not self.scope.matches_kernel(kernel):
             return False
+        
+        if directory and not self.scope.matches_directory(directory):
+            return False
 
         return True
     
@@ -125,6 +146,7 @@ class Rule:
             'scope': {
                 'file_patterns': self.scope.file_patterns,
                 'kernels': self.scope.kernels,
+                'directory_patterns': self.scope.directory_patterns,
                 'cell_types': self.scope.cell_types
             },
             'active': self.active,
@@ -140,6 +162,7 @@ class Rule:
         scope = RuleScope(
             file_patterns=scope_data.get('file_patterns', []),
             kernels=scope_data.get('kernels', []),
+            directory_patterns=scope_data.get('directory_patterns', []),
             cell_types=scope_data.get('cell_types')
         )
         
@@ -169,19 +192,19 @@ class RuleSet:
             self.global_rules.append(rule)
     
     def get_applicable_rules(self, filename: str, kernel: str = None, 
-                           cell_type: str = None, mode: str = None) -> List[Rule]:
+                           cell_type: str = None, mode: str = None, directory: str = None) -> List[Rule]:
         """Get all rules that apply to the given context."""
         applicable_rules = []
         
         # Add applicable global rules
         for rule in self.global_rules:
-            if rule.matches_context(filename, kernel, cell_type, mode):
+            if rule.matches_context(filename, kernel, cell_type, mode, directory):
                 applicable_rules.append(rule)
         
         # Add applicable mode-specific rules
         if mode and mode in self.mode_rules:
             for rule in self.mode_rules[mode]:
-                if rule.matches_context(filename, kernel, cell_type, mode):
+                if rule.matches_context(filename, kernel, cell_type, mode, directory):
                     applicable_rules.append(rule)
         
         # Sort by priority (lower number = higher priority), then by filename
