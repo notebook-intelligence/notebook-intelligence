@@ -83,6 +83,14 @@ target/
 # pyenv
 .python-version
 
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+venv*/
+.vscode/
 # celery beat schedule file
 celerybeat-schedule
 

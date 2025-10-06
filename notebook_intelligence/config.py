@@ -124,3 +124,18 @@ class NBIConfig:
     @property
     def mcp_server_settings(self):
         return self.get('mcp_server_settings', {})
+
+    @property
+    def rules_enabled(self) -> bool:
+        """Check if the ruleset system is enabled."""
+        return self.get('rules_enabled', True)
+
+    @property
+    def rules_directory(self) -> str:
+        """Get the rules directory path."""
+        return os.path.join(self.nbi_user_dir, 'rules')
+
+    @property
+    def active_rules(self) -> dict:
+        """Get dictionary of active rule states (filename -> bool)."""
+        return self.get('active_rules', {})
