@@ -16,6 +16,7 @@ from notebook_intelligence.llm_providers.litellm_compatible_llm_provider import 
 from notebook_intelligence.llm_providers.ollama_llm_provider import OllamaLLMProvider
 from notebook_intelligence.llm_providers.openai_compatible_llm_provider import OpenAICompatibleLLMProvider
 from notebook_intelligence.mcp_manager import MCPManager
+from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class AIServiceManager(Host):
         self._litellm_compatible_llm_provider = LiteLLMCompatibleLLMProvider()
         self._ollama_llm_provider = OllamaLLMProvider()
         self._extensions = []
+        self._websocket_connector: ThreadSafeWebSocketConnector = None
         self.initialize()
 
     @property
@@ -49,6 +51,15 @@ class AIServiceManager(Host):
     @property
     def ollama_llm_provider(self) -> OllamaLLMProvider:
         return self._ollama_llm_provider
+
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return self._websocket_connector
+    
+    @websocket_connector.setter
+    def websocket_connector(self, _websocket_connector: ThreadSafeWebSocketConnector):
+        self._websocket_connector = _websocket_connector
+        self._mcp_manager.websocket_connector = _websocket_connector
 
     def initialize(self):
         self.chat_participants = {}
@@ -370,3 +381,15 @@ class AIServiceManager(Host):
             if extension.id == extension_id:
                 return extension
         return None
+
+    def handle_stop_request(self):
+        self._mcp_manager.handle_stop_request()
+
+    def update_mcp_server_connections(self, disabled_mcp_servers: list[str]):
+        self._mcp_manager.update_mcp_server_connections(disabled_mcp_servers)
+
+    def connect_mcp_server(self, server_name: str):
+        self._mcp_manager.connect_mcp_server(server_name)
+    
+    def disconnect_mcp_server(self, server_name: str):
+        self._mcp_manager.disconnect_mcp_server(server_name)

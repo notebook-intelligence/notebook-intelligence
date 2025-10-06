@@ -76,6 +76,10 @@ export class NBIConfig {
     return this.capabilities.tool_config;
   }
 
+  get mcpServerSettings(): any {
+    return this.capabilities.mcp_server_settings;
+  }
+
   capabilities: any = {};
   chatParticipants: IChatParticipant[] = [];
 
@@ -102,7 +106,11 @@ export class NBIAPI {
 
     this._messageReceived.connect((_, msg) => {
       msg = JSON.parse(msg);
-      if (msg.type === BackendMessageType.GitHubCopilotLoginStatusChange) {
+      if (msg.type === BackendMessageType.MCPServerStatusChange) {
+        this.fetchCapabilities();
+      } else if (
+        msg.type === BackendMessageType.GitHubCopilotLoginStatusChange
+      ) {
         this.updateGitHubLoginStatus().then(() => {
           this.githubLoginStatusChanged.emit();
         });
@@ -201,11 +209,21 @@ export class NBIAPI {
     return new Promise<void>((resolve, reject) => {
       requestAPI<any>('capabilities', { method: 'GET' })
         .then(data => {
+          const oldConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
           this.config.capabilities = structuredClone(data);
           this.config.chatParticipants = structuredClone(
             data.chat_participants
           );
-          this.configChanged.emit();
+          const newConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
+          if (JSON.stringify(newConfig) !== JSON.stringify(oldConfig)) {
+            this.configChanged.emit();
+          }
           resolve();
         })
         .catch(reason => {
@@ -240,20 +258,6 @@ export class NBIAPI {
         })
         .catch(reason => {
           console.error(`Failed to update ollama model list.\n${reason}`);
-          reject(reason);
-        });
-    });
-  }
-
-  static async reloadMCPServerList(): Promise<any> {
-    return new Promise<any>((resolve, reject) => {
-      requestAPI<any>('reload-mcp-servers', { method: 'POST' })
-        .then(async data => {
-          await NBIAPI.fetchCapabilities();
-          resolve(data);
-        })
-        .catch(reason => {
-          console.error(`Failed to reload MCP server list.\n${reason}`);
           reject(reason);
         });
     });
@@ -320,6 +324,20 @@ export class NBIAPI {
         }
       })
     );
+  }
+
+  static async reloadMCPServers(): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      requestAPI<any>('reload-mcp-servers', { method: 'POST' })
+        .then(async data => {
+          await NBIAPI.fetchCapabilities();
+          resolve(data);
+        })
+        .catch(reason => {
+          console.error(`Failed to reload MCP servers.\n${reason}`);
+          reject(reason);
+        });
+    });
   }
 
   static async generateCode(

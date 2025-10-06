@@ -32,7 +32,8 @@ export enum BackendMessageType {
   StreamMessage = 'stream-message',
   StreamEnd = 'stream-end',
   RunUICommand = 'run-ui-command',
-  GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
+  GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change',
+  MCPServerStatusChange = 'mcp-server-status-change'
 }
 
 export enum ResponseStreamDataType {
@@ -50,6 +51,16 @@ export enum ResponseStreamDataType {
 export enum ContextType {
   Custom = 'custom',
   CurrentFile = 'current-file'
+}
+
+export enum MCPServerStatus {
+  NotConnected = 'not-connected',
+  Connecting = 'connecting',
+  Disconnecting = 'disconnecting',
+  FailedToConnect = 'failed-to-connect',
+  Connected = 'connected',
+  UpdatingToolList = 'updating-tool-list',
+  UpdatedToolList = 'updated-tool-list'
 }
 
 export interface IContextItem {

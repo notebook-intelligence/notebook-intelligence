@@ -9,7 +9,7 @@ import {
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import { DocumentWidget, IDocumentWidget } from '@jupyterlab/docregistry';
 
-import { Dialog, ICommandPalette } from '@jupyterlab/apputils';
+import { Dialog, ICommandPalette, MainAreaWidget } from '@jupyterlab/apputils';
 import { IMainMenu } from '@jupyterlab/mainmenu';
 
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
@@ -44,7 +44,6 @@ import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
   ChatSidebar,
-  ConfigurationDialogBody,
   GitHubCopilotLoginDialogBody,
   GitHubCopilotStatusBarItem,
   InlinePromptWidget,
@@ -81,6 +80,7 @@ import {
 import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
+import { SettingsPanel } from './components/settings-panel';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -1229,31 +1229,36 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    const createNewSettingsWidget = () => {
+      const settingsPanel = new SettingsPanel({
+        onSave: () => {
+          NBIAPI.fetchCapabilities();
+        },
+        onEditMCPConfigClicked: () => {
+          app.commands.execute('notebook-intelligence:open-mcp-config-editor');
+        }
+      });
+
+      const widget = new MainAreaWidget({ content: settingsPanel });
+      widget.id = 'nbi-settings';
+      widget.title.label = 'NBI Settings';
+      widget.title.closable = true;
+
+      return widget;
+    };
+
+    let settingsWidget = createNewSettingsWidget();
+
     app.commands.addCommand(CommandIDs.openConfigurationDialog, {
       label: 'Notebook Intelligence Settings',
       execute: args => {
-        let dialog: Dialog<unknown> | null = null;
-        const dialogBody = new ConfigurationDialogBody({
-          onSave: () => {
-            dialog?.dispose();
-            NBIAPI.fetchCapabilities();
-          },
-          onEditMCPConfigClicked: () => {
-            dialog?.dispose();
-            app.commands.execute(
-              'notebook-intelligence:open-mcp-config-editor'
-            );
-          }
-        });
-        dialog = new Dialog({
-          title: 'Notebook Intelligence Settings',
-          hasClose: true,
-          body: dialogBody,
-          buttons: []
-        });
-        dialog.node.classList.add('config-dialog-container');
-
-        dialog.launch();
+        if (settingsWidget.isDisposed) {
+          settingsWidget = createNewSettingsWidget();
+        }
+        if (!settingsWidget.isAttached) {
+          app.shell.add(settingsWidget, 'main');
+        }
+        app.shell.activateById(settingsWidget.id);
       }
     });
 

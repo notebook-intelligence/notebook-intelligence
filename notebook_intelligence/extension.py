@@ -27,6 +27,7 @@ from notebook_intelligence.util import ThreadSafeWebSocketConnector
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
+thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
 class GetCapabilitiesHandler(APIHandler):
     notebook_execute_tool = 'enabled'
@@ -39,8 +40,7 @@ class GetCapabilitiesHandler(APIHandler):
         notebook_execute_tool_enabled = self.notebook_execute_tool == 'enabled' or (self.notebook_execute_tool == 'env_enabled' and os.getenv('NBI_NOTEBOOK_EXECUTE_TOOL', 'disabled') == 'enabled')
         allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name} for toolset in built_in_toolsets.values() if toolset.id != BuiltinToolset.NotebookExecute or notebook_execute_tool_enabled]
         mcp_servers = ai_service_manager.get_mcp_servers()
-        mcp_server_tools = [{"id": mcp_server.name, "tools": [{"name": tool.name, "description": tool.description} for tool in mcp_server.get_tools()]} for mcp_server in mcp_servers]
-        mcp_server_tools = [tool for tool in mcp_server_tools if len(tool["tools"]) > 0]
+        mcp_server_tools = [{"id": mcp_server.name, "status": mcp_server.status, "tools": [{"name": tool.name, "description": tool.description} for tool in mcp_server.get_tools()]} for mcp_server in mcp_servers]
         # sort by server id
         mcp_server_tools.sort(key=lambda server: server["id"])
 
@@ -88,6 +88,7 @@ class GetCapabilitiesHandler(APIHandler):
                 "mcpServers": mcp_server_tools,
                 "extensions": extensions
             },
+            "mcp_server_settings": nbi_config.mcp_server_settings,
             "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
@@ -105,7 +106,8 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings"])
+        has_model_change = "chat_model" in data or "inline_completion_model" in data
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
@@ -114,8 +116,17 @@ class ConfigHandler(APIHandler):
                         github_copilot.store_github_access_token()
                     else:
                         github_copilot.delete_stored_github_access_token()
+                elif key == "mcp_server_settings":
+                    disabled_mcp_servers = []
+                    for server_id in data[key]:
+                        server_settings = data[key][server_id]
+                        if server_settings.get("disabled") == True:
+                            disabled_mcp_servers.append(server_id)
+                    ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
+
         ai_service_manager.nbi_config.save()
-        ai_service_manager.update_models_from_config()
+        if has_model_change:
+            ai_service_manager.update_models_from_config()
         self.finish(json.dumps({}))
 
 class UpdateProviderModelsHandler(APIHandler):
@@ -126,18 +137,10 @@ class UpdateProviderModelsHandler(APIHandler):
             ai_service_manager.ollama_llm_provider.update_chat_model_list()
         self.finish(json.dumps({}))
 
-class ReloadMCPServersHandler(APIHandler):
-    @tornado.web.authenticated
-    def post(self):
-        ai_service_manager.nbi_config.load()
-        ai_service_manager.update_mcp_servers()
-        self.finish(json.dumps({
-            "mcpServers": [{"id": server.name} for server in ai_service_manager.get_mcp_servers()]
-        }))
-
 class MCPConfigFileHandler(APIHandler):
     @tornado.web.authenticated
     def get(self):
+        ai_service_manager.nbi_config.load()
         mcp_config = ai_service_manager.nbi_config.mcp.copy()
         if "mcpServers" not in mcp_config:
             mcp_config["mcpServers"] = {}
@@ -155,6 +158,15 @@ class MCPConfigFileHandler(APIHandler):
         except Exception as e:
             self.finish(json.dumps({"status": "error", "message": str(e)}))
             return
+
+class ReloadMCPServersHandler(APIHandler):
+    @tornado.web.authenticated
+    def post(self):
+        ai_service_manager.nbi_config.load()
+        ai_service_manager.update_mcp_servers()
+        self.finish(json.dumps({
+            "mcpServers": [{"id": server.name} for server in ai_service_manager.get_mcp_servers()]
+        }))
 
 class EmitTelemetryEventHandler(APIHandler):
     @tornado.web.authenticated
@@ -453,7 +465,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
         # TODO: cleanup
         self._messageCallbackHandlers: dict[str, MessageCallbackHandlers] = {}
         self.chat_history = ChatHistory()
-        github_copilot.websocket_connector = ThreadSafeWebSocketConnector(self)
+        ws_connector = ThreadSafeWebSocketConnector(self)
+        ai_service_manager.websocket_connector = ws_connector
+        github_copilot.websocket_connector = ws_connector
 
     def open(self):
         pass
@@ -631,6 +645,7 @@ class NotebookIntelligence(ExtensionApp):
     async def stop_extension(self):
         log.info(f"Stopping {self.name} extension...")
         github_copilot.handle_stop_request()
+        ai_service_manager.handle_stop_request()
 
     def _setup_handlers(self, web_app):
         host_pattern = ".*$"
@@ -639,8 +654,8 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
-        route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
+        route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
         route_pattern_emit_telemetry_event = url_path_join(base_url, "notebook-intelligence", "emit-telemetry-event")
         route_pattern_github_login_status = url_path_join(base_url, "notebook-intelligence", "gh-login-status")
         route_pattern_github_login = url_path_join(base_url, "notebook-intelligence", "gh-login")
@@ -651,8 +666,8 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
-            (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
+            (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
             (route_pattern_emit_telemetry_event, EmitTelemetryEventHandler),
             (route_pattern_github_login_status, GetGitHubLoginStatusHandler),
             (route_pattern_github_login, PostGitHubLoginHandler),

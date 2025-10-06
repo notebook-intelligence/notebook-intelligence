@@ -1,7 +1,6 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
-import json
 from typing import Any, Callable, Dict, Union
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -29,6 +28,7 @@ class BackendMessageType(str, Enum):
     StreamEnd = 'stream-end'
     RunUICommand = 'run-ui-command'
     GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
+    MCPServerStatusChange = 'mcp-server-status-change'
 
 class ResponseStreamDataType(str, Enum):
     LLMRaw = 'llm-raw'
@@ -48,6 +48,15 @@ class BuiltinToolset(str, Enum):
     NotebookEdit = 'nbi-notebook-edit'
     NotebookExecute = 'nbi-notebook-execute'
     PythonFileEdit = 'nbi-python-file-edit'
+
+class MCPServerStatus(str, Enum):
+    NotConnected = 'not-connected'
+    Connecting = 'connecting'
+    Disconnecting = 'disconnecting'
+    FailedToConnect = 'failed-to-connect'
+    Connected = 'connected'
+    UpdatingToolList = 'updating-tool-list'
+    UpdatedToolList = 'updated-tool-list'
 
 class Signal:
     def __init__(self):
@@ -376,14 +385,18 @@ class MCPServer:
     @property
     def name(self) -> str:
         return NotImplemented
+
+    @property
+    def status(self) -> MCPServerStatus:
+        return NotImplemented
     
-    async def connect(self):
+    def connect(self):
         return NotImplemented
 
-    async def disconnect(self):
+    def disconnect(self):
         return NotImplemented
 
-    async def update_tool_list(self):
+    def update_tool_list(self):
         return NotImplemented
     
     def get_tools(self) -> list[Tool]:
@@ -392,7 +405,7 @@ class MCPServer:
     def get_tool(self, tool_name: str) -> Tool:
         return NotImplemented
 
-    async def call_tool(self, tool_name: str, tool_args: dict):
+    def call_tool(self, tool_name: str, tool_args: dict):
         return NotImplemented
 
 def auto_approve(tool: SimpleTool):
