@@ -667,11 +667,7 @@ function SettingsPanelComponentMCPServers(props: any) {
     NBIAPI.configChanged.connect(() => {
       mcpServersRef.current = nbiConfig.toolConfig.mcpServers;
       mcpServerSettingsRef.current = nbiConfig.mcpServerSettings;
-      const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
-        mcpServersRef.current,
-        mcpServerSettingsRef.current
-      );
-      setMCPServerEnabledState(newMcpServerEnabledState);
+      setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
 
