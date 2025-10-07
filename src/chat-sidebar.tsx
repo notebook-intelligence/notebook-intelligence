@@ -120,6 +120,8 @@ export interface IInlinePromptWidgetOptions {
   existingCode: string;
   prefix: string;
   suffix: string;
+  language?: string;
+  filename?: string;
   onRequestSubmitted: (prompt: string) => void;
   onRequestCancelled: () => void;
   onContentStream: (content: string) => void;
@@ -1288,7 +1290,7 @@ function SidebarComponent(props: any) {
         type: RunChatCompletionType.Chat,
         content: extractedPrompt,
         language: activeDocInfo.language,
-        filename: activeDocInfo.filename,
+        filename: activeDocInfo.filePath,
         additionalContext,
         chatMode,
         toolSelections: toolSelections
@@ -2283,8 +2285,8 @@ function InlinePromptComponent(props: any) {
         chatId: UUID.uuid4(),
         type: RunChatCompletionType.GenerateCode,
         content: prompt,
-        language: undefined,
-        filename: undefined,
+        language: props.language || 'python',
+        filename: props.filename || 'Untitled.ipynb',
         prefix: props.prefix,
         suffix: props.suffix,
         existingCode: props.existingCode,

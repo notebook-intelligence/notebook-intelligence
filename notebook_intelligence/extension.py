@@ -573,7 +573,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             for context in additionalContext:
                 file_path = context["filePath"]
                 file_path = path.join(NotebookIntelligence.root_dir, file_path)
-                filename = path.basename(file_path)
+                context_filename = path.basename(file_path)
                 start_line = context["startLine"]
                 end_line = context["endLine"]
                 current_cell_contents = context["currentCellContents"]
@@ -585,8 +585,8 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 if token_count > token_budget:
                     context_content = context_content[:int(token_budget)] + "..."
 
-                request_chat_history.append({"role": "user", "content": f"Use this as additional context: ```{context_content}```. It is from current file: '{filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
-                self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
+                request_chat_history.append({"role": "user", "content": f"Use this as additional context: ```{context_content}```. It is from current file: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
+                self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
 
             self.chat_history.add_message(chatId, {"role": "user", "content": prompt})
             request_chat_history.append({"role": "user", "content": prompt})
