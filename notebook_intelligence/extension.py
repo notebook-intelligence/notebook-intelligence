@@ -627,10 +627,11 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             existing_code_message = " Update the existing code section and return a modified version. Don't just return the update, recreate the existing code section with the update." if existing_code != '' else ''
             
             # Create notebook context for rule evaluation
+            # Note: Using 'inline-chat' mode for rule matching even though chat_mode is 'ask' for handler compatibility
             notebook_context = self._context_factory.from_websocket_data(
                 filename=filename,
                 language=language,
-                chat_mode_id=chat_mode.id,
+                chat_mode_id='inline-chat',
                 root_dir=NotebookIntelligence.root_dir
             )
             
