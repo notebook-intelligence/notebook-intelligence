@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from notebook_intelligence.ruleset import NotebookContext
+from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.config import NBIConfig
 
 
@@ -24,9 +24,9 @@ def temp_rules_directory(tmp_path):
 
 
 @pytest.fixture
-def sample_notebook_context():
-    """Mock notebook context for testing."""
-    return NotebookContext(
+def sample_rule_context():
+    """Mock rule context for testing."""
+    return RuleContext(
         filename="test.ipynb",
         kernel="python3",
         mode="ask"
@@ -36,7 +36,7 @@ def sample_notebook_context():
 @pytest.fixture
 def python_file_context():
     """Mock Python file context for testing."""
-    return NotebookContext(
+    return RuleContext(
         filename="test.py",
         kernel="python3",
         mode="agent"

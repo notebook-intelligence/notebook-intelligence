@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 from notebook_intelligence.rule_manager import RuleManager
-from notebook_intelligence.ruleset import NotebookContext
+from notebook_intelligence.ruleset import RuleContext
 
 
 class TestRuleAutoReload:
@@ -156,7 +156,7 @@ class TestRuleAutoReload:
             manager = RuleManager(str(rules_dir))
             
             # First call - loads rules
-            context = NotebookContext(filename="test.ipynb", kernel="python", mode="ask")
+            context = RuleContext(filename="test.ipynb", kernel="python", mode="ask")
             rules1 = manager.get_applicable_rules(context)
             assert len(rules1) == 1
             assert rules1[0].content == "Original content"
@@ -179,7 +179,7 @@ class TestRuleAutoReload:
         
         with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'true'}):
             manager = RuleManager(str(rules_dir))
-            context = NotebookContext(filename="test.ipynb", kernel="python", mode="ask")
+            context = RuleContext(filename="test.ipynb", kernel="python", mode="ask")
             
             # Initial load
             manager.get_applicable_rules(context)
@@ -207,7 +207,7 @@ class TestRuleAutoReload:
         
         with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'true'}):
             manager = RuleManager(str(rules_dir))
-            context = NotebookContext(filename="test.ipynb", kernel="python", mode="ask")
+            context = RuleContext(filename="test.ipynb", kernel="python", mode="ask")
             
             # Initial load
             rules1 = manager.get_applicable_rules(context)
@@ -230,7 +230,7 @@ class TestRuleAutoReload:
         
         with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'true'}):
             manager = RuleManager(str(rules_dir))
-            context = NotebookContext(filename="test.ipynb", kernel="python", mode="ask")
+            context = RuleContext(filename="test.ipynb", kernel="python", mode="ask")
             
             # First call
             manager.get_applicable_rules(context)

@@ -23,7 +23,7 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector
-from notebook_intelligence.context_factory import NotebookContextFactory
+from notebook_intelligence.context_factory import RuleContextFactory
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -537,7 +537,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
         # TODO: cleanup
         self._messageCallbackHandlers: dict[str, MessageCallbackHandlers] = {}
         self.chat_history = ChatHistory()
-        self._context_factory = context_factory or NotebookContextFactory()
+        self._context_factory = context_factory or RuleContextFactory()
         ws_connector = ThreadSafeWebSocketConnector(self)
         ai_service_manager.websocket_connector = ws_connector
         github_copilot.websocket_connector = ws_connector
@@ -594,15 +594,15 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             cancel_token = CancelTokenImpl()
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
             
-            # Create notebook context for rule evaluation
-            notebook_context = self._context_factory.from_websocket_data(
+            # Create rule context for rule evaluation
+            rule_context = self._context_factory.create(
                 filename=filename,
                 language=language,
                 chat_mode_id=chat_mode.id,
                 root_dir=NotebookIntelligence.root_dir
             )
             
-            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, notebook_context=notebook_context), response_emitter),))
+            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter),))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
             data = msg['data']
@@ -626,16 +626,16 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
             existing_code_message = " Update the existing code section and return a modified version. Don't just return the update, recreate the existing code section with the update." if existing_code != '' else ''
             
-            # Create notebook context for rule evaluation
+            # Create rule context for rule evaluation
             # Note: Using 'inline-chat' mode for rule matching even though chat_mode is 'ask' for handler compatibility
-            notebook_context = self._context_factory.from_websocket_data(
+            rule_context = self._context_factory.create(
                 filename=filename,
                 language=language,
                 chat_mode_id='inline-chat',
                 root_dir=NotebookIntelligence.root_dir
             )
             
-            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, notebook_context=notebook_context), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."}),))
+            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, rule_context=rule_context), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."}),))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:
             data = msg['data']

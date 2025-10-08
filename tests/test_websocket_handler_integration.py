@@ -4,8 +4,8 @@ from unittest.mock import Mock, patch, MagicMock
 from tornado.httputil import HTTPServerRequest
 from tornado.web import Application
 from notebook_intelligence.extension import WebsocketCopilotHandler
-from notebook_intelligence.context_factory import NotebookContextFactory
-from notebook_intelligence.ruleset import NotebookContext
+from notebook_intelligence.context_factory import RuleContextFactory
+from notebook_intelligence.ruleset import RuleContext
 
 
 class TestWebsocketHandlerIntegration:
@@ -33,11 +33,11 @@ class TestWebsocketHandlerIntegration:
             )
             
             assert handler._context_factory is not None
-            assert isinstance(handler._context_factory, NotebookContextFactory)
+            assert isinstance(handler._context_factory, RuleContextFactory)
     
     def test_init_with_custom_context_factory(self):
         """Test WebsocketCopilotHandler initialization with custom context factory."""
-        mock_factory = Mock(spec=NotebookContextFactory)
+        mock_factory = Mock(spec=RuleContextFactory)
         
         with patch('notebook_intelligence.extension.ThreadSafeWebSocketConnector'), \
              patch('notebook_intelligence.extension.ai_service_manager') as mock_ai_manager, \
@@ -54,14 +54,14 @@ class TestWebsocketHandlerIntegration:
     @patch('notebook_intelligence.extension.NotebookIntelligence')
     @patch('notebook_intelligence.extension.threading.Thread')
     def test_on_message_chat_request_creates_context(self, mock_thread, mock_nb_intel, mock_ai_manager):
-        """Test that ChatRequest message creates NotebookContext."""
+        """Test that ChatRequest message creates RuleContext."""
         # Setup mocks
         mock_nb_intel.root_dir = "/workspace"
         mock_ai_manager.handle_chat_request = Mock()
         
-        mock_factory = Mock(spec=NotebookContextFactory)
-        mock_context = Mock(spec=NotebookContext)
-        mock_factory.from_websocket_data.return_value = mock_context
+        mock_factory = Mock(spec=RuleContextFactory)
+        mock_context = Mock(spec=RuleContext)
+        mock_factory.create.return_value = mock_context
         
         with patch('notebook_intelligence.extension.ThreadSafeWebSocketConnector'):
             handler = WebsocketCopilotHandler(
@@ -89,7 +89,7 @@ class TestWebsocketHandlerIntegration:
         handler.on_message(json.dumps(message))
         
         # Verify context factory was called
-        mock_factory.from_websocket_data.assert_called_once_with(
+        mock_factory.create.assert_called_once_with(
             filename='test.ipynb',
             language='python',
             chat_mode_id='ask',
@@ -99,7 +99,7 @@ class TestWebsocketHandlerIntegration:
         # Verify thread was started
         mock_thread.assert_called_once()
         
-        # Verify the ChatRequest was created with notebook_context
+        # Verify the ChatRequest was created with rule_context
         thread_call_args = mock_thread.call_args[1]['args']
         chat_request_call = thread_call_args[0]
         
@@ -112,14 +112,14 @@ class TestWebsocketHandlerIntegration:
     @patch('notebook_intelligence.extension.NotebookIntelligence')
     @patch('notebook_intelligence.extension.threading.Thread')
     def test_on_message_generate_code_creates_context(self, mock_thread, mock_nb_intel, mock_ai_manager):
-        """Test that GenerateCode message creates NotebookContext."""
+        """Test that GenerateCode message creates RuleContext."""
         # Setup mocks
         mock_nb_intel.root_dir = "/workspace"
         mock_ai_manager.handle_chat_request = Mock()
         
-        mock_factory = Mock(spec=NotebookContextFactory)
-        mock_context = Mock(spec=NotebookContext)
-        mock_factory.from_websocket_data.return_value = mock_context
+        mock_factory = Mock(spec=RuleContextFactory)
+        mock_context = Mock(spec=RuleContext)
+        mock_factory.create.return_value = mock_context
         
         with patch('notebook_intelligence.extension.ThreadSafeWebSocketConnector'):
             handler = WebsocketCopilotHandler(
@@ -147,10 +147,10 @@ class TestWebsocketHandlerIntegration:
         handler.on_message(json.dumps(message))
         
         # Verify context factory was called
-        mock_factory.from_websocket_data.assert_called_once_with(
+        mock_factory.create.assert_called_once_with(
             filename='script.py',
             language='python',
-            chat_mode_id='ask',  # GenerateCode uses ask mode
+            chat_mode_id='inline-chat',  # GenerateCode uses inline-chat mode for rule matching
             root_dir='/workspace'
         )
         
@@ -166,9 +166,9 @@ class TestWebsocketHandlerIntegration:
         mock_nb_intel.root_dir = "/workspace"
         mock_ai_manager.handle_chat_request = Mock()
         
-        mock_factory = Mock(spec=NotebookContextFactory)
-        mock_context = Mock(spec=NotebookContext)
-        mock_factory.from_websocket_data.return_value = mock_context
+        mock_factory = Mock(spec=RuleContextFactory)
+        mock_context = Mock(spec=RuleContext)
+        mock_factory.create.return_value = mock_context
         
         with patch('notebook_intelligence.extension.ThreadSafeWebSocketConnector'):
             handler = WebsocketCopilotHandler(
@@ -200,7 +200,7 @@ class TestWebsocketHandlerIntegration:
         handler.on_message(json.dumps(message))
         
         # Verify context factory was called with agent mode
-        mock_factory.from_websocket_data.assert_called_once_with(
+        mock_factory.create.assert_called_once_with(
             filename='notebook.ipynb',
             language='python',
             chat_mode_id='agent',

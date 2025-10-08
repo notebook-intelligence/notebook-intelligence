@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, MagicMock
 from notebook_intelligence.rule_injector import RuleInjector
 from notebook_intelligence.api import ChatRequest
-from notebook_intelligence.ruleset import NotebookContext, Rule, RuleScope
+from notebook_intelligence.ruleset import RuleContext, Rule, RuleScope
 
 
 class TestRuleInjector:
@@ -10,7 +10,7 @@ class TestRuleInjector:
         """Test rule injection when no notebook context is provided."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = None
+        request.rule_context = None
         
         base_prompt = "You are a helpful assistant."
         result = injector.inject_rules(base_prompt, request)
@@ -21,7 +21,7 @@ class TestRuleInjector:
         """Test rule injection when no rule manager is available."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         request.host.get_rule_manager.return_value = None
         
         base_prompt = "You are a helpful assistant."
@@ -33,7 +33,7 @@ class TestRuleInjector:
         """Test rule injection when rules are disabled."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         request.host.get_rule_manager.return_value = Mock()
         request.host.nbi_config.rules_enabled = False
         
@@ -46,7 +46,7 @@ class TestRuleInjector:
         """Test rule injection when context injection is disabled."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         request.host.get_rule_manager.return_value = Mock()
         request.host.nbi_config.rules_enabled = True
         request.host.nbi_config.rules_context_injection_enabled = False
@@ -60,7 +60,7 @@ class TestRuleInjector:
         """Test rule injection when no rules apply to the context."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         
         rule_manager = Mock()
         rule_manager.get_applicable_rules.return_value = []
@@ -72,13 +72,13 @@ class TestRuleInjector:
         result = injector.inject_rules(base_prompt, request)
         
         assert result == base_prompt
-        rule_manager.get_applicable_rules.assert_called_once_with(request.notebook_context)
+        rule_manager.get_applicable_rules.assert_called_once_with(request.rule_context)
     
     def test_inject_rules_with_applicable_rules(self):
         """Test rule injection with applicable rules."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         
         # Create mock rules
         rule1 = Mock(spec=Rule)
@@ -99,14 +99,14 @@ class TestRuleInjector:
         expected = "You are a helpful assistant.\n\n# Additional Guidelines\n# Test Rules\n- Follow coding standards\n- Use descriptive names"
         assert result == expected
         
-        rule_manager.get_applicable_rules.assert_called_once_with(request.notebook_context)
+        rule_manager.get_applicable_rules.assert_called_once_with(request.rule_context)
         rule_manager.format_rules_for_llm.assert_called_once_with(applicable_rules)
     
     def test_inject_rules_empty_base_prompt(self):
         """Test rule injection with empty base prompt."""
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
-        request.notebook_context = Mock(spec=NotebookContext)
+        request.rule_context = Mock(spec=RuleContext)
         
         rule_manager = Mock()
         rule_manager.get_applicable_rules.return_value = [Mock(spec=Rule)]

@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from notebook_intelligence.rule_manager import RuleManager
-from notebook_intelligence.ruleset import NotebookContext, Rule, RuleScope
+from notebook_intelligence.ruleset import RuleContext, Rule, RuleScope
 from notebook_intelligence.rule_injector import RuleInjector
 from notebook_intelligence.api import ChatRequest
-from notebook_intelligence.context_factory import NotebookContextFactory
+from notebook_intelligence.context_factory import RuleContextFactory
 
 
 class TestEndToEndRuleIntegration:
@@ -106,7 +106,7 @@ priority: 0
         rule_manager.load_rules()
         
         # Create context for notebook in ask mode
-        context = NotebookContext(
+        context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
@@ -127,7 +127,7 @@ priority: 0
         rule_manager.load_rules()
         
         # Create context for Python file in agent mode
-        context = NotebookContext(
+        context = RuleContext(
             filename="script.py",
             kernel="python3",
             mode="agent"
@@ -147,7 +147,7 @@ priority: 0
         rule_manager = RuleManager(temp_rules_dir)
         rule_manager.load_rules()
         
-        context = NotebookContext(
+        context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
@@ -165,10 +165,10 @@ priority: 0
         assert "Provide detailed explanations" in formatted_rules
     
     def test_context_factory_creates_correct_context(self):
-        """Test that NotebookContextFactory creates correct context."""
-        factory = NotebookContextFactory()
+        """Test that RuleContextFactory creates correct context."""
+        factory = RuleContextFactory()
         
-        context = factory.from_websocket_data(
+        context = factory.create(
             filename="notebooks/analysis.ipynb",
             language="python",
             chat_mode_id="ask",
@@ -189,14 +189,14 @@ priority: 0
         rule_manager.load_rules()
         
         # Create mock request with context
-        context = NotebookContext(
+        context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
         )
         
         request = Mock(spec=ChatRequest)
-        request.notebook_context = context
+        request.rule_context = context
         
         # Mock host and config
         mock_host = Mock()
@@ -239,7 +239,7 @@ priority: -1
         rule_manager = RuleManager(temp_rules_dir)
         rule_manager.load_rules()
         
-        context = NotebookContext(
+        context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
@@ -274,7 +274,7 @@ priority: 0
         rule_manager = RuleManager(temp_rules_dir)
         rule_manager.load_rules()
         
-        context = NotebookContext(
+        context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
@@ -292,7 +292,7 @@ priority: 0
         rule_manager.load_rules()
         
         # Test with .txt file (should not match any rules)
-        context = NotebookContext(
+        context = RuleContext(
             filename="document.txt",
             kernel="text",
             mode="ask"

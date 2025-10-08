@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from .ruleset import Rule, RuleSet, NotebookContext
+from .ruleset import Rule, RuleSet, RuleContext
 
 log = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class RuleManager:
         log.info(f"✓ Successfully loaded {len(self.ruleset.get_all_rules())} rules total")
         return self.ruleset
     
-    def get_applicable_rules(self, context: NotebookContext) -> List[Rule]:
+    def get_applicable_rules(self, context: RuleContext) -> List[Rule]:
         """Get all rules that apply to the given context."""
         # Auto-reload if enabled and files have changed
         if self._should_reload():

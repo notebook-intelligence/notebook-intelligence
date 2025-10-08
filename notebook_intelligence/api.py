@@ -11,7 +11,7 @@ import logging
 from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
-from notebook_intelligence.ruleset import NotebookContext
+from notebook_intelligence.ruleset import RuleContext
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class ChatRequest:
     chat_history: list[dict] = None
     cancel_token: CancelToken = None
     # NEW: Add context for rule evaluation
-    notebook_context: Optional[NotebookContext] = None
+    rule_context: Optional[RuleContext] = None
 
 @dataclass
 class ResponseStreamData:

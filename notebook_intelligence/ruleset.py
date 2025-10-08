@@ -264,7 +264,7 @@ class RuleSet:
         return ruleset
 
 @dataclass 
-class NotebookContext:
+class RuleContext:
     """Context information for rule matching."""
     filename: str
     kernel: Optional[str] = None
