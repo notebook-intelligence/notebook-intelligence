@@ -8,6 +8,7 @@ from notebook_intelligence.prompts import Prompts
 import base64
 import logging
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
+from notebook_intelligence.rule_injector import RuleInjector
 
 from notebook_intelligence.util import extract_llm_generated_code
 
@@ -308,9 +309,10 @@ class PythonTool(AddCodeCellTool):
         return {"result": "Code cell added to notebook"}
 
 class BaseChatParticipant(ChatParticipant):
-    def __init__(self):
+    def __init__(self, rule_injector=None):
         super().__init__()
         self._current_chat_request: ChatRequest = None
+        self._rule_injector = rule_injector or RuleInjector()
 
     @property
     def id(self) -> str:
@@ -368,6 +370,10 @@ class BaseChatParticipant(ChatParticipant):
     
     def chat_prompt(self, model_provider: str, model_name: str) -> str:
         return Prompts.generic_chat_prompt(model_provider, model_name)
+    
+    def _inject_rules_into_system_prompt(self, base_prompt: str, request: ChatRequest) -> str:
+        """Inject applicable rules into system prompt based on request context."""
+        return self._rule_injector.inject_rules(base_prompt, request)
 
     async def generate_code_cell(self, request: ChatRequest) -> str:
         chat_model = request.host.chat_model
@@ -411,6 +417,15 @@ class BaseChatParticipant(ChatParticipant):
                     if ext_toolset is not None and ext_toolset.instructions is not None:
                         system_prompt += ext_toolset.instructions + "\n"
 
+            # Inject rules into agent mode system prompt
+            if system_prompt:
+                system_prompt = self._inject_rules_into_system_prompt(system_prompt, request)
+            else:
+                # Even if no system prompt, we might have rules to inject
+                system_prompt = self._inject_rules_into_system_prompt("", request)
+                if system_prompt == "":
+                    system_prompt = None
+            
             options = options.copy()
             options["system_prompt"] = system_prompt
 
@@ -458,8 +473,12 @@ class BaseChatParticipant(ChatParticipant):
             response.finish()
             return
 
+        # Inject rules into system prompt
+        base_system_prompt = options.get("system_prompt", self.chat_prompt(chat_model.provider.name, chat_model.name))
+        enhanced_system_prompt = self._inject_rules_into_system_prompt(base_system_prompt, request)
+        
         messages = [
-            {"role": "system", "content": options.get("system_prompt", self.chat_prompt(chat_model.provider.name, chat_model.name))},
+            {"role": "system", "content": enhanced_system_prompt},
         ] + request.chat_history
 
         try:

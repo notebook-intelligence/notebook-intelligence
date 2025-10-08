@@ -4,7 +4,7 @@ import json
 from os import path
 import os
 import sys
-from typing import Dict
+from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
 from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPServer, MarkdownData, NotebookIntelligenceExtension, TelemetryEvent, TelemetryListener, Tool, Toolset
@@ -16,6 +16,7 @@ from notebook_intelligence.llm_providers.litellm_compatible_llm_provider import 
 from notebook_intelligence.llm_providers.ollama_llm_provider import OllamaLLMProvider
 from notebook_intelligence.llm_providers.openai_compatible_llm_provider import OpenAICompatibleLLMProvider
 from notebook_intelligence.mcp_manager import MCPManager
+from notebook_intelligence.rule_manager import RuleManager
 from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class AIServiceManager(Host):
         self._ollama_llm_provider = OllamaLLMProvider()
         self._extensions = []
         self._websocket_connector: ThreadSafeWebSocketConnector = None
+        # Initialize rule manager if rules are enabled
+        self._rule_manager = RuleManager(self._nbi_config.rules_directory) if self._nbi_config.rules_enabled else None
         self.initialize()
 
     @property
@@ -51,6 +54,15 @@ class AIServiceManager(Host):
     @property
     def ollama_llm_provider(self) -> OllamaLLMProvider:
         return self._ollama_llm_provider
+    
+    def get_rule_manager(self) -> Optional[RuleManager]:
+        """Get the rule manager instance."""
+        return self._rule_manager
+    
+    def reload_rules(self):
+        """Reload rules from disk (for development/testing)."""
+        if self._rule_manager:
+            self._rule_manager.load_rules(force_reload=True)
 
     @property
     def websocket_connector(self) -> ThreadSafeWebSocketConnector:

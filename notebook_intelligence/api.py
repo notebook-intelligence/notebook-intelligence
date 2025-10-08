@@ -1,7 +1,8 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
-from typing import Any, Callable, Dict, Union
+import json
+from typing import Any, Callable, Dict, Union, Optional
 from dataclasses import asdict, dataclass
 from enum import Enum
 import uuid
@@ -10,6 +11,7 @@ import logging
 from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
+from notebook_intelligence.ruleset import RuleContext
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +106,8 @@ class ChatRequest:
     prompt: str = ''
     chat_history: list[dict] = None
     cancel_token: CancelToken = None
+    # NEW: Add context for rule evaluation
+    rule_context: Optional[RuleContext] = None
 
 @dataclass
 class ResponseStreamData:
@@ -793,6 +797,10 @@ class Host:
         return NotImplemented
 
     def get_extension_tool(self, extension_id: str, toolset_id: str, tool_name: str) -> Tool:
+        return NotImplemented
+    
+    def get_rule_manager(self):
+        """Get the rule manager instance if available."""
         return NotImplemented
 
 class NotebookIntelligenceExtension:

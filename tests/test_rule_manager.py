@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from notebook_intelligence.rule_manager import RuleManager
-from notebook_intelligence.ruleset import Rule, RuleSet, NotebookContext
+from notebook_intelligence.ruleset import Rule, RuleSet, RuleContext
 
 
 class TestRuleManager:
@@ -135,10 +135,10 @@ active: true
         assert third_ruleset is not first_ruleset
         assert len(third_ruleset.get_all_rules()) == len(first_ruleset.get_all_rules())
     
-    def test_get_applicable_rules(self, populated_rules_directory, sample_notebook_context):
+    def test_get_applicable_rules(self, populated_rules_directory, sample_rule_context):
         manager = RuleManager(populated_rules_directory)
         
-        applicable_rules = manager.get_applicable_rules(sample_notebook_context)
+        applicable_rules = manager.get_applicable_rules(sample_rule_context)
         
         # Should get global rules + ask mode rules that match *.ipynb
         assert len(applicable_rules) > 0
@@ -148,12 +148,12 @@ active: true
         assert None in rule_modes  # Global rules
         assert "ask" in rule_modes  # Ask mode rules
     
-    def test_get_applicable_rules_auto_loads(self, populated_rules_directory, sample_notebook_context):
+    def test_get_applicable_rules_auto_loads(self, populated_rules_directory, sample_rule_context):
         manager = RuleManager(populated_rules_directory)
         assert manager._loaded is False
         
         # Getting applicable rules should auto-load
-        applicable_rules = manager.get_applicable_rules(sample_notebook_context)
+        applicable_rules = manager.get_applicable_rules(sample_rule_context)
         
         assert manager._loaded is True
         assert isinstance(applicable_rules, list)
@@ -267,7 +267,7 @@ active: true
         manager.load_rules()
         
         # Get some rules to format - use .ipynb file to match ask mode rules
-        context = NotebookContext(filename="test.ipynb", mode="ask")
+        context = RuleContext(filename="test.ipynb", mode="ask")
         applicable_rules = manager.get_applicable_rules(context)
         
         formatted = manager.format_rules_for_llm(applicable_rules)
