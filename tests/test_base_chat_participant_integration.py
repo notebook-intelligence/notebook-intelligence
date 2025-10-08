@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.api import ChatRequest, ChatResponse, ChatMode, CancelToken
-from notebook_intelligence.ruleset import NotebookContext
+from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.rule_injector import RuleInjector
 
 
@@ -53,8 +53,8 @@ class TestBaseChatParticipantIntegration:
         mock_host = Mock()
         mock_host.chat_model = mock_chat_model
         
-        # Create request with notebook context
-        notebook_context = NotebookContext(
+        # Create request with rule context
+        rule_context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
@@ -66,7 +66,7 @@ class TestBaseChatParticipantIntegration:
             prompt="Test prompt",
             chat_history=[],
             cancel_token=Mock(spec=CancelToken),
-            notebook_context=notebook_context
+            rule_context=rule_context
         )
         
         response = Mock(spec=ChatResponse)
@@ -103,7 +103,7 @@ class TestBaseChatParticipantIntegration:
         mock_host.get_mcp_server.return_value = None
         
         # Create request for agent mode
-        notebook_context = NotebookContext(
+        rule_context = RuleContext(
             filename="test.py",
             kernel="python3",
             mode="agent"
@@ -123,7 +123,7 @@ class TestBaseChatParticipantIntegration:
             prompt="Test agent prompt",
             chat_history=[],
             cancel_token=Mock(spec=CancelToken),
-            notebook_context=notebook_context
+            rule_context=rule_context
         )
         
         response = Mock(spec=ChatResponse)
