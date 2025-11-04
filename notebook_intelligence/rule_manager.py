@@ -16,7 +16,7 @@ class RuleManager:
         self.ruleset = RuleSet()
         self._loaded = False
         self._last_modified_time = None
-        self._auto_reload_enabled = os.environ.get('NBI_RULES_AUTO_RELOAD', 'false').lower() == 'true'
+        self._auto_reload_enabled = os.environ.get('NBI_RULES_AUTO_RELOAD', 'true').lower() == 'true'
         
     def discover_rules(self, base_path: Optional[str] = None) -> List[Rule]:
         """Discover all rule files in the rules directory structure."""
