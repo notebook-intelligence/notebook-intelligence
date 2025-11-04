@@ -11,7 +11,11 @@ except ImportError:
     __version__ = "dev"
 
 import logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(filename)s - %(levelname)s - %(message)s', level=logging.INFO)
+import os
+
+# Allow setting log level via environment variable
+log_level = os.environ.get('NBI_LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(format='%(asctime)s - %(name)s - %(filename)s - %(levelname)s - %(message)s', level=getattr(logging, log_level, logging.INFO))
 
 from .extension import NotebookIntelligence
 from .api import *

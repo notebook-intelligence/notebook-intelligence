@@ -1501,6 +1501,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         existingCode,
         prefix: prefix,
         suffix: suffix,
+        language: ActiveDocumentWatcher.activeDocumentInfo.language,
+        filename: ActiveDocumentWatcher.activeDocumentInfo.filePath,
         onRequestSubmitted: (prompt: string) => {
           userPrompt = prompt;
           generatedContent = '';

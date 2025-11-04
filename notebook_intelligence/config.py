@@ -139,3 +139,9 @@ class NBIConfig:
     def active_rules(self) -> dict:
         """Get dictionary of active rule states (filename -> bool)."""
         return self.get('active_rules', {})
+    
+    def set_rule_active(self, filename: str, active: bool):
+        """Set the active state of a rule."""
+        active_rules = self.active_rules.copy()
+        active_rules[filename] = active
+        self.set('active_rules', active_rules)

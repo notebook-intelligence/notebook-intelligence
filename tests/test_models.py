@@ -2,7 +2,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from notebook_intelligence.ruleset import RuleScope, Rule, RuleSet, NotebookContext
+from notebook_intelligence.ruleset import RuleScope, Rule, RuleSet, RuleContext
 
 
 class TestRuleScope:
@@ -182,7 +182,8 @@ active: true
             'scope': {
                 'file_patterns': ['*.py'],
                 'kernels': ['python3'],
-                'cell_types': None
+                'cell_types': None,
+                'directory_patterns': []
             },
             'active': True,
             'content': 'Test content',
@@ -386,17 +387,17 @@ class TestRuleSet:
         assert result is False
 
 
-class TestNotebookContext:
+class TestRuleContext:
     def test_basename_property(self):
-        context = NotebookContext(filename="/path/to/test.ipynb")
+        context = RuleContext(filename="/path/to/test.ipynb")
         assert context.basename == "test.ipynb"
     
     def test_extension_property(self):
-        context = NotebookContext(filename="test.ipynb")
+        context = RuleContext(filename="test.ipynb")
         assert context.extension == ".ipynb"
         
-        context = NotebookContext(filename="script.py")
+        context = RuleContext(filename="script.py")
         assert context.extension == ".py"
         
-        context = NotebookContext(filename="data.csv")
+        context = RuleContext(filename="data.csv")
         assert context.extension == ".csv"
