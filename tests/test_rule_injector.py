@@ -42,20 +42,6 @@ class TestRuleInjector:
         
         assert result == base_prompt
     
-    def test_inject_rules_context_injection_disabled(self):
-        """Test rule injection when context injection is disabled."""
-        injector = RuleInjector()
-        request = Mock(spec=ChatRequest)
-        request.rule_context = Mock(spec=RuleContext)
-        request.host.get_rule_manager.return_value = Mock()
-        request.host.nbi_config.rules_enabled = True
-        request.host.nbi_config.rules_context_injection_enabled = False
-        
-        base_prompt = "You are a helpful assistant."
-        result = injector.inject_rules(base_prompt, request)
-        
-        assert result == base_prompt
-    
     def test_inject_rules_no_applicable_rules(self):
         """Test rule injection when no rules apply to the context."""
         injector = RuleInjector()
@@ -66,7 +52,6 @@ class TestRuleInjector:
         rule_manager.get_applicable_rules.return_value = []
         request.host.get_rule_manager.return_value = rule_manager
         request.host.nbi_config.rules_enabled = True
-        request.host.nbi_config.rules_context_injection_enabled = True
         
         base_prompt = "You are a helpful assistant."
         result = injector.inject_rules(base_prompt, request)
@@ -91,7 +76,6 @@ class TestRuleInjector:
         
         request.host.get_rule_manager.return_value = rule_manager
         request.host.nbi_config.rules_enabled = True
-        request.host.nbi_config.rules_context_injection_enabled = True
         
         base_prompt = "You are a helpful assistant."
         result = injector.inject_rules(base_prompt, request)
@@ -114,7 +98,6 @@ class TestRuleInjector:
         
         request.host.get_rule_manager.return_value = rule_manager
         request.host.nbi_config.rules_enabled = True
-        request.host.nbi_config.rules_context_injection_enabled = True
         
         base_prompt = ""
         result = injector.inject_rules(base_prompt, request)

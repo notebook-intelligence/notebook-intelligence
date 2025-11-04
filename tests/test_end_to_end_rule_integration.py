@@ -202,7 +202,6 @@ priority: 0
         mock_host = Mock()
         mock_host.get_rule_manager.return_value = rule_manager
         mock_host.nbi_config.rules_enabled = True
-        mock_host.nbi_config.rules_context_injection_enabled = True
         request.host = mock_host
         
         # Test rule injection

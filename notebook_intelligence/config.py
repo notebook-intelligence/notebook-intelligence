@@ -136,11 +136,6 @@ class NBIConfig:
         return os.path.join(self.nbi_user_dir, 'rules')
 
     @property
-    def rules_context_injection_enabled(self) -> bool:
-        """Check if rule context injection into LLM requests is enabled."""
-        return self.get('rules_context_injection_enabled', True)
-
-    @property
     def active_rules(self) -> dict:
         """Get dictionary of active rule states (filename -> bool)."""
         return self.get('active_rules', {})

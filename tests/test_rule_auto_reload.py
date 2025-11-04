@@ -10,22 +10,22 @@ from notebook_intelligence.ruleset import RuleContext
 class TestRuleAutoReload:
     """Tests for automatic rule reloading functionality."""
     
-    def test_auto_reload_disabled_by_default(self, tmp_path):
-        """Test that auto-reload is disabled by default."""
+    def test_auto_reload_enabled_by_default(self, tmp_path):
+        """Test that auto-reload is enabled by default."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         
         manager = RuleManager(str(rules_dir))
-        assert manager._auto_reload_enabled is False
+        assert manager._auto_reload_enabled is True
     
-    def test_auto_reload_enabled_via_env_var(self, tmp_path):
-        """Test that auto-reload can be enabled via environment variable."""
+    def test_auto_reload_disabled_via_env_var(self, tmp_path):
+        """Test that auto-reload can be disabled via environment variable."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         
-        with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'true'}):
+        with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'false'}):
             manager = RuleManager(str(rules_dir))
-            assert manager._auto_reload_enabled is True
+            assert manager._auto_reload_enabled is False
     
     def test_auto_reload_env_var_case_insensitive(self, tmp_path):
         """Test that env var is case insensitive."""
@@ -94,16 +94,17 @@ class TestRuleAutoReload:
         rule_file = rules_dir / "test-rule.md"
         rule_file.write_text("---\npriority: 10\n---\nTest rule")
         
-        # Auto-reload disabled (default)
-        manager = RuleManager(str(rules_dir))
-        manager.load_rules()
-        
-        # Modify the file
-        time.sleep(0.01)
-        rule_file.write_text("---\npriority: 20\n---\nModified rule")
-        
-        # Should not trigger reload
-        assert manager._should_reload() is False
+        # Auto-reload explicitly disabled via env var
+        with patch.dict(os.environ, {'NBI_RULES_AUTO_RELOAD': 'false'}):
+            manager = RuleManager(str(rules_dir))
+            manager.load_rules()
+            
+            # Modify the file
+            time.sleep(0.01)
+            rule_file.write_text("---\npriority: 20\n---\nModified rule")
+            
+            # Should not trigger reload
+            assert manager._should_reload() is False
     
     def test_should_reload_after_file_modification(self, tmp_path):
         """Test that reload triggers when a rule file is modified."""

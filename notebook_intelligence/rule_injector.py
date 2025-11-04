@@ -16,9 +16,6 @@ class RuleInjector:
         if not rule_manager or not request.host.nbi_config.rules_enabled:
             return base_prompt
             
-        if not request.host.nbi_config.rules_context_injection_enabled:
-            return base_prompt
-            
         applicable_rules = rule_manager.get_applicable_rules(request.rule_context)
         if not applicable_rules:
             return base_prompt
