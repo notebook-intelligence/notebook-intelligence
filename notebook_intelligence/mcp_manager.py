@@ -14,7 +14,7 @@ from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
 from tornado import ioloop
-from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MCPServerStatus, MarkdownData, ProgressData, SignalImpl, Tool, ToolPreInvokeResponse
+from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPPrompt, MCPServer, MCPServerStatus, MarkdownData, ProgressData, PromptArgument, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
 from enum import Enum
@@ -32,6 +32,8 @@ class MCPServerEventType(str, Enum):
     ListTools = 'list-tools'
     CallTool = 'call-tool'
     StopServer = 'stop-server'
+    ListPrompts = 'list-prompts'
+    GetPromptValue = 'get-prompt-value'
 
 class MCPTool(Tool):
     def __init__(self, server: 'MCPServer', name, description, schema, auto_approve=False):
@@ -107,6 +109,47 @@ class MCPTool(Tool):
         except Exception as e:
             return f"Error occurred while calling MCP tool: {str(e)}"
 
+class MCPPromptImpl(MCPPrompt):
+    def __init__(self, name: str, title: str, description: str, arguments: list[PromptArgument]):
+        self._name = name
+        self._title = title
+        self._description = description
+        self._arguments = arguments
+
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @property
+    def title(self) -> str:
+        return self._title
+    
+    @property
+    def description(self) -> str:
+        return self._description
+    
+    @property
+    def arguments(self) -> list[PromptArgument]:
+        return self._arguments
+
+class PromptArgumentImpl(PromptArgument):
+    def __init__(self, name: str, description: str, required: bool):
+        self._name = name
+        self._description = description
+        self._required = required
+
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @property
+    def description(self) -> str:
+        return self._description
+    
+    @property
+    def required(self) -> bool:
+        return self._required
+
 @dataclass
 class StreamableHttpServerParameters:
     url: str
@@ -121,6 +164,7 @@ class MCPServerImpl(MCPServer):
         self._auto_approve_tools: set[str] = set(auto_approve_tools)
         self._tried_to_get_tool_list = False
         self._mcp_tools = []
+        self._mcp_prompts = []
         self._session = None
         self._client = None
         self._client_queue = None
@@ -222,6 +266,28 @@ class MCPServerImpl(MCPServer):
                             "data": "stopped"
                         })
                         return
+                    elif event_type == MCPServerEventType.ListPrompts:
+                        try:
+                            prompts = await client.list_prompts()
+                        except Exception as e:
+                            log.error(f"Error occurred while listing MCP prompts: {str(e)}")
+                            prompts = []
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": prompts
+                            })
+                    elif event_type == MCPServerEventType.GetPromptValue:
+                        try:
+                            prompt = await client.get_prompt(event["args"]["prompt_name"], event["args"]["prompt_args"])
+                        except Exception as e:
+                            prompt = None
+                            log.error(f"Error occurred while getting MCP prompt value {event['args']['prompt_name']}: {str(e)}")
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": prompt.messages
+                            })
                     else:
                         log.error(f"Unknown event type {event}")
         except Exception as e:
@@ -325,6 +391,51 @@ class MCPServerImpl(MCPServer):
             if tool.name == tool_name:
                 return tool
         return None
+    
+    def update_prompts_list(self):
+        if not self.is_connected():
+            return
+        self._set_status(MCPServerStatus.UpdatingPrompts)
+        response = self._send_mcp_request(MCPServerEventType.ListPrompts)
+        if response["success"]:
+            self._mcp_prompts = response["data"]
+        else:
+            log.error(f"MCP server '{self.name}' failed to update prompts: {response['error']}")
+        self._set_status(MCPServerStatus.UpdatedPrompts)
+
+    def get_prompts(self) -> list[MCPPrompt]:
+        prompts = []
+        for prompt in self._mcp_prompts:
+            arguments = []
+            if prompt.arguments is not None:
+                for argument in prompt.arguments:
+                    arguments.append(PromptArgumentImpl(argument.name, argument.description, argument.required))
+            arguments.sort(key=lambda argument: argument.name)
+            prompts.append(MCPPromptImpl(prompt.name, prompt.title, prompt.description, arguments))
+        prompts.sort(key=lambda prompt: prompt.name)
+        return prompts
+
+    def get_prompt(self, prompt_name: str) -> MCPPrompt:
+        for prompt in self.get_prompts():
+            if prompt.name == prompt_name:
+                return prompt
+        return None
+
+    def get_prompt_value(self, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
+        response = self._send_mcp_request(MCPServerEventType.GetPromptValue, {
+            "prompt_name": prompt_name,
+            "prompt_args": prompt_args
+        })
+        if response["success"]:
+            messages = response["data"]
+            return [
+                {"role": message.role, "content": message.content.text}
+                for message in messages
+                if message.content.type == "text"
+            ]
+        else:
+            log.error(f"MCP server '{self.name}' failed to get prompt value: {response['error']}")
+            return None
 
 class MCPChatParticipant(BaseChatParticipant):
     def __init__(self, id: str, name: str, servers: list[MCPServer], nbi_tools: list[str] = []):
@@ -500,6 +611,7 @@ class MCPManager:
         for server in self._mcp_servers:
             try:
                 server.update_tool_list()
+                server.update_prompts_list()
             except Exception as e:
                 log.error(f"Error initializing tool list for server {server.name}: {e}")
     
