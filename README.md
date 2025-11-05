@@ -175,6 +175,119 @@ If you have multiple servers configured but you would like to disable some for a
 }
 ```
 
+### Ruleset System
+
+NBI includes a powerful ruleset system that allows you to define custom guidelines and best practices that are automatically injected into AI prompts. This helps ensure consistent coding standards, project-specific conventions, and domain knowledge across all AI interactions.
+
+#### How It Works
+
+Rules are markdown files with optional YAML frontmatter stored in `~/.jupyter/nbi/rules/`. They are automatically discovered and applied based on context (file type, notebook kernel, chat mode).
+
+#### Creating Rules
+
+**Global Rules** - Apply to all contexts:
+
+Create a file like `~/.jupyter/nbi/rules/01-coding-standards.md`:
+
+```markdown
+---
+priority: 10
+---
+
+# Coding Standards
+
+- Always use type hints in Python functions
+- Prefer list comprehensions over loops when appropriate
+- Add docstrings to all public functions
+```
+
+**Mode-Specific Rules** - Apply only to specific chat modes:
+
+NBI supports mode-specific rules for three modes:
+
+- **ask** - Question/answer mode
+- **agent** - Autonomous agent mode with tool access
+- **inline-chat** - Inline code generation and editing
+
+Create a file like `~/.jupyter/nbi/rules/modes/agent/01-testing.md`:
+
+```markdown
+---
+priority: 20
+scope:
+  kernels: ['python3']
+---
+
+# Testing Guidelines
+
+When writing code in agent mode:
+
+- Always include error handling
+- Add logging for debugging
+- Test edge cases
+```
+
+#### Rule Frontmatter Options
+
+```yaml
+---
+apply: always # 'always', 'auto', or 'manual'
+active: true # Enable/disable the rule
+priority: 10 # Lower numbers = higher priority
+scope:
+  file_patterns: # Apply to specific file patterns
+    - '*.py'
+    - 'test_*.ipynb'
+  kernels: # Apply to specific notebook kernels
+    - 'python3'
+    - 'ir'
+  directories: # Apply to specific directories
+    - '/projects/ml'
+---
+```
+
+#### Configuration
+
+**Enable/Disable Rules System:**
+
+Edit `~/.jupyter/nbi/config.json`:
+
+```json
+{
+  "rules_enabled": true
+}
+```
+
+**Auto-Reload Configuration:**
+
+Rules are automatically reloaded when changed (enabled by default). This behavior is controlled by the `NBI_RULES_AUTO_RELOAD` environment variable.
+
+To disable auto-reload:
+
+```bash
+export NBI_RULES_AUTO_RELOAD=false
+jupyter lab
+```
+
+Or to enable (default):
+
+```bash
+export NBI_RULES_AUTO_RELOAD=true
+jupyter lab
+```
+
+#### Managing Rules
+
+Rules are automatically discovered from:
+
+- **Global rules**: `~/.jupyter/nbi/rules/*.md`
+- **Mode-specific rules**: `~/.jupyter/nbi/rules/modes/{mode}/*.md` where `{mode}` can be:
+  - `ask` - For question/answer interactions
+  - `agent` - For autonomous agent operations
+  - `inline-chat` - For inline code generation
+
+Rules are applied in priority order (lower numbers first) and can be toggled on/off without deleting the files.
+
 ### Developer documentation
 
 For building locally and contributing see the [developer documentatation](CONTRIBUTING.md).
