@@ -41,7 +41,12 @@ class GetCapabilitiesHandler(APIHandler):
         notebook_execute_tool_enabled = self.notebook_execute_tool == 'enabled' or (self.notebook_execute_tool == 'env_enabled' and os.getenv('NBI_NOTEBOOK_EXECUTE_TOOL', 'disabled') == 'enabled')
         allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name} for toolset in built_in_toolsets.values() if toolset.id != BuiltinToolset.NotebookExecute or notebook_execute_tool_enabled]
         mcp_servers = ai_service_manager.get_mcp_servers()
-        mcp_server_tools = [{"id": mcp_server.name, "status": mcp_server.status, "tools": [{"name": tool.name, "description": tool.description} for tool in mcp_server.get_tools()]} for mcp_server in mcp_servers]
+        mcp_server_tools = [{
+            "id": mcp_server.name,
+            "status": mcp_server.status,
+            "tools": [{"name": tool.name, "description": tool.description} for tool in mcp_server.get_tools()],
+            "prompts": [{"name": prompt.name, "description": prompt.description, "arguments": [{"name": argument.name, "description": argument.description, "required": argument.required} for argument in prompt.arguments]} for prompt in mcp_server.get_prompts()]
+        } for mcp_server in mcp_servers]
         # sort by server id
         mcp_server_tools.sort(key=lambda server: server["id"])
 
@@ -589,6 +594,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
 
             self.chat_history.add_message(chatId, {"role": "user", "content": prompt})
+            # add prompt to request chat history
             request_chat_history.append({"role": "user", "content": prompt})
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()

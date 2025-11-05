@@ -7,7 +7,7 @@ import sys
 from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
-from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPServer, MarkdownData, NotebookIntelligenceExtension, TelemetryEvent, TelemetryListener, Tool, Toolset
+from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, TelemetryEvent, TelemetryListener, Tool, Toolset
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
@@ -360,6 +360,13 @@ class AIServiceManager(Host):
         mcp_server = self._mcp_manager.get_mcp_server(server_name)
         if mcp_server is not None:
             return mcp_server.get_tool(tool_name)
+
+        return None
+
+    def get_mcp_server_prompt(self, server_name: str, prompt_name: str) -> MCPPrompt:
+        mcp_server = self._mcp_manager.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt(prompt_name)
 
         return None
 

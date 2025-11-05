@@ -1101,6 +1101,14 @@ function SidebarComponent(props: any) {
         prefixes.push(`${commandPrefix}/${command}`);
       }
     }
+
+    const mcpServers = NBIAPI.config.toolConfig.mcpServers;
+    for (const mcpServer of mcpServers) {
+      for (const prompt of mcpServer.prompts) {
+        prefixes.push(`/mcp_${mcpServer.id}_${prompt.name}`);
+      }
+    }
+
     setOriginalPrefixes(prefixes);
     setPrefixSuggestions(prefixes);
   }, [chatMode]);
