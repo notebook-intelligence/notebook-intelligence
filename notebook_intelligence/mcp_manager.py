@@ -395,13 +395,13 @@ class MCPServerImpl(MCPServer):
     def update_prompts_list(self):
         if not self.is_connected():
             return
-        self._set_status(MCPServerStatus.UpdatingPrompts)
+        self._set_status(MCPServerStatus.UpdatingPromptList)
         response = self._send_mcp_request(MCPServerEventType.ListPrompts)
         if response["success"]:
             self._mcp_prompts = response["data"]
         else:
             log.error(f"MCP server '{self.name}' failed to update prompts: {response['error']}")
-        self._set_status(MCPServerStatus.UpdatedPrompts)
+        self._set_status(MCPServerStatus.UpdatedPromptList)
 
     def get_prompts(self) -> list[MCPPrompt]:
         prompts = []

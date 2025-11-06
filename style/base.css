@@ -1009,13 +1009,15 @@ svg.access-token-warning {
 }
 
 .server-status-indicator.connected,
-.server-status-indicator.updated-tool-list {
+.server-status-indicator.updated-tool-list,
+.server-status-indicator.updated-prompt-list {
   background-color: var(--jp-success-color1);
 }
 
 .server-status-indicator.connecting,
 .server-status-indicator.disconnecting,
-.server-status-indicator.updating-tool-list {
+.server-status-indicator.updating-tool-list,
+.server-status-indicator.updating-prompt-list {
   background-color: var(--jp-warn-color1);
 }
 

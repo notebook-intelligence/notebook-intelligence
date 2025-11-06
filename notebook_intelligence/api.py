@@ -59,8 +59,8 @@ class MCPServerStatus(str, Enum):
     Connected = 'connected'
     UpdatingToolList = 'updating-tool-list'
     UpdatedToolList = 'updated-tool-list'
-    UpdatingPrompts = 'updating-prompts'
-    UpdatedPrompts = 'updated-prompts'
+    UpdatingPromptList = 'updating-prompt-list'
+    UpdatedPromptList = 'updated-prompt-list'
 
 class Signal:
     def __init__(self):
