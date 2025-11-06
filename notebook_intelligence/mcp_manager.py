@@ -200,8 +200,7 @@ class MCPServerImpl(MCPServer):
                 args=(self._client_thread_func(),)
             )
             self._client_thread.start()
-            self.update_tool_list()
-            self.update_prompts_list()
+            self._update_tool_and_prompt_list_async()
         except Exception as e:
             self._client_thread = None
             log.error(f"Error occurred while connecting to MCP server: {str(e)}")
@@ -223,6 +222,14 @@ class MCPServerImpl(MCPServer):
         self._client_thread_signal = None
         self._client_thread = None
 
+
+    def _update_tool_and_prompt_list_async(self):
+        thread = threading.Thread(target=self._update_tool_and_prompt_list, args=())
+        thread.start()
+    
+    def _update_tool_and_prompt_list(self):
+        self.update_tool_list()
+        self.update_prompts_list()
     
     def _set_status(self, status: MCPServerStatus):
         self._status = status
@@ -551,9 +558,6 @@ class MCPManager:
             self._mcp_participants.append(MCPChatParticipant("mcp", "MCP", unused_servers, nbi_tools))
             self._mcp_servers += unused_servers
 
-        thread = threading.Thread(target=self.init_tool_lists, args=())
-        thread.start()
-
     def create_servers(self, server_names: list[str], servers_config: dict):
         servers = []
         for server_name in server_names:
@@ -608,17 +612,6 @@ class MCPManager:
 
     def get_mcp_participants(self):
         return self._mcp_participants
-
-    def init_tool_lists_async(self):
-        for server in self._mcp_servers:
-            try:
-                server.update_tool_list()
-                server.update_prompts_list()
-            except Exception as e:
-                log.error(f"Error initializing tool list for server {server.name}: {e}")
-    
-    def init_tool_lists(self):
-        self.init_tool_lists_async()
 
     def get_mcp_servers(self):
         return self._mcp_servers
