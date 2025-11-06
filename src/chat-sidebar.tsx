@@ -1116,15 +1116,18 @@ function SidebarComponent(props: any) {
     }
 
     const mcpServers = NBIAPI.config.toolConfig.mcpServers;
+    const mcpServerSettings = NBIAPI.config.mcpServerSettings;
     for (const mcpServer of mcpServers) {
-      for (const prompt of mcpServer.prompts) {
-        prefixes.push(`/mcp:${mcpServer.id}:${prompt.name}`);
+      if (mcpServerSettings[mcpServer.id]?.disabled !== true) {
+        for (const prompt of mcpServer.prompts) {
+          prefixes.push(`/mcp:${mcpServer.id}:${prompt.name}`);
+        }
       }
     }
 
     setOriginalPrefixes(prefixes);
     setPrefixSuggestions(prefixes);
-  }, [chatMode]);
+  }, [chatMode, renderCount]);
 
   useEffect(() => {
     const fetchData = () => {
