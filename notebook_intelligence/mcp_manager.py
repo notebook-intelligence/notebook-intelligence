@@ -200,6 +200,8 @@ class MCPServerImpl(MCPServer):
                 args=(self._client_thread_func(),)
             )
             self._client_thread.start()
+            self.update_tool_list()
+            self.update_prompts_list()
         except Exception as e:
             self._client_thread = None
             log.error(f"Error occurred while connecting to MCP server: {str(e)}")
