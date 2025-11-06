@@ -264,7 +264,7 @@ class AIServiceManager(Host):
                         mcp_prompt_name = prompt_name_and_params[:open_paren_index]
                         prompt_params_str = prompt_name_and_params[open_paren_index+1:]
                         close_paren_index = prompt_params_str.find(')')
-                        if close_paren_index != -1 and close_paren_index > open_paren_index:
+                        if close_paren_index != -1:
                             mcp_arguments_str = prompt_params_str[:close_paren_index]
                             mcp_arguments_list = mcp_arguments_str.split(',')
                             for argument in mcp_arguments_list:

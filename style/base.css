@@ -1026,7 +1026,6 @@ svg.access-token-warning {
   background-color: var(--jp-error-color1);
 }
 
-
 .jp-intelligence-placeholder {
   display: flex;
   flex-direction: row;
@@ -1048,4 +1047,28 @@ svg.access-token-warning {
     text-underline-position: from-font;
     cursor: pointer;
   }
+}
+
+.form-input-dialog-body {
+  width: 500px;
+}
+
+.form-input-dialog-body-content-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.form-input-dialog-body-content-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.form-input-dialog-body-content-field-label {
+  width: 50%;
+}
+
+.form-input-dialog-body-content-field-input {
+  width: 50%;
 }

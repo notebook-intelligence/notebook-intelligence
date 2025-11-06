@@ -1184,10 +1184,11 @@ function SidebarComponent(props: any) {
             title: 'Input Parameters',
             fields: promptConfig.arguments
           });
-        console.log(result);
         const argumentValues: string[] = [];
         for (const argument of promptConfig.arguments) {
-          argumentValues.push(`${argument.name}=${result[argument.name]}`);
+          if (result[argument.name] !== undefined) {
+            argumentValues.push(`${argument.name}=${result[argument.name]}`);
+          }
         }
         mcpArguments = `(${argumentValues.join(', ')}):`;
       }
@@ -2633,9 +2634,19 @@ function FormInputDialogBodyComponent(props: any) {
         </div>
         <div className="form-input-dialog-body-content-fields">
           {props.fields.map((field: any) => (
-            <div key={field.name}>
-              <label htmlFor={field.name}>{field.name}</label>
+            <div
+              className="form-input-dialog-body-content-field"
+              key={field.name}
+            >
+              <label
+                className="form-input-dialog-body-content-field-label jp-mod-styled"
+                htmlFor={field.name}
+              >
+                {field.name}
+                {field.required ? ' (required)' : ''}
+              </label>
               <input
+                className="form-input-dialog-body-content-field-input jp-mod-styled"
                 type={field.type}
                 id={field.name}
                 name={field.name}
