@@ -2041,7 +2041,9 @@ function SidebarComponent(props: any) {
                 {renderCount > 0 &&
                   mcpServerEnabledState.size > 0 &&
                   toolConfigRef.current.mcpServers.length > 0 && (
-                    <div className="mode-tools-group-header">MCP Servers</div>
+                    <div className="mode-tools-group-header">
+                      MCP Server Tools
+                    </div>
                   )}
                 {renderCount > 0 &&
                   toolConfigRef.current.mcpServers
