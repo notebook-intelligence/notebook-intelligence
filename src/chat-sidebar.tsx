@@ -1118,7 +1118,7 @@ function SidebarComponent(props: any) {
     const mcpServers = NBIAPI.config.toolConfig.mcpServers;
     for (const mcpServer of mcpServers) {
       for (const prompt of mcpServer.prompts) {
-        prefixes.push(`/mcp_${mcpServer.id}_${prompt.name}`);
+        prefixes.push(`/mcp:${mcpServer.id}:${prompt.name}`);
       }
     }
 
@@ -1160,11 +1160,40 @@ function SidebarComponent(props: any) {
     }
   };
 
-  const applyPrefixSuggestion = (prefix: string) => {
+  const applyPrefixSuggestion = async (prefix: string) => {
+    let mcpArguments = '';
+    if (prefix.startsWith('/mcp:')) {
+      mcpArguments = ':';
+      const serverId = prefix.split(':')[1];
+      const promptName = prefix.split(':')[2];
+      const promptConfig = NBIAPI.config.getMCPServerPrompt(
+        serverId,
+        promptName
+      );
+      if (
+        promptConfig &&
+        promptConfig.arguments &&
+        promptConfig.arguments.length > 0
+      ) {
+        const result = await props
+          .getApp()
+          .commands.execute('notebook-intelligence:show-form-input-dialog', {
+            title: 'Input Parameters',
+            fields: promptConfig.arguments
+          });
+        console.log(result);
+        const argumentValues: string[] = [];
+        for (const argument of promptConfig.arguments) {
+          argumentValues.push(`${argument.name}=${result[argument.name]}`);
+        }
+        mcpArguments = `(${argumentValues.join(', ')}):`;
+      }
+    }
+
     if (prefix.includes(prompt)) {
-      setPrompt(`${prefix} `);
+      setPrompt(`${prefix}${mcpArguments} `);
     } else {
-      setPrompt(`${prefix} ${prompt} `);
+      setPrompt(`${prefix} ${prompt}${mcpArguments} `);
     }
     setShowPopover(false);
     promptInputRef.current?.focus();
@@ -1223,9 +1252,6 @@ function SidebarComponent(props: any) {
         }
       }
     }
-
-    const promptPrefix =
-      promptPrefixParts.length > 0 ? promptPrefixParts.join(' ') + ' ' : '';
 
     lastMessageId.current = UUID.uuid4();
     lastRequestTime.current = new Date();
@@ -1391,7 +1417,7 @@ function SidebarComponent(props: any) {
       }
     );
 
-    const newPrompt = prompt.startsWith('/settings') ? '' : promptPrefix;
+    const newPrompt = '';
 
     setPrompt(newPrompt);
     filterPrefixSuggestions(newPrompt);
@@ -2562,6 +2588,69 @@ function GitHubCopilotLoginDialogBodyComponent(props: any) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+export class FormInputDialogBody extends ReactWidget {
+  constructor(options: { fields: any; onDone: (formData: any) => void }) {
+    super();
+
+    this._fields = options.fields || [];
+    this._onDone = options.onDone || (() => {});
+  }
+
+  render(): JSX.Element {
+    return (
+      <FormInputDialogBodyComponent
+        fields={this._fields}
+        onDone={this._onDone}
+      />
+    );
+  }
+
+  private _fields: any;
+  private _onDone: (formData: any) => void;
+}
+
+function FormInputDialogBodyComponent(props: any) {
+  const [formData, setFormData] = useState<any>({});
+
+  const handleInputChange = (event: any) => {
+    setFormData({ ...formData, [event.target.name]: event.target.value });
+  };
+
+  return (
+    <div className="form-input-dialog-body">
+      <div className="form-input-dialog-body-content">
+        <div className="form-input-dialog-body-content-title">
+          {props.title}
+        </div>
+        <div className="form-input-dialog-body-content-fields">
+          {props.fields.map((field: any) => (
+            <div key={field.name}>
+              <label htmlFor={field.name}>{field.name}</label>
+              <input
+                type={field.type}
+                id={field.name}
+                name={field.name}
+                onChange={handleInputChange}
+                value={formData[field.name] || ''}
+              />
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ marginTop: '10px' }}>
+            <button
+              className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+              onClick={() => props.onDone(formData)}
+            >
+              <div className="jp-Dialog-buttonLabel">Done</div>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
