@@ -76,6 +76,24 @@ export class NBIConfig {
     return this.capabilities.tool_config;
   }
 
+  get mcpServers(): any {
+    return this.toolConfig.mcpServers;
+  }
+
+  getMCPServer(serverId: string): any {
+    return this.toolConfig.mcpServers.find(
+      (server: any) => server.id === serverId
+    );
+  }
+
+  getMCPServerPrompt(serverId: string, promptName: string): any {
+    const server = this.getMCPServer(serverId);
+    if (server) {
+      return server.prompts.find((prompt: any) => prompt.name === promptName);
+    }
+    return null;
+  }
+
   get mcpServerSettings(): any {
     return this.capabilities.mcp_server_settings;
   }

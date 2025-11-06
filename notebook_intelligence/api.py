@@ -840,6 +840,12 @@ class Host:
     def get_mcp_server_tool(self, server_name: str, tool_name: str) -> Tool:
         return NotImplemented
 
+    def get_mcp_server_prompt(self, server_name: str, prompt_name: str) -> MCPPrompt:
+        mcp_server = self.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt(prompt_name)
+        return None
+
     def get_mcp_server_prompt_value(self, server_name: str, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
         mcp_server = self.get_mcp_server(server_name)
         if mcp_server is not None:

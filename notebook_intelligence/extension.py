@@ -307,9 +307,9 @@ class ChatHistory:
             existing_messages = self.messages[chatId]
             prev_user_message = next((m for m in reversed(existing_messages) if m["role"] == "user"), None)
             if prev_user_message is not None:
-                (current_participant, command, prompt) = AIServiceManager.parse_prompt(message["content"])
-                (prev_participant, command, prompt) = AIServiceManager.parse_prompt(prev_user_message["content"])
-                if current_participant != prev_participant:
+                current_prompt_parts = AIServiceManager.parse_prompt(message["content"])
+                prev_prompt_parts = AIServiceManager.parse_prompt(prev_user_message["content"])
+                if current_prompt_parts.participant != prev_prompt_parts.participant:
                     self.messages[chatId] = []
 
         self.messages[chatId].append(message)
@@ -594,8 +594,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
 
             self.chat_history.add_message(chatId, {"role": "user", "content": prompt})
-            # add prompt to request chat history
-            request_chat_history.append({"role": "user", "content": prompt})
+
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)

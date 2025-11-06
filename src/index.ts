@@ -44,6 +44,7 @@ import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
   ChatSidebar,
+  FormInputDialogBody,
   GitHubCopilotLoginDialogBody,
   GitHubCopilotStatusBarItem,
   InlinePromptWidget,
@@ -126,6 +127,8 @@ namespace CommandIDs {
     'notebook-intelligence:set-current-file-content';
   export const openMCPConfigEditor =
     'notebook-intelligence:open-mcp-config-editor';
+  export const showFormInputDialog =
+    'notebook-intelligence:show-form-input-dialog';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -817,6 +820,39 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         await waitForFileToBeActive(newPyFile.path);
 
         return newPyFile;
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.showFormInputDialog, {
+      execute: async args => {
+        const title = args.title as string;
+        const fields = args.fields;
+
+        return new Promise<any>((resolve, reject) => {
+          let dialog: Dialog<unknown> | null = null;
+          const dialogBody = new FormInputDialogBody({
+            fields: fields,
+            onDone: (formData: any) => {
+              dialog.dispose();
+              resolve(formData);
+            }
+          });
+          dialog = new Dialog({
+            title: title,
+            hasClose: true,
+            body: dialogBody,
+            buttons: []
+          });
+
+          dialog
+            .launch()
+            .then((result: any) => {
+              reject();
+            })
+            .catch(() => {
+              reject(new Error('Failed to show form input dialog'));
+            });
+        });
       }
     });
 
