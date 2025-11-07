@@ -721,7 +721,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     panel.id = 'notebook-intelligence-tab';
     panel.title.caption = 'Softie';
     const sidebarIcon = new LabIcon({
-      name: 'ui-components:palette',
+      name: 'notebook-intelligence:sidebar-icon',
       svgstr: sparklesSvgstr
     });
     panel.title.icon = sidebarIcon;
