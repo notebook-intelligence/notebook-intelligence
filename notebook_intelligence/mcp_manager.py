@@ -171,6 +171,7 @@ class MCPServerImpl(MCPServer):
         self._client_thread_signal = None
         self._client_thread = None
         self._status = MCPServerStatus.NotConnected
+        self._tool_prompt_list_lock = threading.Lock()
         self.connect()
 
     @property
@@ -222,14 +223,14 @@ class MCPServerImpl(MCPServer):
         self._client_thread_signal = None
         self._client_thread = None
 
-
     def _update_tool_and_prompt_list_async(self):
         thread = threading.Thread(target=self._update_tool_and_prompt_list, args=())
         thread.start()
     
     def _update_tool_and_prompt_list(self):
-        self.update_tool_list()
-        self.update_prompts_list()
+        with self._tool_prompt_list_lock:
+            self.update_tool_list()
+            self.update_prompts_list()
     
     def _set_status(self, status: MCPServerStatus):
         self._status = status
@@ -431,6 +432,13 @@ class MCPServerImpl(MCPServer):
         return None
 
     def get_prompt_value(self, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
+        prompt = self.get_prompt(prompt_name)
+        if prompt is None:
+            log.error(f"MCP server '{self.name}' prompt '{prompt_name}' not found")
+            return None
+        # if prompt_args has keys that are not in prompt.arguments skip them
+        prompt_args = {k: v for k, v in prompt_args.items() if k in [argument.name for argument in prompt.arguments]}
+
         response = self._send_mcp_request(MCPServerEventType.GetPromptValue, {
             "prompt_name": prompt_name,
             "prompt_args": prompt_args
