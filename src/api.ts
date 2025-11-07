@@ -76,6 +76,24 @@ export class NBIConfig {
     return this.capabilities.tool_config;
   }
 
+  get mcpServers(): any {
+    return this.toolConfig.mcpServers;
+  }
+
+  getMCPServer(serverId: string): any {
+    return this.toolConfig.mcpServers.find(
+      (server: any) => server.id === serverId
+    );
+  }
+
+  getMCPServerPrompt(serverId: string, promptName: string): any {
+    const server = this.getMCPServer(serverId);
+    if (server) {
+      return server.prompts.find((prompt: any) => prompt.name === promptName);
+    }
+    return null;
+  }
+
   get mcpServerSettings(): any {
     return this.capabilities.mcp_server_settings;
   }
@@ -150,6 +168,30 @@ export class NBIAPI {
 
   static getDeviceVerificationInfo(): IDeviceVerificationInfo {
     return this._deviceVerificationInfo;
+  }
+
+  static getGHLoginRequired() {
+    return (
+      this.config.usingGitHubCopilotModel &&
+      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
+    );
+  }
+
+  static getChatEnabled() {
+    return this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.chatModel.provider
+        );
+  }
+
+  static getInlineCompletionEnabled() {
+    return this.config.inlineCompletionModel.provider ===
+      GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.inlineCompletionModel.provider
+        );
   }
 
   static async loginToGitHub() {

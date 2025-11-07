@@ -1,5 +1,6 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
+from dataclasses import dataclass
 import json
 from os import path
 import os
@@ -7,7 +8,7 @@ import sys
 from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
-from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPServer, MarkdownData, NotebookIntelligenceExtension, TelemetryEvent, TelemetryListener, Tool, Toolset
+from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, TelemetryEvent, TelemetryListener, Tool, Toolset
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
@@ -28,6 +29,15 @@ RESERVED_LLM_PROVIDER_IDS = set([
 RESERVED_PARTICIPANT_IDS = set([
     'chat', 'copilot', 'jupyter', 'jupyterlab', 'jlab', 'notebook', 'intelligence', 'nb', 'nbi', 'terminal', 'vscode', 'workspace', 'help', 'ai', 'config', 'settings', 'ui', 'cell', 'code', 'file', 'data', 'new', 'run', 'search'
 ])
+
+@dataclass
+class PromptParts:
+    participant: str = DEFAULT_CHAT_PARTICIPANT_ID
+    command: str = ''
+    input: str = ''
+    mcp_server_name: str = ''
+    mcp_prompt_name: str = ''
+    mcp_arguments: dict = None
 
 class AIServiceManager(Host):
     def __init__(self, options: dict = {}):
@@ -217,30 +227,62 @@ class AIServiceManager(Host):
     def embedding_model(self) -> EmbeddingModel:
         return self._embedding_model
 
+    # prompt format: @participant /command input
+    # or /mcp:server_name:prompt_name input
+    # or /mcp:server_name:prompt_name(argument1=value1, argument2=value2) input
     @staticmethod
-    def parse_prompt(prompt: str) -> tuple[str, str, str]:
+    def parse_prompt(prompt: str) -> PromptParts:
         participant = DEFAULT_CHAT_PARTICIPANT_ID
         command = ''
         input = ''
+        mcp_server_name = ''
+        mcp_prompt_name = ''
+        mcp_arguments = {}
 
         prompt = prompt.lstrip()
-        parts = prompt.split(' ')
-        parts = [part for part in parts if part.strip() != '']
+        if prompt.startswith('@'):
+            space_index = prompt.find(' ')
+            if space_index != -1:
+                participant = prompt[1:space_index]
+                prompt = prompt[space_index+1:]
 
-        if len(parts) > 0:
-            if parts[0].startswith('@'):
-                participant = parts[0][1:]
-                parts = parts[1:]
+        prompt = prompt.lstrip()
+        if prompt.startswith('/mcp:'):
+            colon_index = prompt.find(':', 5)
+            if colon_index != -1:
+                mcp_server_name = prompt[5:colon_index]
+                prompt = prompt[colon_index+1:]
+                colon_index = prompt.find(':')
+                if colon_index != -1:
+                    prompt_name_and_params = prompt[:colon_index]
+                    command = f"mcp:{mcp_server_name}:{prompt_name_and_params}"
+                    prompt = prompt[colon_index+1:]
+                    open_paren_index = prompt_name_and_params.find('(')
+                    if open_paren_index == -1:
+                        mcp_prompt_name = prompt_name_and_params
+                    else:
+                        mcp_prompt_name = prompt_name_and_params[:open_paren_index]
+                        prompt_params_str = prompt_name_and_params[open_paren_index+1:]
+                        close_paren_index = prompt_params_str.find(')')
+                        if close_paren_index != -1:
+                            mcp_arguments_str = prompt_params_str[:close_paren_index]
+                            mcp_arguments_list = mcp_arguments_str.split(',')
+                            for argument in mcp_arguments_list:
+                                argument = argument.strip()
+                                if '=' in argument:
+                                    key, value = argument.split('=', 1)
+                                    mcp_arguments[key.strip()] = value.strip()
+        elif prompt.startswith('/'):
+            space_index = prompt.find(' ')
+            if space_index != -1:
+                command = prompt[1:space_index]
+                prompt = prompt[space_index+1:]
 
-        if len(parts) > 0:
-            if parts[0].startswith('/'):
-                command = parts[0][1:]
-                parts = parts[1:]
+        prompt = prompt.lstrip()
+        input = prompt
 
-        if len(parts) > 0:
-            input = " ".join(parts)
+        return PromptParts(participant=participant, command=command, input=input, mcp_server_name=mcp_server_name, mcp_prompt_name=mcp_prompt_name, mcp_arguments=mcp_arguments)
 
-        return [participant, command, input]
     
     def get_llm_provider(self, provider_id: str) -> LLMProvider:
         return self.llm_providers.get(provider_id)
@@ -305,8 +347,8 @@ class AIServiceManager(Host):
         return model_ids
 
     def get_chat_participant(self, prompt: str) -> ChatParticipant:
-        (participant_id, command, input) = AIServiceManager.parse_prompt(prompt)
-        return self.chat_participants.get(participant_id, DEFAULT_CHAT_PARTICIPANT_ID)
+        prompt_parts = AIServiceManager.parse_prompt(prompt)
+        return self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
 
     async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         if self.chat_model is None:
@@ -315,11 +357,22 @@ class AIServiceManager(Host):
             response.finish()
             return
         request.host = self
-        (participant_id, command, prompt) = AIServiceManager.parse_prompt(request.prompt)
-        participant = self.chat_participants.get(participant_id, DEFAULT_CHAT_PARTICIPANT_ID)
-        request.command = command
-        request.prompt = prompt
-        response.participant_id  = participant_id
+        prompt_parts = AIServiceManager.parse_prompt(request.prompt)
+
+        # add MCP server prompt messages to chat history
+        if prompt_parts.mcp_prompt_name != "":
+            mcp_server_prompt_messages = request.host.get_mcp_server_prompt_value(prompt_parts.mcp_server_name, prompt_parts.mcp_prompt_name, prompt_parts.mcp_arguments)
+            if mcp_server_prompt_messages is not None:
+                for message in mcp_server_prompt_messages:
+                    request.chat_history.append(message)
+            request.chat_history.append({"role": "user", "content": prompt_parts.input})
+        else:
+            request.chat_history.append({"role": "user", "content": prompt_parts.input})
+    
+        participant = self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
+        request.command = prompt_parts.command
+        request.prompt = prompt_parts.input
+        response.participant_id  = prompt_parts.participant
         return await participant.handle_chat_request(request, response, options)
 
     async def get_completion_context(self, request: ContextRequest) -> CompletionContext:
@@ -360,6 +413,13 @@ class AIServiceManager(Host):
         mcp_server = self._mcp_manager.get_mcp_server(server_name)
         if mcp_server is not None:
             return mcp_server.get_tool(tool_name)
+
+        return None
+
+    def get_mcp_server_prompt(self, server_name: str, prompt_name: str) -> MCPPrompt:
+        mcp_server = self._mcp_manager.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt(prompt_name)
 
         return None
 

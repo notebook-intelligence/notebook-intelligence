@@ -59,6 +59,8 @@ class MCPServerStatus(str, Enum):
     Connected = 'connected'
     UpdatingToolList = 'updating-tool-list'
     UpdatedToolList = 'updated-tool-list'
+    UpdatingPromptList = 'updating-prompt-list'
+    UpdatedPromptList = 'updated-prompt-list'
 
 class Signal:
     def __init__(self):
@@ -385,6 +387,39 @@ class SimpleTool(Tool):
             fn_args.update({"request": request, "response": response})
         return await self._tool_function(**fn_args)
 
+class PromptArgument:
+    @property
+    def name(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def description(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def required(self) -> bool:
+        raise NotImplemented
+
+class MCPPrompt:
+    @property
+    def name(self) -> str:
+        raise NotImplemented
+
+    @property
+    def title(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def description(self) -> str:
+        raise NotImplemented
+
+    @property
+    def arguments(self) -> list[PromptArgument]:
+        raise NotImplemented
+
+    def get_value(self, prompt_args: dict = {}) -> str:
+        raise NotImplemented
+
 class MCPServer:
     @property
     def name(self) -> str:
@@ -410,6 +445,18 @@ class MCPServer:
         return NotImplemented
 
     def call_tool(self, tool_name: str, tool_args: dict):
+        return NotImplemented
+
+    def update_prompts_list(self):
+        return NotImplemented
+
+    def get_prompts(self) -> list[MCPPrompt]:
+        return NotImplemented
+
+    def get_prompt(self, prompt_name: str) -> MCPPrompt:
+        return NotImplemented
+    
+    def get_prompt_value(self, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
         return NotImplemented
 
 def auto_approve(tool: SimpleTool):
@@ -792,6 +839,18 @@ class Host:
 
     def get_mcp_server_tool(self, server_name: str, tool_name: str) -> Tool:
         return NotImplemented
+
+    def get_mcp_server_prompt(self, server_name: str, prompt_name: str) -> MCPPrompt:
+        mcp_server = self.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt(prompt_name)
+        return None
+
+    def get_mcp_server_prompt_value(self, server_name: str, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
+        mcp_server = self.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt_value(prompt_name, prompt_args)
+        return None
 
     def get_extension_toolset(self, extension_id: str, toolset_id: str) -> Toolset:
         return NotImplemented

@@ -20,7 +20,6 @@ import {
   BackendMessageType,
   BuiltinToolsetType,
   ContextType,
-  GITHUB_COPILOT_PROVIDER_ID,
   IActiveDocumentInfo,
   ICellContents,
   IChatCompletionResponseEmitter,
@@ -1080,30 +1079,38 @@ function SidebarComponent(props: any) {
 
   useEffect(() => {
     const prefixes: string[] = [];
-    if (chatMode !== 'ask') {
-      prefixes.push('/clear');
-      setOriginalPrefixes(prefixes);
-      setPrefixSuggestions(prefixes);
-      return;
+    prefixes.push('/clear');
+
+    if (chatMode === 'ask') {
+      const chatParticipants = NBIAPI.config.chatParticipants;
+      for (const participant of chatParticipants) {
+        const id = participant.id;
+        const commands = participant.commands;
+        const participantPrefix = id === 'default' ? '' : `@${id}`;
+        if (participantPrefix !== '') {
+          prefixes.push(participantPrefix);
+        }
+        const commandPrefix =
+          participantPrefix === '' ? '' : `${participantPrefix} `;
+        for (const command of commands) {
+          prefixes.push(`${commandPrefix}/${command}`);
+        }
+      }
     }
 
-    const chatParticipants = NBIAPI.config.chatParticipants;
-    for (const participant of chatParticipants) {
-      const id = participant.id;
-      const commands = participant.commands;
-      const participantPrefix = id === 'default' ? '' : `@${id}`;
-      if (participantPrefix !== '') {
-        prefixes.push(participantPrefix);
-      }
-      const commandPrefix =
-        participantPrefix === '' ? '' : `${participantPrefix} `;
-      for (const command of commands) {
-        prefixes.push(`${commandPrefix}/${command}`);
+    const mcpServers = NBIAPI.config.toolConfig.mcpServers;
+    const mcpServerSettings = NBIAPI.config.mcpServerSettings;
+    for (const mcpServer of mcpServers) {
+      if (mcpServerSettings[mcpServer.id]?.disabled !== true) {
+        for (const prompt of mcpServer.prompts) {
+          prefixes.push(`/mcp:${mcpServer.id}:${prompt.name}`);
+        }
       }
     }
+
     setOriginalPrefixes(prefixes);
     setPrefixSuggestions(prefixes);
-  }, [chatMode]);
+  }, [chatMode, renderCount]);
 
   useEffect(() => {
     const fetchData = () => {
@@ -1139,11 +1146,41 @@ function SidebarComponent(props: any) {
     }
   };
 
-  const applyPrefixSuggestion = (prefix: string) => {
+  const applyPrefixSuggestion = async (prefix: string) => {
+    let mcpArguments = '';
+    if (prefix.startsWith('/mcp:')) {
+      mcpArguments = ':';
+      const serverId = prefix.split(':')[1];
+      const promptName = prefix.split(':')[2];
+      const promptConfig = NBIAPI.config.getMCPServerPrompt(
+        serverId,
+        promptName
+      );
+      if (
+        promptConfig &&
+        promptConfig.arguments &&
+        promptConfig.arguments.length > 0
+      ) {
+        const result = await props
+          .getApp()
+          .commands.execute('notebook-intelligence:show-form-input-dialog', {
+            title: 'Input Parameters',
+            fields: promptConfig.arguments
+          });
+        const argumentValues: string[] = [];
+        for (const argument of promptConfig.arguments) {
+          if (result[argument.name] !== undefined) {
+            argumentValues.push(`${argument.name}=${result[argument.name]}`);
+          }
+        }
+        mcpArguments = `(${argumentValues.join(', ')}):`;
+      }
+    }
+
     if (prefix.includes(prompt)) {
-      setPrompt(`${prefix} `);
+      setPrompt(`${prefix}${mcpArguments} `);
     } else {
-      setPrompt(`${prefix} ${prompt} `);
+      setPrompt(`${prefix} ${prompt}${mcpArguments} `);
     }
     setShowPopover(false);
     promptInputRef.current?.focus();
@@ -1202,9 +1239,6 @@ function SidebarComponent(props: any) {
         }
       }
     }
-
-    const promptPrefix =
-      promptPrefixParts.length > 0 ? promptPrefixParts.join(' ') + ' ' : '';
 
     lastMessageId.current = UUID.uuid4();
     lastRequestTime.current = new Date();
@@ -1370,7 +1404,7 @@ function SidebarComponent(props: any) {
       }
     );
 
-    const newPrompt = prompt.startsWith('/settings') ? '' : promptPrefix;
+    const newPrompt = '';
 
     setPrompt(newPrompt);
     filterPrefixSuggestions(newPrompt);
@@ -1699,34 +1733,21 @@ function SidebarComponent(props: any) {
     return `${activeDocumentInfo.filename}${cellAndLineIndicator}`;
   };
 
-  const nbiConfig = NBIAPI.config;
-  const getGHLoginRequired = () => {
-    return (
-      nbiConfig.usingGitHubCopilotModel &&
-      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
-    );
-  };
-  const getChatEnabled = () => {
-    return nbiConfig.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-      ? !getGHLoginRequired()
-      : nbiConfig.llmProviders.find(
-          provider => provider.id === nbiConfig.chatModel.provider
-        );
-  };
-
-  const [ghLoginRequired, setGHLoginRequired] = useState(getGHLoginRequired());
-  const [chatEnabled, setChatEnabled] = useState(getChatEnabled());
+  const [ghLoginRequired, setGHLoginRequired] = useState(
+    NBIAPI.getGHLoginRequired()
+  );
+  const [chatEnabled, setChatEnabled] = useState(NBIAPI.getChatEnabled());
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
-      setGHLoginRequired(getGHLoginRequired());
-      setChatEnabled(getChatEnabled());
+      setGHLoginRequired(NBIAPI.getGHLoginRequired());
+      setChatEnabled(NBIAPI.getChatEnabled());
     });
   }, []);
 
   useEffect(() => {
-    setGHLoginRequired(getGHLoginRequired());
-    setChatEnabled(getChatEnabled());
+    setGHLoginRequired(NBIAPI.getGHLoginRequired());
+    setChatEnabled(NBIAPI.getChatEnabled());
   }, [ghLoginStatus]);
 
   return (
@@ -1988,7 +2009,9 @@ function SidebarComponent(props: any) {
                 {renderCount > 0 &&
                   mcpServerEnabledState.size > 0 &&
                   toolConfigRef.current.mcpServers.length > 0 && (
-                    <div className="mode-tools-group-header">MCP Servers</div>
+                    <div className="mode-tools-group-header">
+                      MCP Server Tools
+                    </div>
                   )}
                 {renderCount > 0 &&
                   toolConfigRef.current.mcpServers
@@ -2508,6 +2531,79 @@ function GitHubCopilotLoginDialogBodyComponent(props: any) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+export class FormInputDialogBody extends ReactWidget {
+  constructor(options: { fields: any; onDone: (formData: any) => void }) {
+    super();
+
+    this._fields = options.fields || [];
+    this._onDone = options.onDone || (() => {});
+  }
+
+  render(): JSX.Element {
+    return (
+      <FormInputDialogBodyComponent
+        fields={this._fields}
+        onDone={this._onDone}
+      />
+    );
+  }
+
+  private _fields: any;
+  private _onDone: (formData: any) => void;
+}
+
+function FormInputDialogBodyComponent(props: any) {
+  const [formData, setFormData] = useState<any>({});
+
+  const handleInputChange = (event: any) => {
+    setFormData({ ...formData, [event.target.name]: event.target.value });
+  };
+
+  return (
+    <div className="form-input-dialog-body">
+      <div className="form-input-dialog-body-content">
+        <div className="form-input-dialog-body-content-title">
+          {props.title}
+        </div>
+        <div className="form-input-dialog-body-content-fields">
+          {props.fields.map((field: any) => (
+            <div
+              className="form-input-dialog-body-content-field"
+              key={field.name}
+            >
+              <label
+                className="form-input-dialog-body-content-field-label jp-mod-styled"
+                htmlFor={field.name}
+              >
+                {field.name}
+                {field.required ? ' (required)' : ''}
+              </label>
+              <input
+                className="form-input-dialog-body-content-field-input jp-mod-styled"
+                type={field.type}
+                id={field.name}
+                name={field.name}
+                onChange={handleInputChange}
+                value={formData[field.name] || ''}
+              />
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ marginTop: '10px' }}>
+            <button
+              className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+              onClick={() => props.onDone(formData)}
+            >
+              <div className="jp-Dialog-buttonLabel">Done</div>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
