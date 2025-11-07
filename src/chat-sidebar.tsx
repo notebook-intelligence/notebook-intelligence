@@ -20,7 +20,6 @@ import {
   BackendMessageType,
   BuiltinToolsetType,
   ContextType,
-  GITHUB_COPILOT_PROVIDER_ID,
   IActiveDocumentInfo,
   ICellContents,
   IChatCompletionResponseEmitter,
@@ -1093,25 +1092,22 @@ function SidebarComponent(props: any) {
 
   useEffect(() => {
     const prefixes: string[] = [];
-    if (chatMode !== 'ask') {
-      prefixes.push('/clear');
-      setOriginalPrefixes(prefixes);
-      setPrefixSuggestions(prefixes);
-      return;
-    }
+    prefixes.push('/clear');
 
-    const chatParticipants = NBIAPI.config.chatParticipants;
-    for (const participant of chatParticipants) {
-      const id = participant.id;
-      const commands = participant.commands;
-      const participantPrefix = id === 'default' ? '' : `@${id}`;
-      if (participantPrefix !== '') {
-        prefixes.push(participantPrefix);
-      }
-      const commandPrefix =
-        participantPrefix === '' ? '' : `${participantPrefix} `;
-      for (const command of commands) {
-        prefixes.push(`${commandPrefix}/${command}`);
+    if (chatMode === 'ask') {
+      const chatParticipants = NBIAPI.config.chatParticipants;
+      for (const participant of chatParticipants) {
+        const id = participant.id;
+        const commands = participant.commands;
+        const participantPrefix = id === 'default' ? '' : `@${id}`;
+        if (participantPrefix !== '') {
+          prefixes.push(participantPrefix);
+        }
+        const commandPrefix =
+          participantPrefix === '' ? '' : `${participantPrefix} `;
+        for (const command of commands) {
+          prefixes.push(`${commandPrefix}/${command}`);
+        }
       }
     }
 
@@ -1750,34 +1746,21 @@ function SidebarComponent(props: any) {
     return `${activeDocumentInfo.filename}${cellAndLineIndicator}`;
   };
 
-  const nbiConfig = NBIAPI.config;
-  const getGHLoginRequired = () => {
-    return (
-      nbiConfig.usingGitHubCopilotModel &&
-      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
-    );
-  };
-  const getChatEnabled = () => {
-    return nbiConfig.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-      ? !getGHLoginRequired()
-      : nbiConfig.llmProviders.find(
-          provider => provider.id === nbiConfig.chatModel.provider
-        );
-  };
-
-  const [ghLoginRequired, setGHLoginRequired] = useState(getGHLoginRequired());
-  const [chatEnabled, setChatEnabled] = useState(getChatEnabled());
+  const [ghLoginRequired, setGHLoginRequired] = useState(
+    NBIAPI.getGHLoginRequired()
+  );
+  const [chatEnabled, setChatEnabled] = useState(NBIAPI.getChatEnabled());
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
-      setGHLoginRequired(getGHLoginRequired());
-      setChatEnabled(getChatEnabled());
+      setGHLoginRequired(NBIAPI.getGHLoginRequired());
+      setChatEnabled(NBIAPI.getChatEnabled());
     });
   }, []);
 
   useEffect(() => {
-    setGHLoginRequired(getGHLoginRequired());
-    setChatEnabled(getChatEnabled());
+    setGHLoginRequired(NBIAPI.getGHLoginRequired());
+    setChatEnabled(NBIAPI.getChatEnabled());
   }, [ghLoginStatus]);
 
   return (

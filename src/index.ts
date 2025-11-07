@@ -65,6 +65,7 @@ import {
 } from './tokens';
 import sparklesSvgstr from '../style/icons/sparkles.svg';
 import copilotSvgstr from '../style/icons/copilot.svg';
+import sparklesWarningSvgstr from '../style/icons/sparkles-warning.svg';
 
 import {
   applyCodeToSelectionInEditor,
@@ -143,6 +144,10 @@ export const sparkleIcon = new LabIcon({
   svgstr: sparklesSvgstr
 });
 
+const sparkleWarningIcon = new LabIcon({
+  name: 'notebook-intelligence:sparkles-warning-icon',
+  svgstr: sparklesWarningSvgstr
+});
 const emptyNotebookContent: any = {
   cells: [],
   metadata: {},
@@ -743,6 +748,26 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     panel.addWidget(sidebar);
     app.shell.add(panel, 'left', { rank: 1000 });
     app.shell.activateById(panel.id);
+
+    const updateSidebarIcon = () => {
+      if (NBIAPI.getChatEnabled()) {
+        panel.title.icon = sidebarIcon;
+      } else {
+        panel.title.icon = sparkleWarningIcon;
+      }
+    };
+
+    NBIAPI.githubLoginStatusChanged.connect((_, args) => {
+      updateSidebarIcon();
+    });
+
+    NBIAPI.configChanged.connect((_, args) => {
+      updateSidebarIcon();
+    });
+
+    setTimeout(() => {
+      updateSidebarIcon();
+    }, 2000);
 
     app.commands.addCommand(CommandIDs.chatuserInput, {
       execute: args => {
