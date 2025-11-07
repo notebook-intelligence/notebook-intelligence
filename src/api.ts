@@ -170,6 +170,30 @@ export class NBIAPI {
     return this._deviceVerificationInfo;
   }
 
+  static getGHLoginRequired() {
+    return (
+      this.config.usingGitHubCopilotModel &&
+      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
+    );
+  }
+
+  static getChatEnabled() {
+    return this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.chatModel.provider
+        );
+  }
+
+  static getInlineCompletionEnabled() {
+    return this.config.inlineCompletionModel.provider ===
+      GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.inlineCompletionModel.provider
+        );
+  }
+
   static async loginToGitHub() {
     this._loginStatus = GitHubCopilotLoginStatus.ActivatingDevice;
     return new Promise((resolve, reject) => {
