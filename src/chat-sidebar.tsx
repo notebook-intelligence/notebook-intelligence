@@ -33,6 +33,7 @@ import {
   TelemetryEventType
 } from './tokens';
 import { JupyterFrontEnd } from '@jupyterlab/application';
+import { LabIcon, closeIcon } from '@jupyterlab/ui-components';
 import { MarkdownRenderer as OriginalMarkdownRenderer } from './markdown-renderer';
 const MarkdownRenderer = memo(OriginalMarkdownRenderer);
 
@@ -55,6 +56,7 @@ import {
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
+import sendSvgstr from '../style/icons/send.svg';
 
 export enum RunChatCompletionType {
   Chat,
@@ -124,8 +126,14 @@ export interface IInlinePromptWidgetOptions {
   onContentStreamEnd: () => void;
   onUpdatedCodeChange: (content: string) => void;
   onUpdatedCodeAccepted: () => void;
+  onUpdatedCodeAcceptedAndRun: () => void;
   telemetryEmitter: ITelemetryEmitter;
 }
+
+const sendIcon = new LabIcon({
+  name: 'notebook-intelligence:send-icon',
+  svgstr: sendSvgstr
+});
 
 export class InlinePromptWidget extends ReactWidget {
   constructor(rect: DOMRect, options: IInlinePromptWidgetOptions) {
@@ -133,8 +141,8 @@ export class InlinePromptWidget extends ReactWidget {
 
     this.node.classList.add('inline-prompt-widget');
     this.node.style.top = `${rect.top + 32}px`;
-    this.node.style.left = `${rect.left}px`;
-    this.node.style.width = rect.width + 'px';
+    this.node.style.left = `${rect.left + 16}px`;
+    this.node.style.width = `${rect.width - 36}px`;
     this.node.style.height = '48px';
     this._options = options;
 
@@ -143,14 +151,14 @@ export class InlinePromptWidget extends ReactWidget {
         return;
       }
 
-      this._options.onRequestCancelled();
+      // this._options.onRequestCancelled();
     });
   }
 
   updatePosition(rect: DOMRect) {
     this.node.style.top = `${rect.top + 32}px`;
-    this.node.style.left = `${rect.left}px`;
-    this.node.style.width = rect.width + 'px';
+    this.node.style.left = `${rect.left + 16}px`;
+    this.node.style.width = `${rect.width - 36}px`;
   }
 
   _onResponse(response: any) {
@@ -181,7 +189,9 @@ export class InlinePromptWidget extends ReactWidget {
       });
     }
   }
-
+  _onRequestCancelled() {
+    this._options.onRequestCancelled();
+  }
   _onRequestSubmitted(prompt: string) {
     // code update
     if (this._options.existingCode !== '') {
@@ -215,6 +225,7 @@ export class InlinePromptWidget extends ReactWidget {
         suffix={this._options.suffix}
         onUpdatedCodeChange={this._options.onUpdatedCodeChange}
         onUpdatedCodeAccepted={this._options.onUpdatedCodeAccepted}
+        onUpdatedCodeAcceptedAndRun={this._options.onUpdatedCodeAcceptedAndRun}
       />
     );
   }
@@ -1810,7 +1821,7 @@ function SidebarComponent(props: any) {
             rows={3}
             onChange={onPromptChange}
             onKeyDown={onPromptKeyDown}
-            placeholder="Ask Notebook Intelligence..."
+            placeholder="Ask Softie..."
             spellCheck={false}
             value={prompt}
           />
@@ -2132,20 +2143,35 @@ function InlinePopoverComponent(props: any) {
 
   return (
     <div className="inline-popover">
-      <InlinePromptComponent
-        {...props}
-        onRequestSubmitted={onRequestSubmitted}
-        onResponseEmit={onResponseEmit}
-        onUpdatedCodeAccepted={props.onUpdatedCodeAccepted}
-        limitHeight={props.existingCode !== '' && promptSubmitted}
-      />
+      <div className={'inline-popover-container-wrapper'}>
+        <InlinePromptComponent
+          {...props}
+          onRequestSubmitted={onRequestSubmitted}
+          onResponseEmit={onResponseEmit}
+          onUpdatedCodeAccepted={props.onUpdatedCodeAccepted}
+          onUpdatedCodeAcceptedAndRun={props.onUpdatedCodeAcceptedAndRun}
+          limitHeight={props.existingCode !== '' && promptSubmitted}
+        />
+        <div
+          className={'inline-popover-send-icon'}
+          onClick={props.onRequestCancelled}
+        >
+          <LabIcon.resolveReact icon={sendIcon} tag="span" />
+        </div>
+        <div
+          className={'inline-popover-close-icon'}
+          onClick={props.onRequestCancelled}
+        >
+          <LabIcon.resolveReact icon={closeIcon} tag="span" />
+        </div>
+      </div>
       {props.existingCode !== '' && promptSubmitted && (
         <>
           <InlineDiffViewerComponent {...props} modifiedCode={modifiedCode} />
           <div className="inline-popover-footer">
             <div>
               <button
-                className="jp-Button jp-mod-accept jp-mod-styled jp-mod-small"
+                className="jp-Button jp-mod-styled jp-mod-small"
                 onClick={() => props.onUpdatedCodeAccepted()}
               >
                 Accept
@@ -2157,6 +2183,14 @@ function InlinePopoverComponent(props: any) {
                 onClick={() => props.onRequestCancelled()}
               >
                 Cancel
+              </button>
+            </div>
+            <div>
+              <button
+                className="jp-Button jp-mod-reject jp-mod-styled jp-mod-small"
+                onClick={() => props.onUpdatedCodeAcceptedAndRun()}
+              >
+                Accept & Run
               </button>
             </div>
           </div>
@@ -2177,11 +2211,11 @@ function InlineDiffViewerComponent(props: any) {
 
     const existingModel = monaco.editor.createModel(
       props.existingCode,
-      'text/plain'
+      'python'
     );
     const modifiedModel = monaco.editor.createModel(
       props.modifiedCode,
-      'text/plain'
+      'python'
     );
 
     const editor = monaco.editor.createDiffEditor(editorEl, {
@@ -2189,6 +2223,14 @@ function InlineDiffViewerComponent(props: any) {
       automaticLayout: true,
       theme: isDarkTheme() ? 'vs-dark' : 'vs'
     });
+
+    monaco.editor.defineTheme('my-diff-theme', {
+      base: isDarkTheme() ? 'vs-dark' : 'vs',
+      inherit: true,
+      rules: [],
+      colors: {}
+    });
+
     editor.setModel({
       original: existingModel,
       modified: modifiedModel
@@ -2285,10 +2327,10 @@ function InlinePromptComponent(props: any) {
     >
       <textarea
         ref={promptInputRef}
-        rows={3}
+        rows={1}
         onChange={onPromptChange}
         onKeyDown={onPromptKeyDown}
-        placeholder="Ask Notebook Intelligence to generate Python code..."
+        placeholder="Ask Softie to generate Python code..."
         spellCheck={false}
         value={prompt}
       />

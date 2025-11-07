@@ -28,7 +28,7 @@ import {
   IInlineCompletionProvider
 } from '@jupyterlab/completer';
 
-import { NotebookPanel } from '@jupyterlab/notebook';
+import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
@@ -611,7 +611,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     IDefaultFileBrowser,
     IEditorLanguageRegistry,
     ICommandPalette,
-    IMainMenu
+    IMainMenu,
+    INotebookTracker
   ],
   optional: [ISettingRegistry, IStatusBar],
   provides: INotebookIntelligence,
@@ -623,6 +624,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     languageRegistry: IEditorLanguageRegistry,
     palette: ICommandPalette,
     mainMenu: IMainMenu,
+    tracker: INotebookTracker,
     settingRegistry: ISettingRegistry | null,
     statusBar: IStatusBar | null
   ) => {
@@ -1449,8 +1451,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       const removePopover = () => {
         if (openPopover !== null) {
           removePositionListeners();
+          Widget.detach(openPopover);
           openPopover = null;
-          Widget.detach(inlinePrompt);
+          // Widget.detach(inlinePrompt);
         }
 
         if (isCodeCell) {
@@ -1535,6 +1538,11 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         onUpdatedCodeAccepted: () => {
           applyGeneratedCode();
           editor.focus();
+        },
+        onUpdatedCodeAcceptedAndRun: () => {
+          applyGeneratedCode();
+          editor.focus();
+          app.commands.execute('notebook:run-cell').then();
         },
         telemetryEmitter: telemetryEmitter
       });
@@ -1736,7 +1744,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     const copilotContextMenu = new Menu({ commands: copilotMenuCommands });
     copilotContextMenu.id = 'notebook-intelligence:editor-context-menu';
-    copilotContextMenu.title.label = 'Notebook Intelligence';
+    copilotContextMenu.title.label = 'Softie';
     copilotContextMenu.title.icon = sidebarIcon;
     copilotContextMenu.addItem({ command: CommandIDs.editorGenerateCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisCode });
@@ -1786,6 +1794,155 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     const jlabApp = app as JupyterLab;
     ActiveDocumentWatcher.initialize(jlabApp, languageRegistry);
+
+    /**
+     * Wait until the .cm-editor element exists inside a cell's host.
+     */
+    const waitForEditorDOM = (host: HTMLElement): Promise<HTMLElement> => {
+      return new Promise(resolve => {
+        const check = () => {
+          const editor = host.querySelector('.cm-editor') as HTMLElement;
+          if (editor) {
+            resolve(editor);
+          } else {
+            requestAnimationFrame(check);
+          }
+        };
+        check();
+      });
+    };
+
+    const addPlaceholder = async (cell: CodeCell, app: JupyterFrontEnd) => {
+      const host = cell.editor.host;
+
+      // Prevent duplicates
+      if (host.querySelector('.jp-intelligence-placeholder')) {
+        return;
+      }
+
+      // Wait until CodeMirror DOM is ready
+      const cmEditor = await waitForEditorDOM(host);
+
+      const overlay = document.createElement('div');
+      overlay.className = 'jp-intelligence-placeholder';
+      overlay.innerHTML =
+        'Start typing or&nbsp;<span class="jp-intelligence-generate-btn">generate</span>&nbsp;with AI (Ctrl + I) ...';
+
+      // Ensure editor host can position absolute children
+      host.style.position = 'relative';
+
+      Object.assign(overlay.style, {
+        position: 'absolute',
+        top: '6px',
+        left: '8px',
+        pointerEvents: 'auto',
+        zIndex: '5',
+        cursor: 'text' // makes it feel like an input field
+      });
+
+      cmEditor.appendChild(overlay);
+
+      // --- Handle clicks ---
+      const generateBtn = overlay.querySelector(
+        '.jp-intelligence-generate-btn'
+      );
+
+      // Clicking anywhere except the button focuses the editor
+      overlay.addEventListener('click', e => {
+        if (e.target === generateBtn) {
+          return;
+        } // skip button click
+        cell.editor.focus();
+      });
+
+      // Clicking the generate button triggers your AI command
+      generateBtn?.addEventListener('click', e => {
+        e.stopPropagation(); // don’t bubble to overlay
+        void app.commands.execute('notebook-intelligence:editor-generate-code');
+      });
+    };
+
+    const removePlaceholder = (cell: CodeCell) => {
+      const overlay = cell.editor.host.querySelector(
+        '.jp-intelligence-placeholder'
+      );
+      if (overlay) {
+        overlay.remove();
+      }
+    };
+
+    const attachPlaceholderListener = async (
+      notebook: any,
+      cell: CodeCell,
+      app: JupyterFrontEnd
+    ) => {
+      const editor = cell.editor;
+
+      // Whenever the user types, update placeholder
+      const update = async () => {
+        const content = editor.model.sharedModel.getSource().trim();
+        if (content) {
+          removePlaceholder(cell);
+        } else if (notebook.activeCell === cell) {
+          await addPlaceholder(cell, app);
+        }
+      };
+
+      // Initial state check
+      await update();
+
+      // Listen to typing
+      editor.model.sharedModel.changed.connect(update);
+    };
+
+    app.shell.currentChanged.connect((_, change) => {
+      const { newValue } = change;
+      if (!newValue || !(newValue instanceof NotebookPanel)) {
+        return;
+      }
+
+      const notebookPanel = newValue;
+
+      void notebookPanel.revealed.then(() => {
+        requestAnimationFrame(() => {
+          const notebook = notebookPanel.content;
+
+          // --- Helper to handle active cell changes
+          const handleActiveCellChange = async (_: any, cell: any | null) => {
+            // Remove placeholders from all other cells
+            notebook.widgets.forEach(widget =>
+              removePlaceholder(widget as CodeCell)
+            );
+
+            if (!cell || cell.model.type !== 'code') {
+              return;
+            }
+
+            const codeCell = cell as CodeCell;
+            const editor = codeCell.editor;
+            const content = editor.model.sharedModel.getSource();
+
+            if (!content.trim()) {
+              await addPlaceholder(codeCell, app);
+            }
+
+            // Ensure placeholder responds to typing in the active cell
+            await attachPlaceholderListener(notebook, codeCell, app);
+          };
+
+          // --- Initial active cell
+          void handleActiveCellChange(notebook, notebook.activeCell);
+
+          // --- When user switches cells
+          notebook.activeCellChanged.connect(handleActiveCellChange);
+
+          // --- Cleanup when notebook closed
+          notebook.disposed.connect(() => {
+            notebook.activeCellChanged.disconnect(handleActiveCellChange);
+          });
+        });
+      });
+    });
 
     return extensionService;
   }

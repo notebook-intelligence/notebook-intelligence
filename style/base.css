@@ -62,6 +62,7 @@
 .sidebar-user-input textarea {
   width: 100%;
   font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
   color: var(--jp-ui-font-color1);
   outline: none;
   border: none;
@@ -508,17 +509,51 @@ button.send-button {
   height: 24px;
 }
 
+.inline-popover-container-wrapper {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+
+  .inline-popover-close-icon {
+    position: absolute;
+    right: 16px;
+    cursor: pointer;
+  }
+
+  .inline-popover-send-icon {
+    position: absolute;
+    right: 48px;
+    cursor: pointer;
+  }
+}
+
 .inline-popover {
-  width: calc(100% - 6px);
-  height: calc(100% - 6px);
+  border-radius: 4px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
   display: flex;
   flex-direction: column;
   position: absolute;
   background-color: #f2f3ff;
+
+  .cmdr.line-insert {
+    background: #004903 !important;
+  }
+  .cdr.line-insert {
+    background: rgb(0 73 3 / 50%) !important;
+  }
+  .cmdr.line-delete {
+    background-color: rgb(255 0 0 / 45%) !important;
+  }
+  .cdr.line-delete {
+    background-color: rgb(255 0 0 / 25%);
+  }
 }
 
 body[data-jp-theme-light='false'] .inline-popover {
-  background-color: #14162b;
+  background-color: var(--jp-layout-color1);
 }
 
 .inline-prompt-container {
@@ -530,25 +565,29 @@ body[data-jp-theme-light='false'] .inline-popover {
 .monaco-editor-container {
   width: 100%;
   flex-grow: 1;
-  border: 1px solid var(--jp-border-color2);
+  border: 1px solid var(--jp-border-color0);
   border-left: none;
   border-right: none;
+  padding-top: 4px;
 }
 
 .inline-popover-footer {
-  height: 32px;
-  width: calc(100% - 6px);
+  width: calc(100% - 17px);
   display: flex;
   flex-direction: row;
-  gap: 5px;
+  gap: 12px;
   align-items: center;
-  padding-left: 5px;
-  background-color: var(--jp-layout-color2);
+  background-color: var(--jp-layout-color1);
+  padding: 12px 8px;
+  border-radius: 4px;
 }
 
 .inline-prompt-container textarea {
   width: calc(100% - 2px);
-  height: calc(100% - 2px);
+  height: 48px;
+  line-height: 44px;
+  box-sizing: border-box;
+  font-size: var(--jp-ui-font-size1);
   font-family: var(--jp-ui-font-family);
   color: var(--jp-ui-font-color1);
   resize: none;
@@ -559,7 +598,17 @@ body[data-jp-theme-light='false'] .inline-popover {
 
 .inline-popover-footer .jp-Button {
   height: 24px;
-  padding: 4px;
+  padding: 6px;
+  background: var(--jp-brand-color1);
+  font-size: var(--jp-ui-font-size1);
+  font-family: var(--jp-ui-font-family);
+  color: var(--jp-ui-font-color0);
+  line-height: 16px;
+  font-weight: 500;
+  border-radius: 4px;
+}
+.inline-popover-footer .jp-mod-reject {
+  background: transparent !important;
 }
 
 .github-copilot-status-bar {
@@ -660,6 +709,17 @@ body[data-jp-theme-light='false'] .inline-popover {
 }
 
 .inline-prompt-widget {
+  position: absolute;
+  border-radius: 4px;
+  padding: 1px;
+  z-index: 1000;
+  /* The first background fills inside the border */
+  /* The second background acts as the gradient border */
+  background: linear-gradient(5deg, #00ADB5 0%, #FFD900 100%);
+  border: 0;
+}
+
+/*.inline-prompt-widget {
   border-radius: 4px;
   padding: 3px;
   z-index: 1000;
@@ -678,15 +738,15 @@ body[data-jp-theme-light='false'] .inline-popover {
     #7c3ffe 350deg,
     #3b37ff 360deg
   );
-  /* stylelint-disable */
+  !* stylelint-disable *!
   left: -1px;
   right: -1px;
   top: -1px;
   bottom: -1px;
-  /* stylelint-enable */
+  !* stylelint-enable *!
   position: absolute;
   z-index: -1;
-}
+}*/
 
 /* stylelint-disable */
 .jp-InputArea-editor.generating {
@@ -903,4 +963,28 @@ svg.access-token-warning {
 .server-status-indicator.not-connected,
 .server-status-indicator.failed-to-connect {
   background-color: var(--jp-error-color1);
+}
+
+
+.jp-intelligence-placeholder {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+
+  color: #00ADB5;
+  font-size: 14px;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: -0.28px;
+
+  .jp-intelligence-generate-btn {
+    text-decoration-line: underline;
+    text-decoration-style: solid;
+    text-decoration-skip-ink: none;
+    text-decoration-thickness: auto;
+    text-underline-offset: auto;
+    text-underline-position: from-font;
+    cursor: pointer;
+  }
 }
