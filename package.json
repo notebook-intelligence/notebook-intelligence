@@ -1,6 +1,6 @@
 {
     "name": "@notebook-intelligence/notebook-intelligence",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "AI coding assistant for JupyterLab",
     "keywords": [
         "AI",
