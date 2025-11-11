@@ -47,7 +47,6 @@ import {
   VscEyeClosed,
   VscTriangleRight,
   VscTriangleDown,
-  VscSettingsGear,
   VscPassFilled,
   VscTools,
   VscTrash
@@ -57,6 +56,7 @@ import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 import sendSvgstr from '../style/icons/send.svg';
+import { sparkleIcon } from './index';
 
 export enum RunChatCompletionType {
   Chat,
@@ -310,7 +310,7 @@ function ChatResponseHTMLFrame(props: any) {
 function ChatResponse(props: any) {
   const [renderCount, setRenderCount] = useState(0);
   const msg: IChatMessage = props.message;
-  const timestamp = msg.date.toLocaleTimeString('en-US', { hour12: false });
+  // const timestamp = msg.date.toLocaleTimeString('en-US', { hour12: false });
 
   const openNotebook = (event: any) => {
     const notebookPath = event.target.dataset['ref'];
@@ -420,195 +420,197 @@ function ChatResponse(props: any) {
   };
 
   return (
-    <div
-      className={`chat-message chat-message-${msg.from}`}
-      data-render-count={renderCount}
-    >
-      <div className="chat-message-header">
-        <div className="chat-message-from">
-          {msg.participant?.iconPath && (
-            <div
-              className={`chat-message-from-icon ${msg.participant?.id === 'default' ? 'chat-message-from-icon-default' : ''} ${isDarkTheme() ? 'dark' : ''}`}
-            >
-              <img src={msg.participant.iconPath} />
+    <div className={'chat-message-wrapper'}>
+      <div
+        className={`chat-message chat-message-${msg.from}`}
+        data-render-count={renderCount}
+      >
+        <div className="chat-message-header">
+          <div className="chat-message-from">
+            {msg.participant?.iconPath && (
+              <div
+                className={`chat-message-from-icon ${msg.participant?.id === 'default' ? 'chat-message-from-icon-default' : ''} ${isDarkTheme() ? 'dark' : ''}`}
+              >
+                <img src={msg.participant.iconPath} />
+              </div>
+            )}
+            <div className="chat-message-from-title">
+              {msg.from === 'user' ? '' : msg.participant?.name || 'Softie AI'}
             </div>
-          )}
-          <div className="chat-message-from-title">
-            {msg.from === 'user'
-              ? 'User'
-              : msg.participant?.name || 'AI Assistant'}
+            <div
+              className="chat-message-from-progress"
+              style={{
+                display: `${props.showGenerating ? 'visible' : 'none'}`
+              }}
+            >
+              <div className="loading-ellipsis">Generating</div>
+            </div>
           </div>
-          <div
-            className="chat-message-from-progress"
-            style={{ display: `${props.showGenerating ? 'visible' : 'none'}` }}
-          >
-            <div className="loading-ellipsis">Generating</div>
-          </div>
+          {/*<div className="chat-message-timestamp">{timestamp}</div>*/}
         </div>
-        <div className="chat-message-timestamp">{timestamp}</div>
-      </div>
-      <div className="chat-message-content">
-        {groupedContents.map((item, index) => {
-          switch (item.type) {
-            case ResponseStreamDataType.Markdown:
-            case ResponseStreamDataType.MarkdownPart:
-              return (
-                <>
-                  {item.reasoningContent && (
-                    <div className="expandable-content">
-                      <div
-                        className="expandable-content-title"
-                        onClick={(event: any) => onExpandCollapseClick(event)}
-                      >
-                        <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
-                        <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {item.reasoningFinished
-                          ? 'Thought'
-                          : `Thinking (${Math.floor(item.reasoningTime)} s)`}
-                      </div>
-                      <div className="expandable-content-text">
-                        <MarkdownRenderer
-                          key={`key-${index}`}
-                          getApp={props.getApp}
-                          getActiveDocumentInfo={props.getActiveDocumentInfo}
+        <div className="chat-message-content">
+          {groupedContents.map((item, index) => {
+            switch (item.type) {
+              case ResponseStreamDataType.Markdown:
+              case ResponseStreamDataType.MarkdownPart:
+                return (
+                  <>
+                    {item.reasoningContent && (
+                      <div className="expandable-content">
+                        <div
+                          className="expandable-content-title"
+                          onClick={(event: any) => onExpandCollapseClick(event)}
                         >
-                          {item.reasoningContent}
-                        </MarkdownRenderer>
+                          <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
+                          <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
+                          {item.reasoningFinished
+                            ? 'Thought'
+                            : `Thinking (${Math.floor(item.reasoningTime)} s)`}
+                        </div>
+                        <div className="expandable-content-text">
+                          <MarkdownRenderer
+                            key={`key-${index}`}
+                            getApp={props.getApp}
+                            getActiveDocumentInfo={props.getActiveDocumentInfo}
+                          >
+                            {item.reasoningContent}
+                          </MarkdownRenderer>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  <MarkdownRenderer
-                    key={`key-${index}`}
-                    getApp={props.getApp}
-                    getActiveDocumentInfo={props.getActiveDocumentInfo}
-                  >
-                    {item.content}
-                  </MarkdownRenderer>
-                  {item.contentDetail ? (
-                    <div className="expandable-content">
-                      <div
-                        className="expandable-content-title"
-                        onClick={(event: any) => onExpandCollapseClick(event)}
-                      >
-                        <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
-                        <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {item.contentDetail.title}
-                      </div>
-                      <div className="expandable-content-text">
-                        <MarkdownRenderer
-                          key={`key-${index}`}
-                          getApp={props.getApp}
-                          getActiveDocumentInfo={props.getActiveDocumentInfo}
+                    )}
+                    <MarkdownRenderer
+                      key={`key-${index}`}
+                      getApp={props.getApp}
+                      getActiveDocumentInfo={props.getActiveDocumentInfo}
+                    >
+                      {item.content}
+                    </MarkdownRenderer>
+                    {item.contentDetail ? (
+                      <div className="expandable-content">
+                        <div
+                          className="expandable-content-title"
+                          onClick={(event: any) => onExpandCollapseClick(event)}
                         >
-                          {item.contentDetail.content}
-                        </MarkdownRenderer>
+                          <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
+                          <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
+                          {item.contentDetail.title}
+                        </div>
+                        <div className="expandable-content-text">
+                          <MarkdownRenderer
+                            key={`key-${index}`}
+                            getApp={props.getApp}
+                            getActiveDocumentInfo={props.getActiveDocumentInfo}
+                          >
+                            {item.contentDetail.content}
+                          </MarkdownRenderer>
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
-                </>
-              );
-            case ResponseStreamDataType.Image:
-              return (
-                <div className="chat-response-img" key={`key-${index}`}>
-                  <img src={item.content} />
-                </div>
-              );
-            case ResponseStreamDataType.HTMLFrame:
-              return (
-                <ChatResponseHTMLFrame
-                  index={index}
-                  source={item.content.source}
-                  height={item.content.height}
-                />
-              );
-            case ResponseStreamDataType.Button:
-              return (
-                <div className="chat-response-button" key={`key-${index}`}>
-                  <button
-                    className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-                    onClick={() =>
-                      runCommand(item.content.commandId, item.content.args)
-                    }
-                  >
-                    <div className="jp-Dialog-buttonLabel">
+                    ) : null}
+                  </>
+                );
+              case ResponseStreamDataType.Image:
+                return (
+                  <div className="chat-response-img" key={`key-${index}`}>
+                    <img src={item.content} />
+                  </div>
+                );
+              case ResponseStreamDataType.HTMLFrame:
+                return (
+                  <ChatResponseHTMLFrame
+                    index={index}
+                    source={item.content.source}
+                    height={item.content.height}
+                  />
+                );
+              case ResponseStreamDataType.Button:
+                return (
+                  <div className="chat-response-button" key={`key-${index}`}>
+                    <button
+                      className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+                      onClick={() =>
+                        runCommand(item.content.commandId, item.content.args)
+                      }
+                    >
+                      <div className="jp-Dialog-buttonLabel">
+                        {item.content.title}
+                      </div>
+                    </button>
+                  </div>
+                );
+              case ResponseStreamDataType.Anchor:
+                return (
+                  <div className="chat-response-anchor" key={`key-${index}`}>
+                    <a href={item.content.uri} target="_blank">
                       {item.content.title}
-                    </div>
-                  </button>
-                </div>
-              );
-            case ResponseStreamDataType.Anchor:
-              return (
-                <div className="chat-response-anchor" key={`key-${index}`}>
-                  <a href={item.content.uri} target="_blank">
-                    {item.content.title}
-                  </a>
-                </div>
-              );
-            case ResponseStreamDataType.Progress:
-              // show only if no more message available
-              return index === groupedContents.length - 1 ? (
-                <div className="chat-response-progress" key={`key-${index}`}>
-                  &#x2713; {item.content}
-                </div>
-              ) : null;
-            case ResponseStreamDataType.Confirmation:
-              return answeredForms.get(item.id) ===
-                'confirmed' ? null : answeredForms.get(item.id) ===
-                'canceled' ? (
-                <div>&#10006; Canceled</div>
-              ) : (
-                <div className="chat-confirmation-form" key={`key-${index}`}>
-                  {item.content.title ? (
-                    <div>
-                      <b>{item.content.title}</b>
-                    </div>
-                  ) : null}
-                  {item.content.message ? (
-                    <div>{item.content.message}</div>
-                  ) : null}
-                  <button
-                    className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-                    onClick={() => {
-                      markFormConfirmed(item.id);
-                      runCommand(
-                        'notebook-intelligence:chat-user-input',
-                        item.content.confirmArgs
-                      );
-                    }}
-                  >
-                    <div className="jp-Dialog-buttonLabel">
-                      {item.content.confirmLabel}
-                    </div>
-                  </button>
-                  <button
-                    className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-                    onClick={() => {
-                      markFormCanceled(item.id);
-                      runCommand(
-                        'notebook-intelligence:chat-user-input',
-                        item.content.cancelArgs
-                      );
-                    }}
-                  >
-                    <div className="jp-Dialog-buttonLabel">
-                      {item.content.cancelLabel}
-                    </div>
-                  </button>
-                </div>
-              );
-          }
-          return null;
-        })}
+                    </a>
+                  </div>
+                );
+              case ResponseStreamDataType.Progress:
+                // show only if no more message available
+                return index === groupedContents.length - 1 ? (
+                  <div className="chat-response-progress" key={`key-${index}`}>
+                    &#x2713; {item.content}
+                  </div>
+                ) : null;
+              case ResponseStreamDataType.Confirmation:
+                return answeredForms.get(item.id) ===
+                  'confirmed' ? null : answeredForms.get(item.id) ===
+                  'canceled' ? (
+                  <div>&#10006; Canceled</div>
+                ) : (
+                  <div className="chat-confirmation-form" key={`key-${index}`}>
+                    {item.content.title ? (
+                      <div>
+                        <b>{item.content.title}</b>
+                      </div>
+                    ) : null}
+                    {item.content.message ? (
+                      <div>{item.content.message}</div>
+                    ) : null}
+                    <button
+                      className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+                      onClick={() => {
+                        markFormConfirmed(item.id);
+                        runCommand(
+                          'notebook-intelligence:chat-user-input',
+                          item.content.confirmArgs
+                        );
+                      }}
+                    >
+                      <div className="jp-Dialog-buttonLabel">
+                        {item.content.confirmLabel}
+                      </div>
+                    </button>
+                    <button
+                      className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                      onClick={() => {
+                        markFormCanceled(item.id);
+                        runCommand(
+                          'notebook-intelligence:chat-user-input',
+                          item.content.cancelArgs
+                        );
+                      }}
+                    >
+                      <div className="jp-Dialog-buttonLabel">
+                        {item.content.cancelLabel}
+                      </div>
+                    </button>
+                  </div>
+                );
+            }
+            return null;
+          })}
 
-        {msg.notebookLink && (
-          <a
-            className="copilot-generated-notebook-link"
-            data-ref={msg.notebookLink}
-            onClick={openNotebook}
-          >
-            open notebook
-          </a>
-        )}
+          {msg.notebookLink && (
+            <a
+              className="copilot-generated-notebook-link"
+              data-ref={msg.notebookLink}
+              onClick={openNotebook}
+            >
+              open notebook
+            </a>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1173,12 +1175,12 @@ function SidebarComponent(props: any) {
     }
   };
 
-  const handleSettingsButtonClick = async () => {
+  /*const handleSettingsButtonClick = async () => {
     setShowModeTools(false);
     props
       .getApp()
       .commands.execute('notebook-intelligence:open-configuration-dialog');
-  };
+  };*/
 
   const handleChatToolsButtonClick = async () => {
     if (!showModeTools) {
@@ -1741,13 +1743,16 @@ function SidebarComponent(props: any) {
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <div className="sidebar-title">Notebook Intelligence</div>
-        <div
+        <div className="sidebar-title">
+          <LabIcon.resolveReact icon={sparkleIcon} tag="span" />
+          <span>Softie AI</span>
+        </div>
+        {/*<div
           className="user-input-footer-button"
           onClick={() => handleSettingsButtonClick()}
         >
           <VscSettingsGear />
-        </div>
+        </div>*/}
       </div>
       {!chatEnabled && !ghLoginRequired && (
         <div className="sidebar-login-info">
@@ -1790,7 +1795,7 @@ function SidebarComponent(props: any) {
         (chatMessages.length === 0 ? (
           <div className="sidebar-messages">
             <div className="sidebar-greeting">
-              Welcome! How can I assist you today?
+              <span>Welcome! How can I assist you today?</span>
             </div>
           </div>
         ) : (
@@ -1825,30 +1830,6 @@ function SidebarComponent(props: any) {
             spellCheck={false}
             value={prompt}
           />
-          {activeDocumentInfo?.filename && (
-            <div className="user-input-context-row">
-              <div
-                className={`user-input-context user-input-context-active-file ${contextOn ? 'on' : 'off'}`}
-              >
-                <div>{currentFileContextTitle}</div>
-                {contextOn ? (
-                  <div
-                    className="user-input-context-toggle"
-                    onClick={() => setContextOn(!contextOn)}
-                  >
-                    <VscEye title="Use as context" />
-                  </div>
-                ) : (
-                  <div
-                    className="user-input-context-toggle"
-                    onClick={() => setContextOn(!contextOn)}
-                  >
-                    <VscEyeClosed title="Don't use as context" />
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
           <div className="user-input-footer">
             {chatMode === 'ask' && (
               <div>
@@ -1862,6 +1843,30 @@ function SidebarComponent(props: any) {
                 >
                   @
                 </a>
+              </div>
+            )}
+            {activeDocumentInfo?.filename && (
+              <div className="user-input-context-row">
+                <div
+                  className={`user-input-context user-input-context-active-file ${contextOn ? 'on' : 'off'}`}
+                >
+                  <div>{currentFileContextTitle}</div>
+                  {contextOn ? (
+                    <div
+                      className="user-input-context-toggle"
+                      onClick={() => setContextOn(!contextOn)}
+                    >
+                      <VscEye title="Use as context" />
+                    </div>
+                  ) : (
+                    <div
+                      className="user-input-context-toggle"
+                      onClick={() => setContextOn(!contextOn)}
+                    >
+                      <VscEyeClosed title="Don't use as context" />
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             <div style={{ flexGrow: 1 }}></div>
@@ -2465,8 +2470,7 @@ function GitHubCopilotLoginDialogBodyComponent(props: any) {
           </div>
           <div>
             <h4>Privacy and terms</h4>
-            By using Notebook Intelligence with GitHub Copilot subscription you
-            agree to{' '}
+            By using Softie with GitHub Copilot subscription you agree to{' '}
             <a
               href="https://docs.github.com/en/copilot/responsible-use-of-github-copilot-features/responsible-use-of-github-copilot-chat-in-your-ide"
               target="_blank"

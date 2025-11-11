@@ -7,7 +7,7 @@ has_binder: false
 has_settings: true
 kind: server
 labextension_name: '@notebook-intelligence/notebook-intelligence'
-project_short_description: Notebook Intelligence extension for JupyterLab
+project_short_description: Softie extension for JupyterLab
 python_name: notebook_intelligence
 repository: https://github.com/notebook-intelligence/notebook-intelligence
 test: false

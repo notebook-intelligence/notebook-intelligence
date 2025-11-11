@@ -135,7 +135,7 @@ const githubCopilotIcon = new LabIcon({
   svgstr: copilotSvgstr
 });
 
-const sparkleIcon = new LabIcon({
+export const sparkleIcon = new LabIcon({
   name: 'notebook-intelligence:sparkles-icon',
   svgstr: sparklesSvgstr
 });
@@ -455,7 +455,7 @@ class NBIInlineCompletionProvider
   }
 
   get name(): string {
-    return 'Notebook Intelligence';
+    return 'Softie';
   }
 
   get identifier(): string {
@@ -482,7 +482,7 @@ class TelemetryEmitter implements ITelemetryEmitter {
 
     if (listenerName !== BACKEND_TELEMETRY_LISTENER_NAME) {
       console.warn(
-        `Notebook Intelligence telemetry listener '${listenerName}' registered. Make sure it is from a trusted source.`
+        `Softie telemetry listener '${listenerName}' registered. Make sure it is from a trusted source.`
       );
     }
 
@@ -495,7 +495,7 @@ class TelemetryEmitter implements ITelemetryEmitter {
 
     if (listenerAlreadyExists) {
       console.error(
-        `Notebook Intelligence telemetry listener '${listenerName}' already exists!`
+        `Softie telemetry listener '${listenerName}' already exists!`
       );
       return;
     }
@@ -603,7 +603,7 @@ class MCPConfigEditor {
  */
 const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
   id: '@notebook-intelligence/notebook-intelligence:plugin',
-  description: 'Notebook Intelligence',
+  description: 'Softie',
   autoStart: true,
   requires: [
     ICompletionProviderManager,
@@ -711,7 +711,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     const panel = new Panel();
     panel.id = 'notebook-intelligence-tab';
-    panel.title.caption = 'Notebook Intelligence';
+    panel.title.caption = 'Softie';
     const sidebarIcon = new LabIcon({
       name: 'ui-components:palette',
       svgstr: sparklesSvgstr
@@ -1252,7 +1252,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     let settingsWidget = createNewSettingsWidget();
 
     app.commands.addCommand(CommandIDs.openConfigurationDialog, {
-      label: 'Notebook Intelligence Settings',
+      label: 'Softie Settings',
       execute: args => {
         if (settingsWidget.isDisposed) {
           settingsWidget = createNewSettingsWidget();
@@ -1277,7 +1277,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     palette.addItem({
       command: CommandIDs.openConfigurationDialog,
-      category: 'Notebook Intelligence'
+      category: 'Softie'
     });
 
     mainMenu.settingsMenu.addGroup([

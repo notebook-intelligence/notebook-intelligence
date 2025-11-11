@@ -174,9 +174,9 @@ class AIServiceManager(Host):
 
     def register_telemetry_listener(self, listener: TelemetryListener) -> None:
         if listener.name in self.telemetry_listeners:
-            log.error(f"Notebook Intelligence telemetry listener '{listener.name}' already exists!")
+            log.error(f"Softie telemetry listener '{listener.name}' already exists!")
             return
-        log.warning(f"Notebook Intelligence telemetry listener '{listener.name}' registered. Make sure it is from a trusted source.")
+        log.warning(f"Softie telemetry listener '{listener.name}' registered. Make sure it is from a trusted source.")
         self.telemetry_listeners[listener.name] = listener
 
     def register_toolset(self, toolset: Toolset) -> None:

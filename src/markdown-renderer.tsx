@@ -8,16 +8,34 @@ import {
   oneLight,
   oneDark
 } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import {
-  VscNewFile,
-  VscInsert,
-  VscCopy,
-  VscNotebook,
-  VscAdd
-} from 'react-icons/vsc';
 import { JupyterFrontEnd } from '@jupyterlab/application';
 import { isDarkTheme } from './utils';
 import { IActiveDocumentInfo } from './tokens';
+import { LabIcon, copyIcon } from '@jupyterlab/ui-components';
+import insertAtCursorSvgstr from '../style/icons/insert-at-cursor.svg';
+import addBelowSvgstr from '../style/icons/add-below.svg';
+import addNewFileSvgstr from '../style/icons/add-new-file.svg';
+import addNewNotebookSvgstr from '../style/icons/add-new-notebook.svg';
+
+const insertAtCursorIcon = new LabIcon({
+  name: 'notebook-intelligence:insert-at-cursor',
+  svgstr: insertAtCursorSvgstr
+});
+
+const addBelowIcon = new LabIcon({
+  name: 'notebook-intelligence:add-below',
+  svgstr: addBelowSvgstr
+});
+
+const addNewFileIcon = new LabIcon({
+  name: 'notebook-intelligence:add-new-file',
+  svgstr: addNewFileSvgstr
+});
+
+const addNewNotebookIcon = new LabIcon({
+  name: 'notebook-intelligence:add-new-notebook',
+  svgstr: addNewNotebookSvgstr
+});
 
 type MarkdownRendererProps = {
   children: string;
@@ -85,41 +103,73 @@ export function MarkdownRenderer({
                   className="code-block-header-button"
                   onClick={() => handleCopyClick()}
                 >
-                  <VscCopy size={16} title="Copy to clipboard" />
-                  <span>Copy</span>
+                  <LabIcon.resolveReact
+                    icon={copyIcon}
+                    elementSize={'normal'}
+                    tag="div"
+                    className={'code-block-header-button-icon'}
+                    title="Copy to clipboard"
+                  />
                 </div>
                 <div
                   className="code-block-header-button"
                   onClick={() => handleInsertAtCursorClick()}
                 >
-                  <VscInsert size={16} title="Insert at cursor" />
+                  <LabIcon.resolveReact
+                    icon={insertAtCursorIcon}
+                    elementSize={'normal'}
+                    tag="div"
+                    className={'code-block-header-button-icon'}
+                    title="Insert at cursor"
+                  />
                 </div>
                 {isNotebook && (
                   <div
                     className="code-block-header-button"
                     onClick={() => handleAddCodeAsNewCell()}
                   >
-                    <VscAdd size={16} title="Add as new cell" />
+                    <LabIcon.resolveReact
+                      icon={addBelowIcon}
+                      elementSize={'normal'}
+                      tag="div"
+                      className={'code-block-header-button-icon'}
+                      title="Add as new cell"
+                    />
                   </div>
                 )}
                 <div
                   className="code-block-header-button"
                   onClick={() => handleCreateNewFileClick()}
                 >
-                  <VscNewFile size={16} title="New file" />
+                  <LabIcon.resolveReact
+                    icon={addNewFileIcon}
+                    elementSize={'normal'}
+                    tag="div"
+                    className={'code-block-header-button-icon'}
+                    title="New file"
+                  />
                 </div>
                 {language === 'python' && (
                   <div
                     className="code-block-header-button"
                     onClick={() => handleCreateNewNotebookClick()}
                   >
-                    <VscNotebook size={16} title="New notebook" />
+                    <LabIcon.resolveReact
+                      icon={addNewNotebookIcon}
+                      elementSize={'normal'}
+                      tag="div"
+                      className={'code-block-header-button-icon'}
+                      title="New notebook"
+                    />
                   </div>
                 )}
               </div>
               <SyntaxHighlighter
                 style={isDarkTheme() ? oneDark : oneLight}
                 PreTag="div"
+                customStyle={
+                  isDarkTheme() ? { background: 'var(--jp-layout-color1)' } : ''
+                }
                 language={language}
                 {...props}
               >
