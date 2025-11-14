@@ -35,6 +35,7 @@ class GetCapabilitiesHandler(APIHandler):
 
     @tornado.web.authenticated
     def get(self):
+        ai_service_manager.nbi_config.load()
         ai_service_manager.update_models_from_config()
         nbi_config = ai_service_manager.nbi_config
         llm_providers = ai_service_manager.llm_providers.values()
