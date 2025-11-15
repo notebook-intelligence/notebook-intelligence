@@ -8,6 +8,15 @@ from cryptography.fernet import Fernet
 import asyncio
 from tornado import ioloop
 
+_jupyter_root_dir: str = None
+
+def set_jupyter_root_dir(root_dir: str):
+    global _jupyter_root_dir
+    _jupyter_root_dir = root_dir
+
+def get_jupyter_root_dir() -> str:
+    return _jupyter_root_dir
+
 def extract_llm_generated_code(code: str) -> str:
         if code.endswith("```"):
             code = code[:-3]

@@ -22,7 +22,7 @@ from notebook_intelligence.api import BuiltinToolset, CancelToken, ChatMode, Cha
 from notebook_intelligence.ai_service_manager import AIServiceManager
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir
 from notebook_intelligence.context_factory import RuleContextFactory
 
 ai_service_manager: AIServiceManager = None
@@ -728,6 +728,7 @@ class NotebookIntelligence(ExtensionApp):
 
     def initialize_handlers(self):
         NotebookIntelligence.root_dir = self.serverapp.root_dir
+        set_jupyter_root_dir(NotebookIntelligence.root_dir)
         server_root_dir = os.path.expanduser(self.serverapp.web_app.settings["server_root_dir"])
         self.initialize_ai_service(server_root_dir)
         self._setup_handlers(self.serverapp.web_app)

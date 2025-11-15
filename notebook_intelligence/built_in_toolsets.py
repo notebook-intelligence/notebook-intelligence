@@ -4,6 +4,10 @@ from notebook_intelligence.api import ChatResponse, Toolset
 import logging
 import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
+from pathlib import Path
+import subprocess
+
+from notebook_intelligence.util import get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +197,345 @@ async def set_file_content(content: str, **args) -> str:
 
     return f"Set the file content"
 
+def _get_safe_path(path: str) -> Path:
+    """Validate and return a safe path within jupyter_root_dir.
+    
+    Args:
+        path: Relative or absolute path to validate
+        
+    Returns:
+        Resolved absolute Path object
+        
+    Raises:
+        ValueError: If path is outside jupyter_root_dir
+    """
+    jupyter_root_dir = get_jupyter_root_dir()
+    if jupyter_root_dir is None:
+        raise ValueError("Jupyter root directory is not set")
+
+    root_dir = Path(jupyter_root_dir).expanduser().resolve()
+    target_path = Path(path).expanduser()
+    
+    # If it's a relative path, make it relative to root_dir
+    if not target_path.is_absolute():
+        target_path = root_dir / target_path
+    
+    # Resolve to absolute path
+    target_path = target_path.resolve()
+    
+    # Check if target is within root directory
+    try:
+        target_path.relative_to(root_dir)
+    except ValueError:
+        raise ValueError(f"Path '{path}' is outside allowed directory '{jupyter_root_dir}'")
+    
+    return target_path
+
+@nbapi.tool
+async def search_files(
+    pattern: str,
+    directory: str = ".",
+    file_pattern: str = None,
+    **args
+) -> str:
+    """
+    Search for file content within all files matching a pattern in jupyter_root_dir.
+    Returns line matches with some context.
+
+    Args:
+        pattern: Glob pattern to search for files (e.g., "*.py", "**/*.txt")
+        directory: Directory to search in (relative to jupyter_root_dir, default is root)
+        file_pattern (optional): Additional glob pattern to filter files (e.g., "*.py").
+        content_pattern (optional): Text or regex pattern to search for inside files.
+        context_lines (optional): Lines of context around each match (default=2).
+    """
+    import re
+
+    jupyter_root_dir = get_jupyter_root_dir()
+    if jupyter_root_dir is None:
+        return "Error! Jupyter root directory is not set"
+
+    try:
+        search_dir = _get_safe_path(directory)
+        if not search_dir.exists():
+            return f"Directory '{directory}' does not exist"
+        
+        # Input arguments
+        content_pattern = args.get('content_pattern', None)
+        context_lines = int(args.get('context_lines', 2))
+        # Support backward-compatible defaulting, if called with only old pattern argument
+        main_pattern = pattern or "**/*"
+        # If file_pattern is provided, use it to restrict files further after applying main_pattern
+        matched_results = []
+        file_count = 0
+        match_count = 0
+
+        # Use the main pattern for initial search
+        files = [f for f in search_dir.glob(main_pattern) if f.is_file()]
+        # Further restrict by file_pattern if provided (matches basename)
+        if file_pattern:
+            files = [
+                f for f in files
+                if f.match(file_pattern) or f.name == file_pattern or f.match(str(search_dir / file_pattern))
+            ]
+        if not files:
+            pinfo = file_pattern if file_pattern else pattern
+            return f"No files found matching pattern '{pinfo}' in '{directory}'"
+
+        for file_path in files:
+            root_dir = Path(jupyter_root_dir).expanduser().resolve()
+            try:
+                rel_path = file_path.relative_to(root_dir)
+            except ValueError:
+                rel_path = file_path
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue  # skip unreadable files
+
+            file_has_match = False
+            if content_pattern:
+                # Compile as regex, fallback to plain string if invalid
+                try:
+                    content_re = re.compile(content_pattern)
+                except Exception:
+                    content_re = None
+
+                for idx, line in enumerate(lines):
+                    matched = False
+                    if content_re:
+                        if content_re.search(line):
+                            matched = True
+                    elif content_pattern in line:
+                        matched = True
+
+                    if matched:
+                        file_has_match = True
+                        match_count += 1
+                        # Show context around match
+                        start = max(0, idx - context_lines)
+                        end = min(len(lines), idx + context_lines + 1)
+                        context_block = ''.join(
+                            f"{i+1}: {lines[i]}" for i in range(start, end)
+                        )
+                        matched_results.append(f"File: {rel_path}\nMatch (line {idx+1}):\n{context_block}\n{'-'*32}")
+                if file_has_match:
+                    file_count += 1
+            else:
+                file_count += 1
+                matched_results.append(str(rel_path))
+
+        if content_pattern:
+            if matched_results:
+                return f"Found {match_count} match(es) in {file_count} file(s):\n" + "\n".join(matched_results)
+            else:
+                pinfo = file_pattern if file_pattern else pattern
+                return f"No matches found for pattern '{content_pattern}' in files matching '{pinfo}' in '{directory}'"
+        else:
+            pinfo = file_pattern if file_pattern else pattern
+            return f"Found {file_count} file(s) matching '{pinfo}':\n" + "\n".join(matched_results)
+    except Exception as e:
+        return f"Error searching files: {str(e)}"
+
+@nbapi.tool
+async def list_files(
+    directory: str = ".", 
+    recursive: bool = False, 
+    include_files: bool = True, 
+    include_dirs: bool = True, 
+    max_depth: int = 5, 
+    **args
+) -> str:
+    """List files and/or directories within a directory in jupyter_root_dir.
+
+    Args:
+        directory: Directory to list (relative to jupyter_root_dir, default is root)
+        recursive: Whether to list contents recursively (default False)
+        include_files: Whether to include files (default True)
+        include_dirs: Whether to include directories (default True)
+        max_depth: Maximum recursion depth (only applies if recursive=True, default 5)
+    """
+    try:
+        list_dir = _get_safe_path(directory)
+
+        if not list_dir.exists():
+            return f"Directory '{directory}' does not exist"
+
+        if not list_dir.is_dir():
+            return f"'{directory}' is not a directory"
+
+        items = []
+
+        def _scan_dir(current_dir, rel_path, depth):
+            nonlocal items
+            if depth > max_depth:
+                return
+            for item in sorted(current_dir.iterdir()):
+                item_relpath = rel_path / item.name
+                if item.is_dir():
+                    if include_dirs:
+                        items.append(f"[dir] {item_relpath}")
+                    if recursive:
+                        _scan_dir(item, item_relpath, depth + 1)
+                elif item.is_file():
+                    if include_files:
+                        items.append(f"[file] {item_relpath}")
+
+        _scan_dir(list_dir, Path(directory).resolve().relative_to(Path(".").resolve()), 1) if recursive else [
+            items.append(f"[{'dir' if item.is_dir() else 'file'}] {item.name}")
+            for item in sorted(list_dir.iterdir())
+            if (item.is_file() and include_files) or (item.is_dir() and include_dirs)
+        ]
+
+        if items:
+            return f"Contents of '{directory}':\n" + "\n".join(str(x) for x in items)
+        else:
+            return f"Directory '{directory}' is empty"
+    except Exception as e:
+        return f"Error listing files: {str(e)}"
+
+@nbapi.tool
+async def read_file(file_path: str, start_line: int = 1, end_line: int = -1, **args) -> str:
+    """Read lines from a file within jupyter_root_dir between start_line and end_line (inclusive).
+    
+    Args:
+        file_path: Path to the file (relative to jupyter_root_dir)
+        start_line: 1-based line number to start reading from (default = 1)
+        end_line: 1-based line number to stop reading at (inclusive, default = -1 for end of file)
+    """
+    try:
+        target_file = _get_safe_path(file_path)
+        
+        if not target_file.exists():
+            return f"File '{file_path}' does not exist"
+        if not target_file.is_file():
+            return f"'{file_path}' is not a file"
+        if start_line < 1:
+            return "start_line must be >= 1"
+        # Read all lines
+        with open(target_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        total_lines = len(lines)
+        # Adjust end_line for Python indexing
+        if end_line == -1 or end_line > total_lines:
+            end_line = total_lines
+        if end_line < start_line:
+            return f"end_line ({end_line}) must be >= start_line ({start_line})"
+        # Slice lines based on user input (start_line and end_line are 1-based and inclusive)
+        content_lines = lines[start_line-1:end_line]
+        content = "".join(content_lines)
+        return f"Content of '{file_path}' (lines {start_line}-{end_line}):\n{content}"
+    except UnicodeDecodeError:
+        return f"Error: File '{file_path}' is not a text file or uses an unsupported encoding"
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+@nbapi.tool
+async def insert_content(file_path: str, line_number: int, content: str, **args) -> str:
+    """Insert content at a specific line in a file within jupyter_root_dir.
+    
+    Args:
+        file_path: Path to the file (relative to jupyter_root_dir)
+        line_number: Line number to insert at (1-based, inserts before this line)
+        content: Content to insert
+    """
+    try:
+        target_file = _get_safe_path(file_path)
+        
+        if not target_file.exists():
+            return f"File '{file_path}' does not exist"
+        
+        if not target_file.is_file():
+            return f"'{file_path}' is not a file"
+        
+        # Read existing content
+        with open(target_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Validate line number
+        if line_number < 1 or line_number > len(lines) + 1:
+            return f"Invalid line number {line_number}. File has {len(lines)} lines"
+        
+        # Insert content (convert to 0-based index)
+        insert_index = line_number - 1
+        if not content.endswith('\n'):
+            content += '\n'
+        lines.insert(insert_index, content)
+        
+        # Write back to file
+        with open(target_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        
+        return f"Inserted content at line {line_number} in '{file_path}'"
+    except Exception as e:
+        return f"Error inserting content: {str(e)}"
+
+@nbapi.tool
+async def write_to_file(file_path: str, content: str, **args) -> str:
+    """Write content to a file within jupyter_root_dir (creates or overwrites).
+    
+    Args:
+        file_path: Path to the file (relative to jupyter_root_dir)
+        content: Content to write to the file
+    """
+    try:
+        target_file = _get_safe_path(file_path)
+        
+        # Create parent directories if they don't exist
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write content to file
+        with open(target_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return f"Wrote content to '{file_path}'"
+    except Exception as e:
+        return f"Error writing to file: {str(e)}"
+
+@nbapi.tool
+async def execute_command(command: str, working_directory: str = ".", **args) -> str:
+    """Execute a shell command within jupyter_root_dir.
+    
+    Args:
+        command: Shell command to execute
+        working_directory: Directory to execute command in (relative to jupyter_root_dir, default is root)
+    """
+    try:
+        work_dir = _get_safe_path(working_directory)
+        
+        if not work_dir.exists():
+            return f"Directory '{working_directory}' does not exist"
+        
+        if not work_dir.is_dir():
+            return f"'{working_directory}' is not a directory"
+        
+        # Execute command
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            timeout=30  # 30 second timeout
+        )
+        
+        output = []
+        if result.stdout:
+            output.append(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            output.append(f"STDERR:\n{result.stderr}")
+        output.append(f"Return code: {result.returncode}")
+        
+        return "\n\n".join(output)
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after 30 seconds"
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
+
+
+
 NOTEBOOK_EDIT_INSTRUCTIONS = """
 You are an assistant that creates and edits Jupyter notebooks. Notebooks are made up of source code cells and markdown cells. Markdown cells have source in markdown format and code cells have source in a specified programming language. If no programming language is specified, then use Python for the language of the code.
 
@@ -227,6 +570,30 @@ PYTHON_FILE_EDIT_INSTRUCTIONS = """
 If you need to create a new Python file use the create_new_python_file tool. If you need to edit an existing Python file use the get_file_content tool to get the content of the file and then use the set_file_content tool to set the content of the file.
 
 If user is referring to a file, then you can use the get_file_content tool to get the content of the file and then use the set_file_content tool to set the content of the file.
+"""
+
+FILE_READ_INSTRUCTIONS = """
+Use the file system tools to interact with files and directories inside Jupyter root directory.
+
+- Use list_files to view directory contents.
+- Use search_files to find files by pattern (e.g., "*.py" or "**/*.txt").
+- Use read_file to view specific file contents.
+
+Paths must be relative to the Jupyter root directory (e.g., "folder/file.txt").
+All operations are limited to this directory for security.
+"""
+
+FILE_EDIT_INSTRUCTIONS = """
+Use file editing tools within Jupyter root directory:
+
+- write_to_file to create or overwrite files.
+- insert_content to add content at a specific line.
+
+All changes are restricted to the root directory for safety.
+"""
+
+COMMAND_EXECUTE_INSTRUCTIONS = """
+Run shell commands with execute_command. All commands execute inside Jupyter root directory for security.
 """
 
 built_in_toolsets: dict[BuiltinToolset, Toolset] = {
@@ -271,5 +638,38 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
             set_file_content
         ],
         instructions=PYTHON_FILE_EDIT_INSTRUCTIONS
+    ),
+    BuiltinToolset.FileRead: Toolset(
+        id=BuiltinToolset.FileRead,
+        name="File read",
+        description="File system read operations within Jupyter root directory",
+        provider=None,
+        tools=[
+            search_files,
+            list_files,
+            read_file
+        ],
+        instructions=FILE_READ_INSTRUCTIONS
+    ),
+    BuiltinToolset.FileEdit: Toolset(
+        id=BuiltinToolset.FileEdit,
+        name="File edit",
+        description="File system write operations within Jupyter root directory",
+        provider=None,
+        tools=[
+            write_to_file,
+            insert_content
+        ],
+        instructions=FILE_EDIT_INSTRUCTIONS
+    ),
+    BuiltinToolset.CommandExecute: Toolset(
+        id=BuiltinToolset.CommandExecute,
+        name="Command execute",
+        description="Execute shell commands within Jupyter root directory",
+        provider=None,
+        tools=[
+            execute_command
+        ],
+        instructions=COMMAND_EXECUTE_INSTRUCTIONS
     ),
 }
