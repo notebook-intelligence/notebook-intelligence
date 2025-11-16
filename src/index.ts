@@ -32,7 +32,7 @@ import { NotebookPanel } from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
-import { IDefaultFileBrowser } from '@jupyterlab/filebrowser';
+import { FileBrowserModel, IDefaultFileBrowser } from '@jupyterlab/filebrowser';
 
 import { ContentsManager, KernelSpecManager } from '@jupyterlab/services';
 
@@ -160,7 +160,8 @@ const BACKEND_TELEMETRY_LISTENER_NAME = 'backend-telemetry-listener';
 class ActiveDocumentWatcher {
   static initialize(
     app: JupyterLab,
-    languageRegistry: IEditorLanguageRegistry
+    languageRegistry: IEditorLanguageRegistry,
+    fileBrowser: IDefaultFileBrowser
   ) {
     ActiveDocumentWatcher._languageRegistry = languageRegistry;
 
@@ -171,6 +172,13 @@ class ActiveDocumentWatcher {
     ActiveDocumentWatcher.activeDocumentInfo.activeWidget =
       app.shell.currentWidget;
     ActiveDocumentWatcher.handleWatchDocument();
+
+    if (fileBrowser) {
+      const onPathChanged = (model: FileBrowserModel) => {
+        ActiveDocumentWatcher.currentDirectory = model.path;
+      };
+      fileBrowser.model.pathChanged.connect(onPathChanged);
+    }
   }
 
   static watchDocument(widget: Widget) {
@@ -314,6 +322,8 @@ class ActiveDocumentWatcher {
       })
     );
   }
+
+  static currentDirectory: string = '';
 
   static activeDocumentInfo: IActiveDocumentInfo = {
     language: 'python',
@@ -724,6 +734,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
     panel.title.icon = sidebarIcon;
     const sidebar = new ChatSidebar({
+      getCurrentDirectory: (): string => {
+        return ActiveDocumentWatcher.currentDirectory;
+      },
       getActiveDocumentInfo: (): IActiveDocumentInfo => {
         return ActiveDocumentWatcher.activeDocumentInfo;
       },
@@ -1848,7 +1861,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     }
 
     const jlabApp = app as JupyterLab;
-    ActiveDocumentWatcher.initialize(jlabApp, languageRegistry);
+    ActiveDocumentWatcher.initialize(jlabApp, languageRegistry, defaultBrowser);
 
     return extensionService;
   }

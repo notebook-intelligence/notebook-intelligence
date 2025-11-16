@@ -571,6 +571,10 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 extension_tools=toolSelections.get('extensions', {})
             )
 
+            current_directory = data.get('currentDirectory', '')
+            if chat_mode.id == 'agent' and current_directory != '':
+                self.chat_history.add_message(chatId, {"role": "user", "content": f"Current directory open in Jupyter is: '{current_directory}'."})
+
             request_chat_history = self.chat_history.get_history(chatId).copy()
 
             token_limit = 100 if ai_service_manager.chat_model is None else ai_service_manager.chat_model.context_window

@@ -70,6 +70,7 @@ export interface IRunChatCompletionRequest {
   type: RunChatCompletionType;
   content: string;
   language?: string;
+  currentDirectory?: string;
   filename?: string;
   prefix?: string;
   suffix?: string;
@@ -80,6 +81,7 @@ export interface IRunChatCompletionRequest {
 }
 
 export interface IChatSidebarOptions {
+  getCurrentDirectory: () => string;
   getActiveDocumentInfo: () => IActiveDocumentInfo;
   getActiveSelectionContent: () => string;
   getCurrentCellContents: () => ICellContents;
@@ -99,6 +101,7 @@ export class ChatSidebar extends ReactWidget {
   render(): JSX.Element {
     return (
       <SidebarComponent
+        getCurrentDirectory={this._options.getCurrentDirectory}
         getActiveDocumentInfo={this._options.getActiveDocumentInfo}
         getActiveSelectionContent={this._options.getActiveSelectionContent}
         getCurrentCellContents={this._options.getCurrentCellContents}
@@ -616,6 +619,7 @@ async function submitCompletionRequest(
         request.chatId,
         request.content,
         request.language || 'python',
+        request.currentDirectory || '',
         request.filename || 'Untitled.ipynb',
         request.additionalContext || [],
         request.chatMode,
@@ -631,6 +635,7 @@ async function submitCompletionRequest(
         request.chatId,
         request.content,
         request.language || 'python',
+        request.currentDirectory || '',
         request.filename || 'Untitled.ipynb',
         [],
         'ask',
@@ -1311,6 +1316,7 @@ function SidebarComponent(props: any) {
         type: RunChatCompletionType.Chat,
         content: extractedPrompt,
         language: activeDocInfo.language,
+        currentDirectory: props.getCurrentDirectory(),
         filename: activeDocInfo.filePath,
         additionalContext,
         chatMode,
