@@ -757,7 +757,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
     panel.addWidget(sidebar);
-    app.shell.add(panel, 'left', { rank: 1000 });
+    app.shell.add(panel, 'right', { rank: 1000 });
     app.shell.activateById(panel.id);
 
     const updateSidebarIcon = () => {

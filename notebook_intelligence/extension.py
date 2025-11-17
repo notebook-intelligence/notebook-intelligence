@@ -573,7 +573,10 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
 
             current_directory = data.get('currentDirectory', '')
             if chat_mode.id == 'agent' and current_directory != '':
-                self.chat_history.add_message(chatId, {"role": "user", "content": f"Current directory open in Jupyter is: '{current_directory}'."})
+                current_directory_file_msg = f"Current directory open in Jupyter is: '{current_directory}'"
+                if filename != '':
+                    current_directory_file_msg += f" and current file is: '{filename}'"
+                self.chat_history.add_message(chatId, {"role": "user", "content": current_directory_file_msg})
 
             request_chat_history = self.chat_history.get_history(chatId).copy()
 
