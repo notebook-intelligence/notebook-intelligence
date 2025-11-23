@@ -61,18 +61,39 @@ class GitHubCopilotInlineCompletionModel(InlineCompletionModel):
 
 class GitHubCopilotLLMProvider(LLMProvider):
     def __init__(self):
+        # Context window values from:
+        # - GitHub Models API (https://models.github.ai/catalog/models) for GPT models
+        # - Official documentation (Claude, Gemini)
+        # - Conservative estimates for Copilot-exclusive models (Codex variants, Grok, Raptor)
         self._chat_models = [
-            GitHubCopilotChatModel(self, "gpt-5-mini", "GPT-5 mini", 128000, True),
-            GitHubCopilotChatModel(self, "gpt-4.1", "GPT-4.1", 128000, True),
-            GitHubCopilotChatModel(self, "gpt-4o", "GPT-4o", 128000, True),
-            GitHubCopilotChatModel(self, "o3-mini", "o3-mini", 200000, True),
-            GitHubCopilotChatModel(self, "gpt-5", "GPT-5", 128000, True),
-            GitHubCopilotChatModel(self, "claude-sonnet-4", "Claude Sonnet 4", 80000, True),
-            GitHubCopilotChatModel(self, "claude-3.7-sonnet", "Claude 3.7 Sonnet", 200000, True),
-            GitHubCopilotChatModel(self, "claude-3.5-sonnet", "Claude 3.5 Sonnet", 90000, True),
+            # Claude models (Anthropic documentation)
+            GitHubCopilotChatModel(self, "claude-haiku-4.5", "Claude Haiku 4.5", 80000, True),
+            # GitHubCopilotChatModel(self, "claude-opus-4.1", "Claude Opus 4.1", 128000, False), # fails
+            GitHubCopilotChatModel(self, "claude-sonnet-4", "Claude Sonnet 4", 128000, True), 
+            GitHubCopilotChatModel(self, "claude-sonnet-4.5", "Claude Sonnet 4.5", 128000, True),
+            
+            # Gemini models (Google documentation)
             GitHubCopilotChatModel(self, "gemini-2.5-pro", "Gemini 2.5 Pro", 128000, True),
-            GitHubCopilotChatModel(self, "gemini-2.0-flash-001", "Gemini 2.0 Flash", 1000000, False),
+            GitHubCopilotChatModel(self, "gemini-3-pro-preview", "Gemini 3 Pro (Preview)", 128000, True),
+            
+            # GPT models (verified via GitHub Models API)
+            GitHubCopilotChatModel(self, "gpt-4.1", "GPT-4.1", 1048576, True),  # 1M tokens
+            GitHubCopilotChatModel(self, "gpt-4o", "GPT-4o", 131072, True),  # 128K tokens
+            GitHubCopilotChatModel(self, "gpt-5", "GPT-5", 200000, True),
+            GitHubCopilotChatModel(self, "gpt-5-mini", "GPT-5 mini", 200000, True),
+            # Codex variants (conservative estimates - not in public API)
+            # GitHubCopilotChatModel(self, "gpt-5-codex", "GPT-5-Codex (Preview)", 128000, True), # fails
+            # GitHubCopilotChatModel(self, "gpt-5.1", "GPT-5.1 (Preview)", 128000, True), # fails
+            # GitHubCopilotChatModel(self, "gpt-5.1-codex", "GPT-5.1-Codex (Preview)", 128000, True), # fails
+            # GitHubCopilotChatModel(self, "gpt-5.1-codex-mini", "GPT-5.1-Codex-Mini (Preview)", 128000, True), # fails
+            
+            # # Other models (conservative estimates)
+            # GitHubCopilotChatModel(self, "grok-code-fast-1", "Grok Code Fast 1", 128000, True), # fails
+            # GitHubCopilotChatModel(self, "raptor-mini", "Raptor mini (Preview)", 128000, True), # fails
         ]
+        # self._inline_completion_model_raptor_mini = GitHubCopilotInlineCompletionModel(self, "raptor-mini", "Raptor mini (Preview)")
+        # self._inline_completion_model_grok_code_fast1 = GitHubCopilotInlineCompletionModel(self, "grok-code-fast-1", "Grok Code Fast 1")
+        self._inline_completion_model_claude_haiku = GitHubCopilotInlineCompletionModel(self, "claude-haiku-4.5", "Claude Haiku 4.5")
         self._inline_completion_model_gpt41 = GitHubCopilotInlineCompletionModel(self, "gpt-41-copilot", "GPT-4.1 Copilot")
         self._inline_completion_model_gpt4o = GitHubCopilotInlineCompletionModel(self, "gpt-4o-copilot", "GPT-4o Copilot")
         self._inline_completion_model_codex = GitHubCopilotInlineCompletionModel(self, "copilot-codex", "Copilot Codex")
@@ -91,7 +112,7 @@ class GitHubCopilotLLMProvider(LLMProvider):
     
     @property
     def inline_completion_models(self) -> list[InlineCompletionModel]:
-        return [self._inline_completion_model_gpt41, self._inline_completion_model_gpt4o, self._inline_completion_model_codex]
+        return [self._inline_completion_model_gpt41, self._inline_completion_model_gpt4o, self._inline_completion_model_codex, self._inline_completion_model_claude_haiku]
     
     @property
     def embedding_models(self) -> list[EmbeddingModel]:
