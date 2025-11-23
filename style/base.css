@@ -126,7 +126,7 @@
 
 .chat-mode-select {
   height: 24px;
-  background-color: initial;
+  background-color: var(--jp-layout-color1);
   color: var(--jp-ui-font-color1);
   padding: 0 5px;
   border-color: var(--jp-border-color0);
@@ -263,7 +263,7 @@ pre:has(.code-block-header) {
 }
 
 .chat-message-copilot {
-  background-color: rgb(159 153 208 / 15%);
+  background-color: var(--jp-brand-color3);
 }
 
 .copilot-generated-notebook-link {
@@ -514,11 +514,7 @@ button.send-button {
   display: flex;
   flex-direction: column;
   position: absolute;
-  background-color: #f2f3ff;
-}
-
-body[data-jp-theme-light='false'] .inline-popover {
-  background-color: #14162b;
+  background-color: var(--jp-layout-color0);
 }
 
 .inline-prompt-container {
