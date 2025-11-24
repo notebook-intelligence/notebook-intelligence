@@ -24,6 +24,7 @@ class RequestDataType(str, Enum):
     CancelChatRequest = 'cancel-chat-request'
     InlineCompletionRequest = 'inline-completion-request'
     CancelInlineCompletionRequest = 'cancel-inline-completion-request'
+    CodeCellErrorDebug = 'code-cell-error-debug'
 
 class BackendMessageType(str, Enum):
     StreamMessage = 'stream-message'

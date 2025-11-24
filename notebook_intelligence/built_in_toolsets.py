@@ -20,6 +20,93 @@ async def create_new_notebook(**args) -> str:
 
 @nbapi.auto_approve
 @nbapi.tool
+async def get_mlflow_experiments(**args) -> str:
+    """Get all the mlflow experiments.
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-experiments', {})
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
+async def get_experiment_details(experiment_id: str, **args) -> str:
+    """Get details of a specific MLflow experiment (creation date, run count, etc).
+
+    Args:
+        experiment_id: The MLflow experiment id
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-experiment-details', { 'experimentId': experiment_id })
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
+async def get_runs_today(experiment_id: str, **args) -> str:
+    """Get the list of runs created today in a given experiment.
+
+    Args:
+        experiment_id: The MLflow experiment id
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-runs-today', { 'experimentId': experiment_id })
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
+async def get_run_details(run_id: str, **args) -> str:
+    """Get the details of a run (parameters, metrics, model artifact names, deployment status).
+
+    Args:
+        run_id: The MLflow run id
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-run-details', { 'runId': run_id })
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
+async def get_best_run_in_experiment(experiment_id: str, metric_key: str = None, higher_is_better: bool = True, **args) -> str:
+    """Identify the best run in an experiment.
+
+    Args:
+        experiment_id: The MLflow experiment id
+        metric_key: Optional metric key to rank by (default picks a sensible metric like Test_f1score)
+        higher_is_better: Whether higher metric values are better (default True)
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-best-run-in-experiment', {
+        'experimentId': experiment_id,
+        'metricKey': metric_key,
+        'higherIsBetter': higher_is_better
+    })
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
+async def get_best_run_from_runs(runs_json: str, metric_key: str = None, higher_is_better: bool = True, **args) -> str:
+    """Identify the best run within the given list of runs.
+
+    Args:
+        runs_json: JSON string containing an array of MLflow run objects as returned by the API
+        metric_key: Optional metric key to rank by
+        higher_is_better: Whether higher metric values are better (default True)
+    """
+    response = args["response"]
+    try:
+        import json
+        runs = json.loads(runs_json)
+    except Exception:
+        # If not a JSON array already, pass through raw string and let frontend validate
+        runs = runs_json
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-mlflow-best-run-from-runs', {
+        'runs': runs,
+        'metricKey': metric_key,
+        'higherIsBetter': higher_is_better
+    })
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
 async def rename_notebook(new_name: str, **args) -> str: 
     """Renames the notebook.
     Args:
@@ -210,6 +297,8 @@ If you need to detect issues in a notebook check the code cell sources and also 
 
 After you are done making changes to the notebook, save the notebook using the save_notebook tool.
 
+If you are asked to list experiments in mlflow, use the get_mlflow_experiments tool.
+
 First create an execution plan and show before calling any tools. The execution plan should be a list of steps that you will take. Then call the tools to execute the plan.
 """
 
@@ -246,7 +335,13 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
             set_cell_type_and_source,
             delete_cell,
             insert_cell,
-            save_notebook
+            save_notebook,
+            get_mlflow_experiments,
+            get_experiment_details,
+            get_run_details,
+            get_runs_today,
+            get_best_run_in_experiment,
+            get_best_run_from_runs
         ],
         instructions=NOTEBOOK_EDIT_INSTRUCTIONS
     ),

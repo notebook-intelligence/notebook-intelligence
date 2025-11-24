@@ -416,6 +416,42 @@ export class NBIAPI {
     );
   }
 
+  static async codeCellErrorDebug(
+    chatId: string,
+    prompt: string,
+    prefix: string,
+    suffix: string,
+    existingCode: string,
+    issue: string,
+    language: string,
+    filename: string,
+    responseEmitter: IChatCompletionResponseEmitter
+  ) {
+    const messageId = UUID.uuid4();
+    this._messageReceived.connect((_, msg) => {
+      msg = JSON.parse(msg);
+      if (msg.id === messageId) {
+        responseEmitter.emit(msg);
+      }
+    });
+    this._webSocket.send(
+      JSON.stringify({
+        id: messageId,
+        type: RequestDataType.CodeCellErrorDebug,
+        data: {
+          chatId,
+          prompt,
+          prefix,
+          suffix,
+          existingCode,
+          issue,
+          language,
+          filename
+        }
+      })
+    );
+  }
+
   static async sendChatUserInput(messageId: string, data: any) {
     this._webSocket.send(
       JSON.stringify({

@@ -7,9 +7,18 @@ import {
 } from '@jupyterlab/application';
 
 import { IDocumentManager } from '@jupyterlab/docmanager';
-import { DocumentWidget, IDocumentWidget } from '@jupyterlab/docregistry';
+import {
+  DocumentRegistry,
+  DocumentWidget,
+  IDocumentWidget
+} from '@jupyterlab/docregistry';
 
-import { Dialog, ICommandPalette, MainAreaWidget } from '@jupyterlab/apputils';
+import {
+  Dialog,
+  ICommandPalette,
+  MainAreaWidget,
+  ToolbarButton
+} from '@jupyterlab/apputils';
 import { IMainMenu } from '@jupyterlab/mainmenu';
 
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
@@ -28,7 +37,7 @@ import {
   IInlineCompletionProvider
 } from '@jupyterlab/completer';
 
-import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
+import { INotebookTracker,INotebookModel, NotebookPanel } from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
@@ -40,6 +49,7 @@ import { LabIcon } from '@jupyterlab/ui-components';
 
 import { Menu, Panel, Widget } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
+import { DisposableDelegate } from '@lumino/disposable';
 import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
@@ -50,7 +60,7 @@ import {
   InlinePromptWidget,
   RunChatCompletionType
 } from './chat-sidebar';
-import { NBIAPI, GitHubCopilotLoginStatus } from './api';
+import { GitHubCopilotLoginStatus, NBIAPI } from './api';
 import {
   BackendMessageType,
   GITHUB_COPILOT_PROVIDER_ID,
@@ -105,6 +115,8 @@ namespace CommandIDs {
     'notebook-intelligence:editor-explain-this-output';
   export const editorTroubleshootThisOutput =
     'notebook-intelligence:editor-troubleshoot-this-output';
+  export const editorDebugCellError =
+    'notebook-intelligence:editor-debug-cell-error';
   export const openGitHubCopilotLoginDialog =
     'notebook-intelligence:open-github-copilot-login-dialog';
   export const openConfigurationDialog =
@@ -130,6 +142,18 @@ namespace CommandIDs {
     'notebook-intelligence:open-mcp-config-editor';
   export const showFormInputDialog =
     'notebook-intelligence:show-form-input-dialog';
+  export const getMlflowExperiments =
+    'notebook-intelligence:get-mlflow-experiments';
+  export const getMlflowExperimentDetails =
+    'notebook-intelligence:get-mlflow-experiment-details';
+  export const getMlflowRunsToday =
+    'notebook-intelligence:get-mlflow-runs-today';
+  export const getMlflowRunDetails =
+    'notebook-intelligence:get-mlflow-run-details';
+  export const getMlflowBestRunInExperiment =
+    'notebook-intelligence:get-mlflow-best-run-in-experiment';
+  export const getMlflowBestRunFromRuns =
+    'notebook-intelligence:get-mlflow-best-run-from-runs';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -1104,6 +1128,250 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    app.commands.addCommand(CommandIDs.getMlflowExperiments, {
+      execute: async args => {
+        const response = await fetch(
+          `${mlflowBase}/experiments/search?max_results=20000`
+        );
+        const data = await response.json();
+        const experiments = data.experiments || [];
+        return experiments
+          .map(
+            (exp: any) =>
+              `- Name: ${exp.name}, ID: ${exp.experiment_id}, Details: ${exp}`
+          )
+          .join('\n');
+      }
+    });
+
+    // MLflow helpers
+    const mlflowBase = process.env.TRACKING_URL + '/ajax-api/2.0/mlflow';
+
+    const searchRuns = async (payload: any): Promise<any[]> => {
+      const resp = await fetch(`${mlflowBase}/runs/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await resp.json();
+      return json.runs || [];
+    };
+
+    const getExperimentMap = async (): Promise<Record<string, any>> => {
+      const resp = await fetch(
+        `${mlflowBase}/experiments/search?max_results=20000`
+      );
+      const json = await resp.json();
+      const experiments = (json.experiments || []) as any[];
+      const map: Record<string, any> = {};
+      for (const e of experiments) map[e.experiment_id] = e;
+      return map;
+    };
+
+    const extractMetricValue = (run: any, metricKey: string): number | null => {
+      const metrics: any[] = run?.data?.metrics || [];
+      const m = metrics.find(mm => mm.key === metricKey);
+      return m ? Number(m.value) : null;
+    };
+
+    const chooseMetricKey = (
+      runs: any[],
+      preferred?: string
+    ): string | null => {
+      if (preferred) return preferred;
+      const common = ['Test_f1score', 'Test_accuracy', 'f1', 'accuracy'];
+      for (const k of common) {
+        if (
+          runs.some(r => (r?.data?.metrics || []).some((m: any) => m.key === k))
+        ) {
+          return k;
+        }
+      }
+      // fallback to first metric key if exists
+      const firstRunWithMetric = runs.find(
+        r => (r?.data?.metrics || []).length
+      );
+      return firstRunWithMetric ? firstRunWithMetric.data.metrics[0].key : null;
+    };
+
+    const bestRunFromRuns = (
+      runs: any[],
+      metricKey?: string,
+      higherIsBetter: boolean = true
+    ) => {
+      if (!runs.length) return null;
+      const key = chooseMetricKey(runs, metricKey || undefined);
+      if (!key) return null;
+      let best: any = null;
+      let bestVal: number | null = null;
+      for (const r of runs) {
+        const v = extractMetricValue(r, key);
+        if (v == null || Number.isNaN(v)) continue;
+        if (best == null) {
+          best = r;
+          bestVal = v;
+          continue;
+        }
+        if (
+          higherIsBetter ? v > (bestVal as number) : v < (bestVal as number)
+        ) {
+          best = r;
+          bestVal = v;
+        }
+      }
+      return { metricKey: key, run: best, metricValue: bestVal };
+    };
+
+    app.commands.addCommand(CommandIDs.getMlflowExperimentDetails, {
+      execute: async (args: any) => {
+        const experimentId = String(args.experimentId ?? '');
+        if (!experimentId) return { error: 'experimentId is required' };
+        const expMap = await getExperimentMap();
+        const exp = expMap[experimentId];
+        if (!exp) return { error: `Experiment ${experimentId} not found` };
+
+        const runs = await searchRuns({
+          experiment_ids: [experimentId],
+          run_view_type: 'ACTIVE_ONLY',
+          max_results: 10000,
+          order_by: ['attributes.start_time DESC']
+        });
+
+        return {
+          experiment: exp,
+          stats: {
+            run_count: runs.length,
+            creation_time: exp.creation_time,
+            last_update_time: exp.last_update_time
+          },
+          runs: runs
+        };
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.getMlflowRunsToday, {
+      execute: async (args: any) => {
+        const experimentId = String(args.experimentId ?? '');
+        if (!experimentId) return { error: 'experimentId is required' };
+        const now = new Date();
+        const startOfDay = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          0,
+          0,
+          0,
+          0
+        ).getTime();
+        const endOfDay = startOfDay + 24 * 60 * 60 * 1000 - 1;
+        const runs = await searchRuns({
+          experiment_ids: [experimentId],
+          run_view_type: 'ACTIVE_ONLY',
+          max_results: 10000,
+          order_by: ['attributes.start_time DESC']
+        });
+        const todays = runs.filter(r => {
+          const st = r?.info?.start_time ?? 0;
+          return st >= startOfDay && st <= endOfDay;
+        });
+        return { experiment_id: experimentId, runs: todays };
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.getMlflowRunDetails, {
+      execute: async (args: any) => {
+        const runId = String(args.runId ?? '');
+        if (!runId) return { error: 'runId is required' };
+        // Prefer runs/get API
+        let run: any = null;
+        try {
+          const resp = await fetch(
+            `${mlflowBase}/runs/get?run_id=${encodeURIComponent(runId)}`
+          );
+          const json = await resp.json();
+          run = json.run || null;
+        } catch (e) {
+          // Fallback: search for the run by id (less efficient)
+          const search = await searchRuns({
+            experiment_ids: [],
+            run_view_type: 'ALL',
+            max_results: 10000
+          });
+          run = search.find((r: any) => r?.info?.run_id === runId) || null;
+        }
+        if (!run) return { error: `Run ${runId} not found` };
+
+        // Extract model artifact names from tag "mlflow.log-model.history"
+        const tags: any[] = run?.data?.tags || [];
+        const modelTag = tags.find(t => t.key === 'mlflow.log-model.history');
+        let modelArtifacts: string[] = [];
+        if (modelTag && modelTag.value) {
+          try {
+            const history = JSON.parse(modelTag.value);
+            modelArtifacts = (history || []).map(
+              (h: any) => h.artifact_path || 'model'
+            );
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        // Deployment status: try a few common tags
+        const depTag =
+          tags.find(t => t.key === 'deployment_status') ||
+          tags.find(t => t.key === 'model_deployment_status') ||
+          null;
+        const deploymentStatus = depTag?.value || 'unknown';
+
+        return {
+          info: run.info,
+          params: run?.data?.params || [],
+          metrics: run?.data?.metrics || [],
+          tags: tags,
+          model_artifacts: modelArtifacts,
+          deployment_status: deploymentStatus
+        };
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.getMlflowBestRunInExperiment, {
+      execute: async (args: any) => {
+        const experimentId = String(args.experimentId ?? '');
+        const metricKey = args.metricKey as string | undefined;
+        const higherIsBetter =
+          args.higherIsBetter === undefined
+            ? true
+            : Boolean(args.higherIsBetter);
+        if (!experimentId) return { error: 'experimentId is required' };
+        const runs = await searchRuns({
+          experiment_ids: [experimentId],
+          run_view_type: 'ACTIVE_ONLY',
+          max_results: 10000,
+          order_by: ['attributes.start_time DESC']
+        });
+        const finished = runs.filter(r => r?.info?.status === 'FINISHED');
+        const best = bestRunFromRuns(
+          finished.length ? finished : runs,
+          metricKey,
+          higherIsBetter
+        );
+        return { experiment_id: experimentId, ...best };
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.getMlflowBestRunFromRuns, {
+      execute: async (args: any) => {
+        const runs = (args.runs as any[]) || [];
+        const metricKey = args.metricKey as string | undefined;
+        const higherIsBetter =
+          args.higherIsBetter === undefined
+            ? true
+            : Boolean(args.higherIsBetter);
+        const best = bestRunFromRuns(runs, metricKey, higherIsBetter);
+        return best;
+      }
+    });
+
     app.commands.addCommand(CommandIDs.addCodeCellToActiveNotebook, {
       execute: args => {
         if (!ensureANotebookIsActive()) {
@@ -1805,6 +2073,113 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    // Register the Debug command on the global app command registry so it can be invoked
+    // from toolbar buttons and elsewhere. The toolbar button calls app.commands.execute(...),
+    // so the command must exist here (not only on the local copilotMenuCommands registry).
+    app.commands.addCommand(CommandIDs.editorDebugCellError, {
+      execute: () => {
+        const np = app.shell.currentWidget as NotebookPanel;
+        const activeCell = np.content.activeCell;
+        if (!(activeCell instanceof CodeCell)) {
+          return;
+        }
+
+        // Gather context: failing code and its error/traceback
+        const issue = cellOutputAsText(activeCell as CodeCell);
+        const existingCode = activeCell.model.sharedModel.getSource();
+        const language = ActiveDocumentWatcher.activeDocumentInfo.language;
+        const filename = ActiveDocumentWatcher.activeDocumentInfo.filename;
+
+        // Visual feedback while generating (match existing styles used elsewhere)
+        const inputNode = activeCell.editorWidget?.node as HTMLElement | null;
+        inputNode?.classList.add('generating');
+
+        const chatId = UUID.uuid4();
+        const defaultPrompt =
+          'Fix the runtime error by minimally changing the code.';
+        let streamed = '';
+
+        NBIAPI.codeCellErrorDebug(
+          chatId,
+          defaultPrompt,
+          '',
+          '',
+          existingCode,
+          issue,
+          language,
+          filename,
+          {
+            emit: (response: any) => {
+              if (response.type === BackendMessageType.StreamMessage) {
+                const delta = response.data?.choices?.[0]?.delta;
+                const chunk = delta?.content as string;
+                if (chunk) {
+                  streamed += chunk;
+                }
+              } else if (response.type === BackendMessageType.StreamEnd) {
+                try {
+                  const updated = extractLLMGeneratedCode(streamed).trim();
+                  if (updated && updated !== existingCode) {
+                    activeCell.model.sharedModel.setSource(updated);
+                  }
+                } finally {
+                  inputNode?.classList.remove('generating');
+                }
+
+                // Emit basic telemetry for completion time (approximate)
+                telemetryEmitter.emitTelemetryEvent({
+                  type: TelemetryEventType.InlineChatResponse,
+                  data: {
+                    chatModel: {
+                      provider: NBIAPI.config.chatModel.provider,
+                      model: NBIAPI.config.chatModel.model
+                    }
+                  }
+                });
+              }
+            }
+          }
+        );
+
+        // Telemetry: request issued
+        telemetryEmitter.emitTelemetryEvent({
+          type: TelemetryEventType.TroubleshootThisOutputRequest,
+          data: {
+            chatModel: {
+              provider: NBIAPI.config.chatModel.provider,
+              model: NBIAPI.config.chatModel.model
+            }
+          }
+        });
+      },
+      label: 'Debug cell error with AI',
+      isEnabled: () => {
+        if (
+          !(isChatEnabled() && app.shell.currentWidget instanceof NotebookPanel)
+        ) {
+          return false;
+        }
+        const np = app.shell.currentWidget as NotebookPanel;
+        const activeCell = np.content.activeCell;
+        if (!(activeCell instanceof CodeCell)) {
+          return false;
+        }
+        const outputs = activeCell.outputArea.model.toJSON();
+        return (
+          Array.isArray(outputs) &&
+          outputs.length > 0 &&
+          outputs.some(output => output.output_type === 'error')
+        );
+      }
+    });
+
+    // New: Debug failing cell (send code + error to specialized backend flow) for context menu
+    copilotMenuCommands.addCommand(CommandIDs.editorDebugCellError, {
+      execute: () => app.commands.execute(CommandIDs.editorDebugCellError),
+      label: 'Debug cell error with AI',
+      isEnabled: () => app.commands.isEnabled(CommandIDs.editorDebugCellError)
+    });
+
     const copilotContextMenu = new Menu({ commands: copilotMenuCommands });
     copilotContextMenu.id = 'notebook-intelligence:editor-context-menu';
     copilotContextMenu.title.label = 'Softie';
@@ -1815,6 +2190,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisOutput });
     copilotContextMenu.addItem({
       command: CommandIDs.editorTroubleshootThisOutput
+    });
+    copilotContextMenu.addItem({
+      command: CommandIDs.editorDebugCellError
     });
 
     app.contextMenu.addItem({
@@ -1830,6 +2208,101 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       selector: '.jp-OutputArea-child',
       rank: 1
     });
+
+    app.docRegistry.addWidgetExtension(
+      'Notebook',
+      new (class
+        implements
+          DocumentRegistry.IWidgetExtension<NotebookPanel, INotebookModel>
+      {
+        createNew(panel: NotebookPanel) {
+          const btn = new ToolbarButton({
+            icon: sparkleWarningIcon,
+            label: 'Debug with AI',
+            tooltip: 'Debug cell error with AI',
+            onClick: () => {
+              // Delegate to the existing command that opens the inline popup
+              app.commands.execute(CommandIDs.editorDebugCellError);
+            }
+          });
+
+          // Insert near the other AI actions if present; fall back to end
+          try {
+            panel.toolbar.insertItem(10, 'ai-debug-cell', btn);
+          } catch {
+            panel.toolbar.addItem('ai-debug-cell', btn);
+          }
+
+          let outputsChangedDisconnect: (() => void) | null = null;
+
+          const update = () => {
+            const cell = panel.content.activeCell;
+            let hasError = false;
+            if (cell instanceof CodeCell) {
+              const outputs = cell.outputArea?.model?.toJSON?.() ?? [];
+              hasError =
+                Array.isArray(outputs) &&
+                outputs.some((o: any) => o.output_type === 'error');
+            }
+            const enabled = hasError && isChatEnabled();
+            // show/hide based on state; mirrors “only when there is error”
+            btn.node.style.display = enabled ? '' : 'none';
+            btn.enabled = enabled;
+          };
+
+          const connectOutputsChanged = () => {
+            // Disconnect previous
+            if (outputsChangedDisconnect) {
+              outputsChangedDisconnect();
+              outputsChangedDisconnect = null;
+            }
+            const cell = panel.content.activeCell;
+            if (cell instanceof CodeCell) {
+              const outputsModel = cell.outputArea?.model as any;
+              if (
+                outputsModel &&
+                outputsModel.changed &&
+                typeof outputsModel.changed.connect === 'function'
+              ) {
+                const onChanged = () => update();
+                outputsModel.changed.connect(onChanged);
+                outputsChangedDisconnect = () => {
+                  try {
+                    outputsModel.changed.disconnect(onChanged);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                };
+              }
+            }
+          };
+
+          // Update on active cell change and on outputs changes
+          panel.content.activeCellChanged.connect(() => {
+            connectOutputsChanged();
+            update();
+          });
+
+          // Initial wiring
+          connectOutputsChanged();
+          update();
+
+          panel.disposed.connect(() => {
+            if (outputsChangedDisconnect) {
+              outputsChangedDisconnect();
+            }
+            btn.dispose();
+          });
+
+          return new DisposableDelegate(() => {
+            if (outputsChangedDisconnect) {
+              outputsChangedDisconnect();
+            }
+            btn.dispose();
+          });
+        }
+      })()
+    );
 
     if (statusBar) {
       const githubCopilotStatusBarItem = new GitHubCopilotStatusBarItem({

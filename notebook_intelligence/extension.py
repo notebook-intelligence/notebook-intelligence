@@ -674,7 +674,46 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             if handlers is None:
                 return
             handlers.cancel_token.cancel_request()
- 
+        elif messageType == RequestDataType.CodeCellErrorDebug:
+            data = msg['data']
+            chatId = data['chatId']
+            prompt = data['prompt']
+            prefix = data['prefix']
+            suffix = data['suffix']
+            existing_code = data['existingCode']
+            issue = data['issue']
+            language = data['language']
+            filename = data['filename']
+            chat_mode = ChatMode('ask', 'Ask')
+            if prefix != '':
+                self.chat_history.add_message(chatId, {"role": "user",
+                                                       "content": f"This code section comes before the code section you will debug, use as context. Leading content: ```{prefix}```"})
+            if suffix != '':
+                self.chat_history.add_message(chatId, {"role": "user",
+                                                       "content": f"This code section comes after the code section you will debug, use as context. Trailing content: ```{suffix}```"})
+            if existing_code != '':
+                self.chat_history.add_message(chatId, {"role": "user",
+                                                       "content": f"There is an error with the execution of the following existing code: ```{existing_code}```\nPlease debug the code and fix the following issue: ```{issue}```"})
+            response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
+            cancel_token = CancelTokenImpl()
+            self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
+            existing_code_message = " Update the faulty code section and return a modified version. Don't just return the update, recreate the faulty code section with the update." if existing_code != '' else ''
+
+            # Create rule context for rule evaluation
+            # Note: Using 'inline-chat' mode for rule matching even though chat_mode is 'ask' for handler compatibility
+            rule_context = self._context_factory.create(
+                filename=filename,
+                language=language,
+                chat_mode_id='inline-chat',
+                root_dir=NotebookIntelligence.root_dir
+            )
+
+            thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(
+                ChatRequest(chat_mode=chat_mode, prompt=prompt, chat_history=self.chat_history.get_history(chatId),
+                            cancel_token=cancel_token, rule_context=rule_context), response_emitter, options={
+                    "system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response if no fixes are required in those places, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."}),))
+            thread.start()
+
     def on_close(self):
         pass
 

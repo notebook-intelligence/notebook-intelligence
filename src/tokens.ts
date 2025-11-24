@@ -25,7 +25,8 @@ export enum RequestDataType {
   GenerateCode = 'generate-code',
   CancelChatRequest = 'cancel-chat-request',
   InlineCompletionRequest = 'inline-completion-request',
-  CancelInlineCompletionRequest = 'cancel-inline-completion-request'
+  CancelInlineCompletionRequest = 'cancel-inline-completion-request',
+  CodeCellErrorDebug = 'code-cell-error-debug'
 }
 
 export enum BackendMessageType {

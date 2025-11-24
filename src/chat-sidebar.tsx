@@ -63,7 +63,8 @@ export enum RunChatCompletionType {
   FixThis,
   GenerateCode,
   ExplainThisOutput,
-  TroubleshootThisOutput
+  TroubleshootThisOutput,
+  DebugCellError
 }
 
 export interface IRunChatCompletionRequest {
@@ -662,6 +663,24 @@ async function submitCompletionRequest(
         request.filename || 'Untitled.ipynb',
         responseEmitter
       );
+    case RunChatCompletionType.DebugCellError: {
+      // For debugging a failing cell, send the failing code (existingCode) and the error/traceback (issue)
+      const defaultPrompt =
+        request.content && request.content.length > 0
+          ? 'Fix the runtime error by minimally changing the code.'
+          : 'Fix the issue by minimally changing the code.';
+      return NBIAPI.codeCellErrorDebug(
+        request.chatId,
+        defaultPrompt,
+        request.prefix || '',
+        request.suffix || '',
+        request.existingCode || '',
+        request.content || '', // issue
+        request.language || 'python',
+        request.filename || 'Untitled.ipynb',
+        responseEmitter
+      );
+    }
   }
 }
 
@@ -1606,6 +1625,9 @@ function SidebarComponent(props: any) {
           break;
         case RunChatCompletionType.TroubleshootThisOutput:
           message = `Troubleshoot errors reported in the notebook cell output: \n\`\`\`\n${request.content}\n\`\`\`\n`;
+          break;
+        case RunChatCompletionType.DebugCellError:
+          message = `Debug this failing code cell by fixing the reported error.\n\nCode:\n\`\`\`\n${request.existingCode || ''}\n\`\`\`\n\nError/Traceback:\n\`\`\`\n${request.content || ''}\n\`\`\`\n`;
           break;
       }
       const messageId = UUID.uuid4();
