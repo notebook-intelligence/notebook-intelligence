@@ -7,9 +7,9 @@ import {
 } from '@jupyterlab/application';
 
 import { IDocumentManager } from '@jupyterlab/docmanager';
-import { DocumentWidget } from '@jupyterlab/docregistry';
+import { DocumentWidget, IDocumentWidget } from '@jupyterlab/docregistry';
 
-import { Dialog, ICommandPalette } from '@jupyterlab/apputils';
+import { Dialog, ICommandPalette, MainAreaWidget } from '@jupyterlab/apputils';
 import { IMainMenu } from '@jupyterlab/mainmenu';
 
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
@@ -44,7 +44,7 @@ import { IStatusBar } from '@jupyterlab/statusbar';
 
 import {
   ChatSidebar,
-  ConfigurationDialogBody,
+  FormInputDialogBody,
   GitHubCopilotLoginDialogBody,
   GitHubCopilotStatusBarItem,
   InlinePromptWidget,
@@ -65,6 +65,7 @@ import {
 } from './tokens';
 import sparklesSvgstr from '../style/icons/sparkles.svg';
 import copilotSvgstr from '../style/icons/copilot.svg';
+import sparklesWarningSvgstr from '../style/icons/sparkles-warning.svg';
 
 import {
   applyCodeToSelectionInEditor,
@@ -80,6 +81,9 @@ import {
 } from './utils';
 import { UUID } from '@lumino/coreutils';
 
+import * as path from 'path';
+import { SettingsPanel } from './components/settings-panel';
+
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
   export const insertAtCursor = 'notebook-intelligence:insert-at-cursor';
@@ -87,6 +91,7 @@ namespace CommandIDs {
   export const createNewFile = 'notebook-intelligence:create-new-file';
   export const createNewNotebookFromPython =
     'notebook-intelligence:create-new-notebook-from-py';
+  export const renameNotebook = 'notebook-intelligence:rename-notebook';
   export const addCodeCellToNotebook =
     'notebook-intelligence:add-code-cell-to-notebook';
   export const addMarkdownCellToNotebook =
@@ -121,6 +126,10 @@ namespace CommandIDs {
     'notebook-intelligence:get-current-file-content';
   export const setCurrentFileContent =
     'notebook-intelligence:set-current-file-content';
+  export const openMCPConfigEditor =
+    'notebook-intelligence:open-mcp-config-editor';
+  export const showFormInputDialog =
+    'notebook-intelligence:show-form-input-dialog';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -135,6 +144,10 @@ const sparkleIcon = new LabIcon({
   svgstr: sparklesSvgstr
 });
 
+const sparkleWarningIcon = new LabIcon({
+  name: 'notebook-intelligence:sparkles-warning-icon',
+  svgstr: sparklesWarningSvgstr
+});
 const emptyNotebookContent: any = {
   cells: [],
   metadata: {},
@@ -511,6 +524,88 @@ class TelemetryEmitter implements ITelemetryEmitter {
   private _listeners: Set<ITelemetryListener> = new Set<ITelemetryListener>();
 }
 
+class MCPConfigEditor {
+  constructor(docManager: IDocumentManager) {
+    this._docManager = docManager;
+  }
+
+  async open() {
+    const contents = new ContentsManager();
+    const newJSONFile = await contents.newUntitled({
+      ext: '.json'
+    });
+    const mcpConfig = await NBIAPI.getMCPConfigFile();
+
+    try {
+      await contents.delete(this._tmpMCPConfigFilename);
+    } catch (error) {
+      // ignore
+    }
+
+    await contents.save(newJSONFile.path, {
+      content: JSON.stringify(mcpConfig, null, 2),
+      format: 'text',
+      type: 'file'
+    });
+    await contents.rename(newJSONFile.path, this._tmpMCPConfigFilename);
+    this._docWidget = this._docManager.openOrReveal(
+      this._tmpMCPConfigFilename,
+      'Editor'
+    );
+    this._addListeners();
+    // tab closed
+    this._docWidget.disposed.connect((_, args) => {
+      this._removeListeners();
+      contents.delete(this._tmpMCPConfigFilename);
+    });
+    this._isOpen = true;
+  }
+
+  close() {
+    if (!this._isOpen) {
+      return;
+    }
+    this._isOpen = false;
+    this._docWidget.dispose();
+    this._docWidget = null;
+  }
+
+  get isOpen(): boolean {
+    return this._isOpen;
+  }
+
+  private _addListeners() {
+    this._docWidget.context.model.stateChanged.connect(
+      this._onStateChanged,
+      this
+    );
+  }
+
+  private _removeListeners() {
+    this._docWidget.context.model.stateChanged.disconnect(
+      this._onStateChanged,
+      this
+    );
+  }
+
+  private _onStateChanged(model: any, args: any) {
+    if (args.name === 'dirty' && args.newValue === false) {
+      this._onSave();
+    }
+  }
+
+  private async _onSave() {
+    const mcpConfig = this._docWidget.context.model.toJSON();
+    await NBIAPI.setMCPConfigFile(mcpConfig);
+    await NBIAPI.fetchCapabilities();
+  }
+
+  private _docManager: IDocumentManager;
+  private _docWidget: IDocumentWidget = null;
+  private _tmpMCPConfigFilename = 'nbi.mcp.temp.json';
+  private _isOpen = false;
+}
+
 /**
  * Initialization data for the @notebook-intelligence/notebook-intelligence extension.
  */
@@ -564,6 +659,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     await NBIAPI.initialize();
 
     let openPopover: InlinePromptWidget | null = null;
+    let mcpConfigEditor: MCPConfigEditor | null = null;
 
     completionManager.registerInlineProvider(
       new NBIInlineCompletionProvider(telemetryEmitter)
@@ -623,7 +719,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     panel.id = 'notebook-intelligence-tab';
     panel.title.caption = 'Notebook Intelligence';
     const sidebarIcon = new LabIcon({
-      name: 'ui-components:palette',
+      name: 'notebook-intelligence:sidebar-icon',
       svgstr: sparklesSvgstr
     });
     panel.title.icon = sidebarIcon;
@@ -650,6 +746,26 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     panel.addWidget(sidebar);
     app.shell.add(panel, 'left', { rank: 1000 });
     app.shell.activateById(panel.id);
+
+    const updateSidebarIcon = () => {
+      if (NBIAPI.getChatEnabled()) {
+        panel.title.icon = sidebarIcon;
+      } else {
+        panel.title.icon = sparkleWarningIcon;
+      }
+    };
+
+    NBIAPI.githubLoginStatusChanged.connect((_, args) => {
+      updateSidebarIcon();
+    });
+
+    NBIAPI.configChanged.connect((_, args) => {
+      updateSidebarIcon();
+    });
+
+    setTimeout(() => {
+      updateSidebarIcon();
+    }, 2000);
 
     app.commands.addCommand(CommandIDs.chatuserInput, {
       execute: args => {
@@ -732,6 +848,39 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    app.commands.addCommand(CommandIDs.showFormInputDialog, {
+      execute: async args => {
+        const title = args.title as string;
+        const fields = args.fields;
+
+        return new Promise<any>((resolve, reject) => {
+          let dialog: Dialog<unknown> | null = null;
+          const dialogBody = new FormInputDialogBody({
+            fields: fields,
+            onDone: (formData: any) => {
+              dialog.dispose();
+              resolve(formData);
+            }
+          });
+          dialog = new Dialog({
+            title: title,
+            hasClose: true,
+            body: dialogBody,
+            buttons: []
+          });
+
+          dialog
+            .launch()
+            .then((result: any) => {
+              reject();
+            })
+            .catch(() => {
+              reject(new Error('Failed to show form input dialog'));
+            });
+        });
+      }
+    });
+
     app.commands.addCommand(CommandIDs.createNewNotebookFromPython, {
       execute: async args => {
         let pythonKernelSpec = null;
@@ -783,6 +932,33 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         await waitForFileToBeActive(newNBFile.path);
 
         return newNBFile;
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.renameNotebook, {
+      execute: async args => {
+        const activeWidget = app.shell.currentWidget;
+        if (activeWidget instanceof NotebookPanel) {
+          const oldPath = activeWidget.context.path;
+          const oldParentPath = path.dirname(oldPath);
+          let newPath = path.join(oldParentPath, args.newName as string);
+          if (path.extname(newPath) !== '.ipynb') {
+            newPath += '.ipynb';
+          }
+
+          if (path.dirname(newPath) !== oldParentPath) {
+            return 'Failed to rename notebook. New path is outside the old parent directory';
+          }
+
+          try {
+            await app.serviceManager.contents.rename(oldPath, newPath);
+            return 'Successfully renamed notebook';
+          } catch (error) {
+            return `Failed to rename notebook: ${error}`;
+          }
+        } else {
+          return 'Cannot rename non notebook files';
+        }
       }
     });
 
@@ -1114,25 +1290,47 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    const createNewSettingsWidget = () => {
+      const settingsPanel = new SettingsPanel({
+        onSave: () => {
+          NBIAPI.fetchCapabilities();
+        },
+        onEditMCPConfigClicked: () => {
+          app.commands.execute('notebook-intelligence:open-mcp-config-editor');
+        }
+      });
+
+      const widget = new MainAreaWidget({ content: settingsPanel });
+      widget.id = 'nbi-settings';
+      widget.title.label = 'NBI Settings';
+      widget.title.closable = true;
+
+      return widget;
+    };
+
+    let settingsWidget = createNewSettingsWidget();
+
     app.commands.addCommand(CommandIDs.openConfigurationDialog, {
       label: 'Notebook Intelligence Settings',
       execute: args => {
-        let dialog: Dialog<unknown> | null = null;
-        const dialogBody = new ConfigurationDialogBody({
-          onSave: () => {
-            dialog?.dispose();
-            NBIAPI.fetchCapabilities();
-          }
-        });
-        dialog = new Dialog({
-          title: 'Notebook Intelligence Settings',
-          hasClose: true,
-          body: dialogBody,
-          buttons: []
-        });
-        dialog.node.classList.add('config-dialog-container');
+        if (settingsWidget.isDisposed) {
+          settingsWidget = createNewSettingsWidget();
+        }
+        if (!settingsWidget.isAttached) {
+          app.shell.add(settingsWidget, 'main');
+        }
+        app.shell.activateById(settingsWidget.id);
+      }
+    });
 
-        dialog.launch();
+    app.commands.addCommand(CommandIDs.openMCPConfigEditor, {
+      label: 'Open MCP Config Editor',
+      execute: args => {
+        if (mcpConfigEditor && mcpConfigEditor.isOpen) {
+          mcpConfigEditor.close();
+        }
+        mcpConfigEditor = new MCPConfigEditor(docManager);
+        mcpConfigEditor.open();
       }
     });
 
@@ -1364,6 +1562,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         existingCode,
         prefix: prefix,
         suffix: suffix,
+        language: ActiveDocumentWatcher.activeDocumentInfo.language,
+        filename: ActiveDocumentWatcher.activeDocumentInfo.filePath,
         onRequestSubmitted: (prompt: string) => {
           userPrompt = prompt;
           generatedContent = '';

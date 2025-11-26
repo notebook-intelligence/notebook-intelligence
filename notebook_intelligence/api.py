@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, Union, Optional
 from dataclasses import asdict, dataclass
 from enum import Enum
 import uuid
@@ -11,6 +11,7 @@ import logging
 from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
+from notebook_intelligence.ruleset import RuleContext
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class BackendMessageType(str, Enum):
     StreamMessage = 'stream-message'
     StreamEnd = 'stream-end'
     RunUICommand = 'run-ui-command'
+    GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
+    MCPServerStatusChange = 'mcp-server-status-change'
 
 class ResponseStreamDataType(str, Enum):
     LLMRaw = 'llm-raw'
@@ -47,6 +50,17 @@ class BuiltinToolset(str, Enum):
     NotebookEdit = 'nbi-notebook-edit'
     NotebookExecute = 'nbi-notebook-execute'
     PythonFileEdit = 'nbi-python-file-edit'
+
+class MCPServerStatus(str, Enum):
+    NotConnected = 'not-connected'
+    Connecting = 'connecting'
+    Disconnecting = 'disconnecting'
+    FailedToConnect = 'failed-to-connect'
+    Connected = 'connected'
+    UpdatingToolList = 'updating-tool-list'
+    UpdatedToolList = 'updated-tool-list'
+    UpdatingPromptList = 'updating-prompt-list'
+    UpdatedPromptList = 'updated-prompt-list'
 
 class Signal:
     def __init__(self):
@@ -94,6 +108,8 @@ class ChatRequest:
     prompt: str = ''
     chat_history: list[dict] = None
     cancel_token: CancelToken = None
+    # NEW: Add context for rule evaluation
+    rule_context: Optional[RuleContext] = None
 
 @dataclass
 class ResponseStreamData:
@@ -104,6 +120,7 @@ class ResponseStreamData:
 @dataclass
 class MarkdownData(ResponseStreamData):
     content: str = ''
+    detail: dict = None
 
     @property
     def data_type(self) -> ResponseStreamDataType:
@@ -274,6 +291,7 @@ class ChatResponse:
 @dataclass
 class ToolPreInvokeResponse:
     message: str = None
+    detail: dict = None
     confirmationTitle: str = None
     confirmationMessage: str = None
 
@@ -369,15 +387,55 @@ class SimpleTool(Tool):
             fn_args.update({"request": request, "response": response})
         return await self._tool_function(**fn_args)
 
+class PromptArgument:
+    @property
+    def name(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def description(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def required(self) -> bool:
+        raise NotImplemented
+
+class MCPPrompt:
+    @property
+    def name(self) -> str:
+        raise NotImplemented
+
+    @property
+    def title(self) -> str:
+        raise NotImplemented
+    
+    @property
+    def description(self) -> str:
+        raise NotImplemented
+
+    @property
+    def arguments(self) -> list[PromptArgument]:
+        raise NotImplemented
+
+    def get_value(self, prompt_args: dict = {}) -> str:
+        raise NotImplemented
+
 class MCPServer:
     @property
     def name(self) -> str:
         return NotImplemented
+
+    @property
+    def status(self) -> MCPServerStatus:
+        return NotImplemented
     
-    async def connect(self):
+    def connect(self):
         return NotImplemented
 
-    async def disconnect(self):
+    def disconnect(self):
+        return NotImplemented
+
+    def update_tool_list(self):
         return NotImplemented
     
     def get_tools(self) -> list[Tool]:
@@ -386,7 +444,19 @@ class MCPServer:
     def get_tool(self, tool_name: str) -> Tool:
         return NotImplemented
 
-    async def call_tool(self, tool_name: str, tool_args: dict):
+    def call_tool(self, tool_name: str, tool_args: dict):
+        return NotImplemented
+
+    def update_prompts_list(self):
+        return NotImplemented
+
+    def get_prompts(self) -> list[MCPPrompt]:
+        return NotImplemented
+
+    def get_prompt(self, prompt_name: str) -> MCPPrompt:
+        return NotImplemented
+    
+    def get_prompt_value(self, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
         return NotImplemented
 
 def auto_approve(tool: SimpleTool):
@@ -534,7 +604,7 @@ class ChatParticipant:
                     tool_pre_invoke_response = tool_to_call.pre_invoke(request, args)
                     if tool_pre_invoke_response is not None:
                         if tool_pre_invoke_response.message is not None:
-                            response.stream(MarkdownData(f"&#x2713; {tool_pre_invoke_response.message}..."))
+                            response.stream(MarkdownData(f"&#x2713; {tool_pre_invoke_response.message}...", tool_pre_invoke_response.detail))
                         if tool_pre_invoke_response.confirmationMessage is not None:
                             response.stream(ConfirmationData(
                                 title=tool_pre_invoke_response.confirmationTitle,
@@ -770,10 +840,26 @@ class Host:
     def get_mcp_server_tool(self, server_name: str, tool_name: str) -> Tool:
         return NotImplemented
 
+    def get_mcp_server_prompt(self, server_name: str, prompt_name: str) -> MCPPrompt:
+        mcp_server = self.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt(prompt_name)
+        return None
+
+    def get_mcp_server_prompt_value(self, server_name: str, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
+        mcp_server = self.get_mcp_server(server_name)
+        if mcp_server is not None:
+            return mcp_server.get_prompt_value(prompt_name, prompt_args)
+        return None
+
     def get_extension_toolset(self, extension_id: str, toolset_id: str) -> Toolset:
         return NotImplemented
 
     def get_extension_tool(self, extension_id: str, toolset_id: str, tool_name: str) -> Tool:
+        return NotImplemented
+    
+    def get_rule_manager(self):
+        """Get the rule manager instance if available."""
         return NotImplemented
 
 class NotebookIntelligenceExtension:

@@ -2,25 +2,38 @@
 
 import asyncio
 from dataclasses import dataclass
-from datetime import timedelta
+import json
+import os
+from queue import Queue
 import threading
+import time
 from typing import Any, Union
-import anyio
-from mcp import ClientSession, StdioServerParameters, stdio_client
-from mcp.client.sse import sse_client
+import uuid
+from fastmcp.client import StdioTransport, StreamableHttpTransport
+from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
 from mcp.types import CallToolResult, TextContent, ImageContent
-from notebook_intelligence.api import ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPServer, MarkdownData, ProgressData, Tool, ToolPreInvokeResponse
+from tornado import ioloop
+from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPPrompt, MCPServer, MCPServerStatus, MarkdownData, ProgressData, PromptArgument, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
-from contextlib import AsyncExitStack
+from enum import Enum
+from fastmcp import Client
+
+from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
 log = logging.getLogger(__name__)
 
 MCP_ICON_SRC = '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'
 MCP_ICON_URL = f"data:image/png;base64,{MCP_ICON_SRC}"
-MCP_TOOL_TIMEOUT = 60
+MCP_SERVER_RESPONSE_TIMEOUT = float(os.getenv("NBI_MCP_SERVER_RESPONSE_TIMEOUT", "30"))
 
+class MCPServerEventType(str, Enum):
+    ListTools = 'list-tools'
+    CallTool = 'call-tool'
+    StopServer = 'stop-server'
+    ListPrompts = 'list-prompts'
+    GetPromptValue = 'get-prompt-value'
 
 class MCPTool(Tool):
     def __init__(self, server: 'MCPServer', name, description, schema, auto_approve=False):
@@ -65,7 +78,7 @@ class MCPTool(Tool):
         if not self._auto_approve:
             confirmationTitle = "Approve"
             confirmationMessage = "Are you sure you want to call this MCP tool?"
-        return ToolPreInvokeResponse(f"Calling MCP tool '{self.name}'", confirmationTitle, confirmationMessage)
+        return ToolPreInvokeResponse(f"Calling MCP tool '{self.name}'", detail={"title": "Parameters", "content": json.dumps(tool_args)}, confirmationTitle=confirmationTitle, confirmationMessage=confirmationMessage)
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         call_args = {}
@@ -75,8 +88,8 @@ class MCPTool(Tool):
                 call_args[key] = tool_args.get(key)
 
         try:
-            result = await self._server.call_tool(self.name, call_args)
-            if type(result) is CallToolResult:
+            result = self._server.call_tool(self.name, call_args)
+            if hasattr(result, "content") and isinstance(result.content, list):
                 if len(result.content) > 0:
                     text_contents = []
                     for content in result.content:
@@ -96,74 +109,288 @@ class MCPTool(Tool):
         except Exception as e:
             return f"Error occurred while calling MCP tool: {str(e)}"
 
-@dataclass
-class SSEServerParameters:
-    url: str
-    headers: dict[str, Any] | None = None
-
-class MCPServerImpl(MCPServer):
-    def __init__(self, name: str, stdio_params: StdioServerParameters = None, sse_params: SSEServerParameters = None, auto_approve_tools: list[str] = []):
-        self._name: str = name
-        self._stdio_params: StdioServerParameters = stdio_params
-        self._sse_params: SSEServerParameters = sse_params
-        self._auto_approve_tools: set[str] = set(auto_approve_tools)
-        self._tried_to_get_tool_list = False
-        self._mcp_tools = []
-        self._session = None
+class MCPPromptImpl(MCPPrompt):
+    def __init__(self, name: str, title: str, description: str, arguments: list[PromptArgument]):
+        self._name = name
+        self._title = title
+        self._description = description
+        self._arguments = arguments
 
     @property
     def name(self) -> str:
         return self._name
     
-    async def connect(self):
-        if self._session is not None:
-            return
-        self.exit_stack = AsyncExitStack()
+    @property
+    def title(self) -> str:
+        return self._title
+    
+    @property
+    def description(self) -> str:
+        return self._description
+    
+    @property
+    def arguments(self) -> list[PromptArgument]:
+        return self._arguments
 
-        try:
-            if self._stdio_params is None and self._sse_params is None:
-                raise ValueError("Either stdio_params or sse_params must be provided")
-            if self._stdio_params is not None:
-                self._transport = await self.exit_stack.enter_async_context(stdio_client(self._stdio_params))
-            else:
-                self._transport = await self.exit_stack.enter_async_context(sse_client(url=self._sse_params.url, headers=self._sse_params.headers))
-            self._read_stream, self._write_stream = self._transport
-            self._session = await self.exit_stack.enter_async_context(ClientSession(self._read_stream, self._write_stream, timedelta(seconds=MCP_TOOL_TIMEOUT)))
-            await self._session.initialize()
-            if not self._tried_to_get_tool_list:
-                await self._update_tool_list()
-                self._tried_to_get_tool_list = True
-        except Exception as e:
-            log.error(f"Error connecting to MCP server '{self.name}': {e}")
-            self._session = None
-            self.exit_stack = None
-            raise e
+class PromptArgumentImpl(PromptArgument):
+    def __init__(self, name: str, description: str, required: bool):
+        self._name = name
+        self._description = description
+        self._required = required
 
-    async def disconnect(self):
-        if self._session is None:
-            return
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @property
+    def description(self) -> str:
+        return self._description
+    
+    @property
+    def required(self) -> bool:
+        return self._required
 
-        await self.exit_stack.aclose()
-        self.exit_stack = None
+@dataclass
+class StreamableHttpServerParameters:
+    url: str
+    headers: dict[str, Any] | None = None
+
+class MCPServerImpl(MCPServer):
+    def __init__(self, manager: "MCPManager", name: str, stdio_params: StdioServerParameters = None, streamable_http_params: StreamableHttpServerParameters = None, auto_approve_tools: list[str] = []):
+        self._manager = manager
+        self._name: str = name
+        self._stdio_params: StdioServerParameters = stdio_params
+        self._streamable_http_params: StreamableHttpServerParameters = streamable_http_params
+        self._auto_approve_tools: set[str] = set(auto_approve_tools)
+        self._tried_to_get_tool_list = False
+        self._mcp_tools = []
+        self._mcp_prompts = []
         self._session = None
+        self._client = None
+        self._client_queue = None
+        self._client_thread_signal = None
+        self._client_thread = None
+        self._status = MCPServerStatus.NotConnected
+        self._tool_prompt_list_lock = threading.Lock()
+        self.connect()
 
-    async def _update_tool_list(self):
-        if self._session is None:
-            await self.connect()
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @property
+    def status(self) -> MCPServerStatus:
+        return self._status
 
-        response = await self._session.list_tools()
-        self._mcp_tools = response.tools
+    def is_connected(self):
+        return self._client_thread is not None
 
-    async def call_tool(self, tool_name: str, tool_args: dict):
+    def connect(self):
+        if self.is_connected():
+            return
+
+        self._set_status(MCPServerStatus.Connecting)
+        
+        self._client_queue = Queue()
+        self._client_thread_signal: SignalImpl = SignalImpl()
         try:
-            if self._session is None:
-                await self.connect()
-
-            result = await self._session.call_tool(tool_name, tool_args)
-            return result
+            self._client_thread = threading.Thread(
+                name="MCP Server Thread",
+                target=asyncio.run,
+                daemon=True,
+                args=(self._client_thread_func(),)
+            )
+            self._client_thread.start()
+            self._update_tool_and_prompt_list_async()
         except Exception as e:
-            log.error(f"Error calling tool '{tool_name}' on server '{self.name}': {e}")
-            return None
+            self._client_thread = None
+            log.error(f"Error occurred while connecting to MCP server: {str(e)}")
+            self._set_status(MCPServerStatus.FailedToConnect)
+
+    def disconnect(self):
+        if not self.is_connected():
+            return
+
+        self._set_status(MCPServerStatus.Disconnecting)
+
+        response = self._send_mcp_request(MCPServerEventType.StopServer)
+        if not response["success"]:
+            log.error(f"MCP server '{self.name}' failed to stop: {response['error']}")
+
+        self._set_status(MCPServerStatus.NotConnected)
+
+        self._client_queue = None
+        self._client_thread_signal = None
+        self._client_thread = None
+
+    def _update_tool_and_prompt_list_async(self):
+        thread = threading.Thread(target=self._update_tool_and_prompt_list, args=())
+        thread.start()
+    
+    def _update_tool_and_prompt_list(self):
+        with self._tool_prompt_list_lock:
+            self.update_tool_list()
+            self.update_prompts_list()
+    
+    def _set_status(self, status: MCPServerStatus):
+        self._status = status
+        if self._manager.websocket_connector is not None:
+            self._manager.websocket_connector.write_message({
+                "type": BackendMessageType.MCPServerStatusChange,
+                "data": {}
+            })
+
+    async def _client_thread_func(self):
+        try:
+            async with await self._get_client() as client:
+                self._set_status(MCPServerStatus.Connected)
+                while True:
+                    event = self._client_queue.get(block=True)
+                    event_id = event["id"]
+                    event_type = event["type"]
+                    if event_type == MCPServerEventType.ListTools:
+                        try:
+                            tool_list = await client.list_tools()
+                        except Exception as e:
+                            log.error(f"Error occurred while listing MCP tools: {str(e)}")
+                            tool_list = []
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": tool_list
+                            })
+                    elif event_type == MCPServerEventType.CallTool:
+                        try:
+                            result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
+                        except Exception as e:
+                            result = f"Error occurred while calling MCP tool {event['args']['tool_name']}: {str(e)}"
+                            log.error(result)
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": result
+                            })
+                    elif event_type == MCPServerEventType.StopServer:
+                        self._client_thread_signal.emit({
+                            "id": event_id,
+                            "data": "stopped"
+                        })
+                        return
+                    elif event_type == MCPServerEventType.ListPrompts:
+                        try:
+                            prompts = await client.list_prompts()
+                        except Exception as e:
+                            log.error(f"Error occurred while listing MCP prompts: {str(e)}")
+                            prompts = []
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": prompts
+                            })
+                    elif event_type == MCPServerEventType.GetPromptValue:
+                        try:
+                            prompt = await client.get_prompt(event["args"]["prompt_name"], event["args"]["prompt_args"])
+                        except Exception as e:
+                            prompt = None
+                            log.error(f"Error occurred while getting MCP prompt value {event['args']['prompt_name']}: {str(e)}")
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": prompt.messages
+                            })
+                    else:
+                        log.error(f"Unknown event type {event}")
+        except Exception as e:
+            self._client_thread = None
+            log.error(f"Error occurred while running MCP server thread: {str(e)}")
+            self._set_status(MCPServerStatus.FailedToConnect)
+
+    def _create_client(self) -> Client:
+        if self._stdio_params is not None:
+            return Client(transport=StdioTransport(
+                command=self._stdio_params.command,
+                args=self._stdio_params.args,
+                env=self._stdio_params.env
+            ))
+        elif self._streamable_http_params is not None:
+            return Client(transport=StreamableHttpTransport(
+                url=self._streamable_http_params.url,
+                headers=self._streamable_http_params.headers
+            ))
+
+    async def _get_client(self) -> Client:
+        if self._stdio_params is None and self._streamable_http_params is None:
+            raise ValueError("Failed to create MCP client. Either stdio_params or sse_params must be provided")
+        if self._client is None:
+            self._client = self._create_client()
+        else:
+            try:
+                async with self._client:
+                    await self._client.ping()
+            except Exception as e:
+                self._client = self._create_client()
+        return self._client
+
+    def _send_mcp_request(self, event_type: MCPServerEventType, event_args: dict = None):
+        event_id = uuid.uuid4().hex
+        event = {
+            "id": event_id,
+            "type": event_type,
+            "args": event_args,
+        }
+        self._client_queue.put(event)
+
+        resp = {"data": None}
+        def _on_client_response(data: dict):
+            if data['id'] == event_id:
+                resp["data"] = data['data']
+
+        self._client_thread_signal.connect(_on_client_response)
+
+        start_time = time.time()
+
+        while True:
+            if resp["data"] is not None:
+                self._client_thread_signal.disconnect(_on_client_response)
+                return {
+                    "data": resp["data"],
+                    "success": True,
+                    "error": None
+                }
+            if time.time() - start_time > MCP_SERVER_RESPONSE_TIMEOUT:
+                self._client_thread_signal.disconnect(_on_client_response)
+                return {
+                    "data": None,
+                    "success": False,
+                    "error": f"MCP server '{self.name}' response timeout"
+                }
+            time.sleep(0.1)
+
+    def update_tool_list(self):
+        if not self.is_connected():
+            return
+        self._set_status(MCPServerStatus.UpdatingToolList)
+        response = self._send_mcp_request(MCPServerEventType.ListTools)
+        if response["success"]:
+            self._mcp_tools = response["data"]
+        else:
+            log.error(f"MCP server '{self.name}' failed to update tool list: {response['error']}")
+        self._set_status(MCPServerStatus.UpdatedToolList)
+
+    def call_tool(self, tool_name: str, tool_args: dict):
+        if not self.is_connected():
+            return f"MCP server '{self.name}' is not connected"
+
+        response = self._send_mcp_request(MCPServerEventType.CallTool, {
+            "tool_name": tool_name,
+            "tool_args": tool_args
+        })
+
+        if response["success"]:
+            return response["data"]
+        else:
+            log.error(f"MCP server '{self.name}' failed to call tool: {response['error']}")
+            return response["error"]
 
     # TODO: optimize this
     def get_tools(self) -> list[Tool]:
@@ -174,6 +401,58 @@ class MCPServerImpl(MCPServer):
             if tool.name == tool_name:
                 return tool
         return None
+    
+    def update_prompts_list(self):
+        if not self.is_connected():
+            return
+        self._set_status(MCPServerStatus.UpdatingPromptList)
+        response = self._send_mcp_request(MCPServerEventType.ListPrompts)
+        if response["success"]:
+            self._mcp_prompts = response["data"]
+        else:
+            log.error(f"MCP server '{self.name}' failed to update prompts: {response['error']}")
+        self._set_status(MCPServerStatus.UpdatedPromptList)
+
+    def get_prompts(self) -> list[MCPPrompt]:
+        prompts = []
+        for prompt in self._mcp_prompts:
+            arguments = []
+            if prompt.arguments is not None:
+                for argument in prompt.arguments:
+                    arguments.append(PromptArgumentImpl(argument.name, argument.description, argument.required))
+            arguments.sort(key=lambda argument: argument.name)
+            prompts.append(MCPPromptImpl(prompt.name, prompt.title, prompt.description, arguments))
+        prompts.sort(key=lambda prompt: prompt.name)
+        return prompts
+
+    def get_prompt(self, prompt_name: str) -> MCPPrompt:
+        for prompt in self.get_prompts():
+            if prompt.name == prompt_name:
+                return prompt
+        return None
+
+    def get_prompt_value(self, prompt_name: str, prompt_args: dict = {}) -> list[dict]:
+        prompt = self.get_prompt(prompt_name)
+        if prompt is None:
+            log.error(f"MCP server '{self.name}' prompt '{prompt_name}' not found")
+            return None
+        # if prompt_args has keys that are not in prompt.arguments skip them
+        prompt_args = {k: v for k, v in prompt_args.items() if k in [argument.name for argument in prompt.arguments]}
+
+        response = self._send_mcp_request(MCPServerEventType.GetPromptValue, {
+            "prompt_name": prompt_name,
+            "prompt_args": prompt_args
+        })
+        if response["success"]:
+            messages = response["data"]
+            return [
+                {"role": message.role, "content": message.content.text}
+                for message in messages
+                if message.content.type == "text"
+            ]
+        else:
+            log.error(f"MCP server '{self.name}' failed to get prompt value: {response['error']}")
+            return None
 
 class MCPChatParticipant(BaseChatParticipant):
     def __init__(self, id: str, name: str, servers: list[MCPServer], nbi_tools: list[str] = []):
@@ -222,9 +501,6 @@ class MCPChatParticipant(BaseChatParticipant):
     async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         response.stream(ProgressData("Thinking..."))
 
-        for server in self._servers:
-            await server.connect()
-
         if request.command == "info":
             for server in self._servers:
                 info_lines = []
@@ -237,16 +513,29 @@ class MCPChatParticipant(BaseChatParticipant):
         else:
             await self.handle_chat_request_with_tools(request, response, options)
 
-        for server in self._servers:
-            await server.disconnect()
-
 class MCPManager:
     def __init__(self, mcp_config: dict):
+        self._websocket_connector: ThreadSafeWebSocketConnector = None
+        self._mcp_participants: list[MCPChatParticipant] = []
+        self._mcp_servers: list[MCPServer] = []
+        self.update_mcp_servers(mcp_config)
+
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return self._websocket_connector
+    
+    @websocket_connector.setter
+    def websocket_connector(self, _websocket_connector: ThreadSafeWebSocketConnector):
+        self._websocket_connector = _websocket_connector
+
+    def update_mcp_servers(self, mcp_config):
         # TODO: dont reuse servers, recreate with same config
         servers_config = mcp_config.get("mcpServers", {})
         participants_config = mcp_config.get("participants", {})
-        self._mcp_participants: list[MCPChatParticipant] = []
-        self._mcp_servers: list[MCPServer] = []
+        self._mcp_participants = []
+        for server in self._mcp_servers:
+            server.disconnect()
+        self._mcp_servers = []
 
         # parse MCP participants
         for participant_id in participants_config:
@@ -276,9 +565,6 @@ class MCPManager:
             nbi_tools = mcp_participant_config.get("nbiTools", [])
             self._mcp_participants.append(MCPChatParticipant("mcp", "MCP", unused_servers, nbi_tools))
             self._mcp_servers += unused_servers
-
-        thread = threading.Thread(target=self.init_tool_lists, args=())
-        thread.start()
 
     def create_servers(self, server_names: list[str], servers_config: dict):
         servers = []
@@ -313,7 +599,7 @@ class MCPManager:
                 server_env = mcp_get_default_environment()
                 server_env.update(env)
 
-            return MCPServerImpl(server_name, stdio_params=StdioServerParameters(
+            return MCPServerImpl(self, server_name, stdio_params=StdioServerParameters(
                 command = command,
                 args = args,
                 env = server_env
@@ -322,24 +608,18 @@ class MCPManager:
             server_url = server_config["url"]
             headers = server_config.get("headers", None)
 
-            return MCPServerImpl(server_name, sse_params=SSEServerParameters(url=server_url, headers=headers), auto_approve_tools=auto_approve_tools)
+            return MCPServerImpl(
+                self,
+                server_name,
+                streamable_http_params=StreamableHttpServerParameters(url=server_url, headers=headers),
+                auto_approve_tools=auto_approve_tools
+            )
 
         log.error(f"Invalid MCP server configuration for: {server_name}")
         return None
 
     def get_mcp_participants(self):
         return self._mcp_participants
-
-    async def init_tool_lists_async(self):
-        for server in self._mcp_servers:
-            try:
-                await server.connect()
-                await server.disconnect()
-            except Exception as e:
-                log.error(f"Error initializing tool list for server {server.name}: {e}")
-    
-    def init_tool_lists(self):
-        asyncio.run(self.init_tool_lists_async())
 
     def get_mcp_servers(self):
         return self._mcp_servers
@@ -349,3 +629,24 @@ class MCPManager:
             if server.name == server_name:
                 return server
         return None
+
+    def handle_stop_request(self):
+        for server in self._mcp_servers:
+            server.disconnect()
+
+    def update_mcp_server_connections(self, disabled_mcp_servers: list[str]):
+        for server in self._mcp_servers:
+            if server.name in disabled_mcp_servers:
+                server.disconnect()
+            else:
+                server.connect()
+
+    def connect_mcp_server(self, server_name: str):
+        server = self.get_mcp_server(server_name)
+        if server is not None:
+            server.connect()
+
+    def disconnect_mcp_server(self, server_name: str):
+        server = self.get_mcp_server(server_name)
+        if server is not None:
+            server.disconnect()

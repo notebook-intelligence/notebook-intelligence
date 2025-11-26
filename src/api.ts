@@ -12,10 +12,9 @@ import {
   IContextItem,
   ITelemetryEvent,
   IToolSelections,
-  RequestDataType
+  RequestDataType,
+  BackendMessageType
 } from './tokens';
-
-const LOGIN_STATUS_UPDATE_INTERVAL = 2000;
 
 export enum GitHubCopilotLoginStatus {
   NotLoggedIn = 'NOT_LOGGED_IN',
@@ -30,6 +29,14 @@ export interface IDeviceVerificationInfo {
 }
 
 export class NBIConfig {
+  get userHomeDir(): string {
+    return this.capabilities.user_home_dir;
+  }
+
+  get userConfigDir(): string {
+    return this.capabilities.nbi_user_config_dir;
+  }
+
   get llmProviders(): [any] {
     return this.capabilities.llm_providers;
   }
@@ -40,6 +47,10 @@ export class NBIConfig {
 
   get inlineCompletionModels(): [any] {
     return this.capabilities.inline_completion_models;
+  }
+
+  get defaultChatMode(): string {
+    return this.capabilities.default_chat_mode;
   }
 
   get chatModel(): any {
@@ -65,6 +76,28 @@ export class NBIConfig {
     return this.capabilities.tool_config;
   }
 
+  get mcpServers(): any {
+    return this.toolConfig.mcpServers;
+  }
+
+  getMCPServer(serverId: string): any {
+    return this.toolConfig.mcpServers.find(
+      (server: any) => server.id === serverId
+    );
+  }
+
+  getMCPServerPrompt(serverId: string, promptName: string): any {
+    const server = this.getMCPServer(serverId);
+    if (server) {
+      return server.prompts.find((prompt: any) => prompt.name === promptName);
+    }
+    return null;
+  }
+
+  get mcpServerSettings(): any {
+    return this.capabilities.mcp_server_settings;
+  }
+
   capabilities: any = {};
   chatParticipants: IChatParticipant[] = [];
 
@@ -81,16 +114,26 @@ export class NBIAPI {
   static _messageReceived = new Signal<unknown, any>(this);
   static config = new NBIConfig();
   static configChanged = this.config.changed;
+  static githubLoginStatusChanged = new Signal<unknown, void>(this);
 
   static async initialize() {
     await this.fetchCapabilities();
     this.updateGitHubLoginStatus();
 
-    setInterval(() => {
-      this.updateGitHubLoginStatus();
-    }, LOGIN_STATUS_UPDATE_INTERVAL);
-
     NBIAPI.initializeWebsocket();
+
+    this._messageReceived.connect((_, msg) => {
+      msg = JSON.parse(msg);
+      if (msg.type === BackendMessageType.MCPServerStatusChange) {
+        this.fetchCapabilities();
+      } else if (
+        msg.type === BackendMessageType.GitHubCopilotLoginStatusChange
+      ) {
+        this.updateGitHubLoginStatus().then(() => {
+          this.githubLoginStatusChanged.emit();
+        });
+      }
+    });
   }
 
   static async initializeWebsocket() {
@@ -125,6 +168,30 @@ export class NBIAPI {
 
   static getDeviceVerificationInfo(): IDeviceVerificationInfo {
     return this._deviceVerificationInfo;
+  }
+
+  static getGHLoginRequired() {
+    return (
+      this.config.usingGitHubCopilotModel &&
+      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
+    );
+  }
+
+  static getChatEnabled() {
+    return this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.chatModel.provider
+        );
+  }
+
+  static getInlineCompletionEnabled() {
+    return this.config.inlineCompletionModel.provider ===
+      GITHUB_COPILOT_PROVIDER_ID
+      ? !this.getGHLoginRequired()
+      : this.config.llmProviders.find(
+          provider => provider.id === this.config.inlineCompletionModel.provider
+        );
   }
 
   static async loginToGitHub() {
@@ -184,11 +251,21 @@ export class NBIAPI {
     return new Promise<void>((resolve, reject) => {
       requestAPI<any>('capabilities', { method: 'GET' })
         .then(data => {
+          const oldConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
           this.config.capabilities = structuredClone(data);
           this.config.chatParticipants = structuredClone(
             data.chat_participants
           );
-          this.configChanged.emit();
+          const newConfig = {
+            capabilities: structuredClone(this.config.capabilities),
+            chatParticipants: structuredClone(this.config.chatParticipants)
+          };
+          if (JSON.stringify(newConfig) !== JSON.stringify(oldConfig)) {
+            this.configChanged.emit();
+          }
           resolve();
         })
         .catch(reason => {
@@ -228,6 +305,35 @@ export class NBIAPI {
     });
   }
 
+  static async getMCPConfigFile(): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      requestAPI<any>('mcp-config-file', { method: 'GET' })
+        .then(async data => {
+          resolve(data);
+        })
+        .catch(reason => {
+          console.error(`Failed to get MCP config file.\n${reason}`);
+          reject(reason);
+        });
+    });
+  }
+
+  static async setMCPConfigFile(config: any): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      requestAPI<any>('mcp-config-file', {
+        method: 'POST',
+        body: JSON.stringify(config)
+      })
+        .then(async data => {
+          resolve(data);
+        })
+        .catch(reason => {
+          console.error(`Failed to set MCP config file.\n${reason}`);
+          reject(reason);
+        });
+    });
+  }
+
   static async chatRequest(
     messageId: string,
     chatId: string,
@@ -260,6 +366,20 @@ export class NBIAPI {
         }
       })
     );
+  }
+
+  static async reloadMCPServers(): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      requestAPI<any>('reload-mcp-servers', { method: 'POST' })
+        .then(async data => {
+          await NBIAPI.fetchCapabilities();
+          resolve(data);
+        })
+        .catch(reason => {
+          console.error(`Failed to reload MCP servers.\n${reason}`);
+          reject(reason);
+        });
+    });
   }
 
   static async generateCode(

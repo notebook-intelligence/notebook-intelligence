@@ -2,12 +2,13 @@
 
 Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. It can use GitHub Copilot or AI models from any other LLM Provider, including local models from [Ollama](https://ollama.com/). NBI greatly boosts the productivity of JupyterLab users with AI assistance.
 
-See blog posts for features and usage.
+## Feature Highlights
 
-- [Introducing Notebook Intelligence!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/01/08/introducing-notebook-intelligence.html)
-- [Building AI Extensions for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/05/building-ai-extensions-for-jupyterlab.html)
-- [Building AI Agents for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/09/building-ai-agents-for-jupyterlab.html)
-- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html)
+### Agent Mode
+
+In Agent Mode, built-in AI agent creates, edits and executes notebooks for you interactively. It can detect issues in the cells and fix for you.
+
+![Agent mode](media/agent-mode.gif)
 
 ### Code generation with inline chat
 
@@ -26,6 +27,13 @@ Auto-complete suggestions are shown as you type. Clicking `Tab` key accepts the 
 ### Chat interface
 
 <img src="media/copilot-chat.gif" alt="Chat interface" width=600 />
+
+See blog posts for more features and usage.
+
+- [Introducing Notebook Intelligence!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/01/08/introducing-notebook-intelligence.html)
+- [Building AI Extensions for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/05/building-ai-extensions-for-jupyterlab.html)
+- [Building AI Agents for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/09/building-ai-agents-for-jupyterlab.html)
+- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html)
 
 ## Installation
 
@@ -54,7 +62,7 @@ for the frontend extension.
 Notebook Intelligence can remember your GitHub Copilot login so that you don't need to re-login after a JupyterLab or system restart. Please be aware of the security implications of using this feature.
 
 > [!CAUTION]
-> If you configure NBI to remember your GitHub Copilot login, it will encrypt the token and store into a data file at `~/.jupyter/nbi-data.json`. You should never share this file with others as they can access your tokens.
+> If you configure NBI to remember your GitHub Copilot login, it will encrypt the token and store into a data file at `~/.jupyter/nbi/user-data.json`. You should never share this file with others as they can access your tokens.
 > Even though the token is encrypted, it is done so by using a default password and that's why it can be decrypted by others. In order to prevent that you can specify a custom password using the environment variable `NBI_GH_ACCESS_TOKEN_PASSWORD`.
 
 ```bash
@@ -67,20 +75,37 @@ To let Notebook Intelligence remember your GitHub access token, go to Notebook I
 
 If your stored access token fails to login (due to expiration or other reasons), you will be prompted to relogin on the UI.
 
+### Notebook execute tool options
+
+Notebook execute tool is enabled by default in Agent Mode. However, you can disable it or make it controlled by an environment variable.
+
+In order to disable Notebook execute tool:
+
+```bash
+jupyter lab --NotebookIntelligence.notebook_execute_tool=disabled
+```
+
+In order to disable Notebook execute tool by default but allow enabling using an environment variable:
+
+```bash
+NBI_NOTEBOOK_EXECUTE_TOOL=enabled
+jupyter lab --NotebookIntelligence.notebook_execute_tool=env_enabled
+```
+
 ### Configuration files
 
-NBI saves configuration at `~/.jupyter/nbi-config.json`. It also supports environment wide base configuration at `<env-prefix>/share/jupyter/nbi-config.json`. Organizations can ship default configuration at this environment wide config path. User's changes will be stored as overrides at `~/.jupyter/nbi-config.json`.
+NBI saves configuration at `~/.jupyter/nbi/config.json`. It also supports environment wide base configuration at `<env-prefix>/share/jupyter/nbi/config.json`. Organizations can ship default configuration at this environment wide config path. User's changes will be stored as overrides at `~/.jupyter/nbi/config.json`.
 
 These config files are used for saving LLM provider, model and MCP configuration. Note that API keys you enter for your custom LLM providers will also be stored in these config files.
 
 > [!IMPORTANT]
-> Note that updating nbi-config.json manually requires restarting JupyterLab to take effect.
+> Note that updating config.json manually requires restarting JupyterLab to take effect.
 
 ### Model Context Protocol ([MCP](https://modelcontextprotocol.io)) Support
 
 NBI seamlessly integrates with MCP servers. It supports servers with both Standard Input/Output (stdio) and Server-Sent Events (SSE) transports. The MCP support is limited to server tools at the moment.
 
-You can easily add MCP servers to NBI by editing the configuration file [nbi-config.json](#configuration-files). Simply add a key "mcp" and "mcpServers" under it as shown below.
+You can easily add MCP servers to NBI by editing the configuration file [~/.jupyter/nbi/mcp.json](#configuration-files). Environment wide base configuration is also support using the file at `<env-prefix>/share/jupyter/nbi/mcp.json`.
 
 > [!NOTE]
 > Using MCP servers requires an LLM model with tool calling capabilities. All of the GitHub Copilot models provided in NBI support this feature. If you are using other providers make sure you choose a tool calling capable model.
@@ -88,47 +113,24 @@ You can easily add MCP servers to NBI by editing the configuration file [nbi-con
 > [!CAUTION]
 > Note that most MCP servers are run on the same computer as your JupyterLab installation and they can make irreversible changes to your computer and/or access private data. Make sure that you only install MCP servers from trusted sources.
 
+### MCP Config file example
+
 ```json
 {
-    "chat_model": {
-        ...
-    },
-    ...<other configuration>,
-
-    "mcp": {
-        "mcpServers": {
-            "filesystem": {
-                "command": "npx",
-                "args": [
-                    "-y",
-                    "@modelcontextprotocol/server-filesystem",
-                    "/Users/mbektas/mcp-test"
-                ]
-            },
-        }
-    }
-}
-```
-
-This will automatically create a new chat participant in NBI and you can access it by starting your prompts with `@mcp`. Use `@mcp /info` prompt to get information on the tools provided by the MCP servers you configured. This chat participant will have access all the tools provided by the servers you configure.
-
-<img src="media/mcp-prompt.png" alt="Settings dialog" width=600 />
-
-By default, each tool call to MCP servers will require approval. If you would like to auto approve tools, you can do so by using the `"alwaysAllow": []` configuration key in the nbi-config.json. Simply list the names of tools.
-
-```json
-"mcpServers": {
+  "mcpServers": {
     "filesystem": {
-        "command": "npx",
-        "args": [
-            "-y",
-            "@modelcontextprotocol/server-filesystem",
-            "/Users/mbektas/mcp-test"
-        ],
-        "alwaysAllow": ["list_allowed_directories", "list_directory"]
-    },
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/mbektas/mcp-test"
+      ]
+    }
+  }
 }
 ```
+
+You can use Agent mode to access tools provided by MCP servers you configured.
 
 For servers with stdio transport, you can also set additional environment variables by using the `env` key. Environment variables are specified as key value pairs.
 
@@ -144,12 +146,12 @@ For servers with stdio transport, you can also set additional environment variab
 }
 ```
 
-Below is an example of a server configuration with SSE transport. For SSE transport servers, you can also specify headers to be sent as part of the requests.
+Below is an example of a server configuration with Streamable HTTP transport. For Streamable HTTP transport servers, you can also specify headers to be sent as part of the requests.
 
 ```json
 "mcpServers": {
     "remoterservername": {
-        "url": "http://127.0.0.1:8080/sse",
+        "url": "http://127.0.0.1:8080/mcp",
         "headers": {
             "Authorization": "Bearer mysecrettoken"
         }
@@ -173,76 +175,118 @@ If you have multiple servers configured but you would like to disable some for a
 }
 ```
 
-#### Grouping MCP servers
+### Ruleset System
 
-When you integrate multiple MCP servers to NBI, all of their tools will be available under the same chat participant `@mcp`. However, this may not be ideal in many situations. You may want to group certain servers and their tools based on their functionality. NBI lets you do that easily by configuring MCP chat participants. You can list the servers for each custom participant. If there are any unassigned MCP servers, then they will be used the default `@mcp` chat participant.
+NBI includes a powerful ruleset system that allows you to define custom guidelines and best practices that are automatically injected into AI prompts. This helps ensure consistent coding standards, project-specific conventions, and domain knowledge across all AI interactions.
 
-Below is an example of creating a custom MCP participant. This configuration results in two chat participants `@mcp-fs` with `filesytem` MC server tools and `@mcp` with `servername1` and `servername1` MCP server tools.
+#### How It Works
+
+Rules are markdown files with optional YAML frontmatter stored in `~/.jupyter/nbi/rules/`. They are automatically discovered and applied based on context (file type, notebook kernel, chat mode).
+
+#### Creating Rules
+
+**Global Rules** - Apply to all contexts:
+
+Create a file like `~/.jupyter/nbi/rules/01-coding-standards.md`:
+
+```markdown
+---
+priority: 10
+---
+
+# Coding Standards
+
+- Always use type hints in Python functions
+- Prefer list comprehensions over loops when appropriate
+- Add docstrings to all public functions
+```
+
+**Mode-Specific Rules** - Apply only to specific chat modes:
+
+NBI supports mode-specific rules for three modes:
+
+- **ask** - Question/answer mode
+- **agent** - Autonomous agent mode with tool access
+- **inline-chat** - Inline code generation and editing
+
+Create a file like `~/.jupyter/nbi/rules/modes/agent/01-testing.md`:
+
+```markdown
+---
+priority: 20
+scope:
+  kernels: ['python3']
+---
+
+# Testing Guidelines
+
+When writing code in agent mode:
+
+- Always include error handling
+- Add logging for debugging
+- Test edge cases
+```
+
+#### Rule Frontmatter Options
+
+```yaml
+---
+apply: always # 'always', 'auto', or 'manual'
+active: true # Enable/disable the rule
+priority: 10 # Lower numbers = higher priority
+scope:
+  file_patterns: # Apply to specific file patterns
+    - '*.py'
+    - 'test_*.ipynb'
+  kernels: # Apply to specific notebook kernels
+    - 'python3'
+    - 'ir'
+  directories: # Apply to specific directories
+    - '/projects/ml'
+---
+```
+
+#### Configuration
+
+**Enable/Disable Rules System:**
+
+Edit `~/.jupyter/nbi/config.json`:
 
 ```json
 {
-    "chat_model": {
-        ...
-    },
-    ...<other configuration>,
-
-    "mcp": {
-        "mcpServers": {
-            "filesystem": {
-                "command": "npx",
-                "args": [
-                    "-y",
-                    "@modelcontextprotocol/server-filesystem",
-                    "/Users/mbektas/mcp-test"
-                ]
-            },
-            "servername1": {
-                "command": "",
-                "args": [],
-            },
-            "servername2": {
-                "command": "",
-                "args": [],
-                "disabled": true
-            }
-        },
-        "participants": {
-            "fs": {
-                "name": "MCP - File system",
-                "servers": ["filesystem"]
-            }
-        }
-    }
+  "rules_enabled": true
 }
 ```
 
-#### Using NBI tools within MCP chat participants
+**Auto-Reload Configuration:**
 
-NBI allows you to access built-in tools from an MCP participant. You can do that by adding the list of built in NBI tools to your MCP participant configuration. The built-in tools available to MCP are `create_new_notebook`, `add_markdown_cell_to_notebook`, `add_code_cell_to_notebook`. Below is an example that integrates all these tools to MCP participant `@mcp-fs`.
+Rules are automatically reloaded when changed (enabled by default). This behavior is controlled by the `NBI_RULES_AUTO_RELOAD` environment variable.
 
-```json
-"participants": {
-    "fs": {
-        "name": "MCP - File system",
-        "servers": ["filesystem"],
-        "nbiTools": [
-            "create_new_notebook",
-            "add_markdown_cell_to_notebook",
-            "add_code_cell_to_notebook"
-        ]
-    }
-}
+To disable auto-reload:
+
+```bash
+export NBI_RULES_AUTO_RELOAD=false
+jupyter lab
 ```
 
-This chat participant will allow you to run example prompts like below.
+Or to enable (default):
 
-```
-@mcp-fs list the directories I have access to.
+```bash
+export NBI_RULES_AUTO_RELOAD=true
+jupyter lab
 ```
 
-```
-@mcp-fs add a code cell which demonstrates ipywidgets Button to this notebook.
-```
+#### Managing Rules
+
+Rules are automatically discovered from:
+
+- **Global rules**: `~/.jupyter/nbi/rules/*.md`
+- **Mode-specific rules**: `~/.jupyter/nbi/rules/modes/{mode}/*.md` where `{mode}` can be:
+  - `ask` - For question/answer interactions
+  - `agent` - For autonomous agent operations
+  - `inline-chat` - For inline code generation
+
+Rules are applied in priority order (lower numbers first) and can be toggled on/off without deleting the files.
 
 ### Developer documentation
 

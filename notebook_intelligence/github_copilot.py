@@ -12,12 +12,16 @@ import secrets
 import sseclient
 import datetime as dt
 import logging
-from notebook_intelligence.api import CancelToken, ChatResponse, CompletionContext, MarkdownData
-from notebook_intelligence.util import decrypt_with_password, encrypt_with_password
+from notebook_intelligence.api import BackendMessageType, CancelToken, ChatResponse, CompletionContext, MarkdownData
+from notebook_intelligence.util import decrypt_with_password, encrypt_with_password, ThreadSafeWebSocketConnector
 
 from ._version import __version__ as NBI_VERSION
 
 log = logging.getLogger(__name__)
+
+GHE_SUBDOMAIN = os.getenv("NBI_GHE_SUBDOMAIN", "")
+GH_WEB_BASE_URL = "https://github.com" if GHE_SUBDOMAIN == "" else f"https://{GHE_SUBDOMAIN}.ghe.com"
+GH_REST_API_BASE_URL = "https://api.github.com" if GHE_SUBDOMAIN == "" else f"https://api.{GHE_SUBDOMAIN}.ghe.com"
 
 EDITOR_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 EDITOR_PLUGIN_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
@@ -52,6 +56,22 @@ last_token_fetch_time = dt.datetime.now() + dt.timedelta(seconds=-TOKEN_FETCH_IN
 remember_github_access_token = False
 github_access_token_provided = None
 
+websocket_connector: ThreadSafeWebSocketConnector = None
+github_login_status_change_updater_enabled = False
+
+def enable_github_login_status_change_updater(enabled: bool):
+    global github_login_status_change_updater_enabled
+    github_login_status_change_updater_enabled = enabled
+
+def emit_github_login_status_change():
+    if github_login_status_change_updater_enabled and websocket_connector is not None:
+        websocket_connector.write_message({
+            "type": BackendMessageType.GitHubCopilotLoginStatusChange,
+            "data": {
+                "status": github_auth["status"].name
+            }
+        })
+
 def get_login_status():
     global github_auth
 
@@ -66,13 +86,17 @@ def get_login_status():
 
     return response
 
-user_data_file = os.path.join(os.path.expanduser('~'), ".jupyter", "nbi-data.json")
+deprecated_user_data_file = os.path.join(os.path.expanduser('~'), ".jupyter", "nbi-data.json")
+user_data_file = os.path.join(os.path.expanduser('~'), ".jupyter", "nbi", "user-data.json")
 access_token_password = os.getenv("NBI_GH_ACCESS_TOKEN_PASSWORD", "nbi-access-token-password")
 
 def read_stored_github_access_token() -> str:
     try:
         if os.path.exists(user_data_file):
             with open(user_data_file, 'r') as file:
+                user_data = json.load(file)
+        elif os.path.exists(deprecated_user_data_file):
+            with open(deprecated_user_data_file, 'r') as file:
                 user_data = json.load(file)
         else:
             user_data = {}
@@ -98,6 +122,7 @@ def write_github_access_token(access_token: str) -> bool:
                 user_data = json.load(file)
         else:
             user_data = {}
+
         user_data.update({
             'github_access_token': base64_access_token
         })
@@ -144,6 +169,11 @@ def login_with_existing_credentials(store_access_token: bool):
 
     if github_access_token_provided is not None:
         login()
+        if os.path.exists(deprecated_user_data_file):
+            # TODO: remove after 12/2025
+            log.warning(f"Deprecated user data file found: {deprecated_user_data_file}. Removing it now. Use {user_data_file} instead.")
+            store_github_access_token()
+            os.remove(deprecated_user_data_file)
 
 def store_github_access_token():
     access_token = github_auth["access_token"]
@@ -158,7 +188,8 @@ def login():
     return login_info
 
 def logout():
-    global github_auth
+    global github_auth, github_access_token_provided
+    github_access_token_provided = None
     github_auth.update({
         "verification_uri": None,
         "user_code": None,
@@ -167,6 +198,7 @@ def logout():
         "status" : LoginStatus.NOT_LOGGED_IN,
         "token": None
     })
+    emit_github_login_status_change()
 
     return {
         "status": github_auth["status"].name
@@ -183,7 +215,7 @@ def get_device_verification_info():
         "scope": "read:user"
     }
     try:
-        resp = requests.post('https://github.com/login/device/code',
+        resp = requests.post(f'{GH_WEB_BASE_URL}/login/device/code',
             headers={
                 'accept': 'application/json',
                 'editor-version': EDITOR_VERSION,
@@ -201,6 +233,7 @@ def get_device_verification_info():
         github_auth["device_code"] = resp_json.get('device_code')
 
         github_auth["status"] = LoginStatus.ACTIVATING_DEVICE
+        emit_github_login_status_change()
     except Exception as e:
         log.error(f"Failed to get device verification info: {e}")
         return None
@@ -231,7 +264,7 @@ def wait_for_user_access_token_thread_func():
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
         }
         try:
-            resp = requests.post('https://github.com/login/oauth/access_token',
+            resp = requests.post(f'{GH_WEB_BASE_URL}/login/oauth/access_token',
                 headers={
                 'accept': 'application/json',
                 'editor-version': EDITOR_VERSION,
@@ -266,9 +299,10 @@ def get_token():
         return
 
     github_auth["status"] = LoginStatus.LOGGING_IN
+    emit_github_login_status_change()
 
     try:
-        resp = requests.get('https://api.github.com/copilot_internal/v2/token', headers={
+        resp = requests.get(f'{GH_REST_API_BASE_URL}/copilot_internal/v2/token', headers={
             'authorization': f'token {access_token}',
             'editor-version': EDITOR_VERSION,
             'editor-plugin-version': EDITOR_PLUGIN_VERSION,
@@ -297,6 +331,7 @@ def get_token():
         github_auth["verification_uri"] = None
         github_auth["user_code"] = None
         github_auth["status"] = LoginStatus.LOGGED_IN
+        emit_github_login_status_change()
 
         endpoints = resp_json.get('endpoints', {})
         API_ENDPOINT = endpoints.get('api', API_ENDPOINT)
@@ -470,20 +505,22 @@ def completions(model_id, messages, tools = None, response: ChatResponse = None,
             'model': model_id,
             'messages': messages,
             'tools': tools,
-            'max_tokens': 1000,
             'temperature': 0,
             'top_p': 1,
             'n': 1,
-            'stop': ['<END>'],
             'nwo': 'NotebookIntelligence',
             'stream': True
         }
+
+        if not (model_id == 'gpt-5' or model_id == 'gpt-5-mini'):
+            data['stop'] = ['<END>']
 
         if 'tool_choice' in options:
             data['tool_choice'] = options['tool_choice']
 
         if cancel_token is not None and cancel_token.is_cancel_requested:
-            response.finish()
+            if response is not None:
+                response.finish()
             return
 
         request = requests.post(
@@ -496,8 +533,9 @@ def completions(model_id, messages, tools = None, response: ChatResponse = None,
         if request.status_code != 200:
             msg = f"Failed to get completions from GitHub Copilot: [{request.status_code}]: {request.text}"
             log.error(msg)
-            response.stream(MarkdownData(msg))
-            response.finish()
+            if response is not None:
+                response.stream(MarkdownData(msg))
+                response.finish()
             raise Exception(msg)
 
         client = sseclient.SSEClient(request)

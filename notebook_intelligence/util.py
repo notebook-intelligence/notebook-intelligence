@@ -5,6 +5,8 @@ import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet
+import asyncio
+from tornado import ioloop
 
 def extract_llm_generated_code(code: str) -> str:
         if code.endswith("```"):
@@ -61,3 +63,14 @@ def decrypt_with_password(password: str, encrypted_data_with_salt: bytes) -> byt
     decrypted_data = f.decrypt(encrypted_data)
 
     return decrypted_data
+
+class ThreadSafeWebSocketConnector():
+  def __init__(self, websocket_handler):
+    self.io_loop = ioloop.IOLoop.current()
+    self.websocket_handler = websocket_handler
+
+  def write_message(self, message: dict):
+    def _write_message():
+        self.websocket_handler.write_message(message)
+    asyncio.set_event_loop(self.io_loop.asyncio_loop)
+    self.io_loop.asyncio_loop.call_soon_threadsafe(_write_message)

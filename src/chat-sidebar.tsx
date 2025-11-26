@@ -7,7 +7,8 @@ import React, {
   useEffect,
   useMemo,
   useRef,
-  useState
+  useState,
+  memo
 } from 'react';
 import { ReactWidget } from '@jupyterlab/apputils';
 import { UUID } from '@lumino/coreutils';
@@ -19,7 +20,6 @@ import {
   BackendMessageType,
   BuiltinToolsetType,
   ContextType,
-  GITHUB_COPILOT_PROVIDER_ID,
   IActiveDocumentInfo,
   ICellContents,
   IChatCompletionResponseEmitter,
@@ -32,7 +32,8 @@ import {
   TelemetryEventType
 } from './tokens';
 import { JupyterFrontEnd } from '@jupyterlab/application';
-import { MarkdownRenderer } from './markdown-renderer';
+import { MarkdownRenderer as OriginalMarkdownRenderer } from './markdown-renderer';
+const MarkdownRenderer = memo(OriginalMarkdownRenderer);
 
 import copySvgstr from '../style/icons/copy.svg';
 import copilotSvgstr from '../style/icons/copilot.svg';
@@ -44,23 +45,15 @@ import {
   VscEyeClosed,
   VscTriangleRight,
   VscTriangleDown,
-  VscWarning,
   VscSettingsGear,
   VscPassFilled,
   VscTools,
   VscTrash
 } from 'react-icons/vsc';
 
-import { MdOutlineCheckBoxOutlineBlank, MdCheckBox } from 'react-icons/md';
-
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
-
-const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
-const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
-const OPENAI_COMPATIBLE_INLINE_COMPLETION_MODEL_ID =
-  'openai-compatible-inline-completion-model';
-const LITELLM_COMPATIBLE_INLINE_COMPLETION_MODEL_ID =
-  'litellm-compatible-inline-completion-model';
+import { CheckBoxItem } from './components/checkbox';
+import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 
 export enum RunChatCompletionType {
   Chat,
@@ -124,6 +117,8 @@ export interface IInlinePromptWidgetOptions {
   existingCode: string;
   prefix: string;
   suffix: string;
+  language?: string;
+  filename?: string;
   onRequestSubmitted: (prompt: string) => void;
   onRequestCancelled: () => void;
   onContentStream: (content: string) => void;
@@ -261,24 +256,11 @@ export class GitHubCopilotLoginDialogBody extends ReactWidget {
   private _onLoggedIn: () => void;
 }
 
-export class ConfigurationDialogBody extends ReactWidget {
-  constructor(options: { onSave: () => void }) {
-    super();
-
-    this._onSave = options.onSave;
-  }
-
-  render(): JSX.Element {
-    return <ConfigurationDialogBodyComponent onSave={this._onSave} />;
-  }
-
-  private _onSave: () => void;
-}
-
 interface IChatMessageContent {
   id: string;
   type: ResponseStreamDataType;
   content: any;
+  contentDetail?: any;
   created: Date;
   reasoningContent?: string;
   reasoningFinished?: boolean;
@@ -314,6 +296,7 @@ function ChatResponseHTMLFrame(props: any) {
   );
 }
 
+// Memoize ChatResponse for performance
 function ChatResponse(props: any) {
   const [renderCount, setRenderCount] = useState(0);
   const msg: IChatMessage = props.message;
@@ -462,9 +445,9 @@ function ChatResponse(props: any) {
               return (
                 <>
                   {item.reasoningContent && (
-                    <div className="chat-reasoning-content">
+                    <div className="expandable-content">
                       <div
-                        className="chat-reasoning-content-title"
+                        className="expandable-content-title"
                         onClick={(event: any) => onExpandCollapseClick(event)}
                       >
                         <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
@@ -473,7 +456,7 @@ function ChatResponse(props: any) {
                           ? 'Thought'
                           : `Thinking (${Math.floor(item.reasoningTime)} s)`}
                       </div>
-                      <div className="chat-reasoning-content-text">
+                      <div className="expandable-content-text">
                         <MarkdownRenderer
                           key={`key-${index}`}
                           getApp={props.getApp}
@@ -491,6 +474,27 @@ function ChatResponse(props: any) {
                   >
                     {item.content}
                   </MarkdownRenderer>
+                  {item.contentDetail ? (
+                    <div className="expandable-content">
+                      <div
+                        className="expandable-content-title"
+                        onClick={(event: any) => onExpandCollapseClick(event)}
+                      >
+                        <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
+                        <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
+                        {item.contentDetail.title}
+                      </div>
+                      <div className="expandable-content-text">
+                        <MarkdownRenderer
+                          key={`key-${index}`}
+                          getApp={props.getApp}
+                          getActiveDocumentInfo={props.getActiveDocumentInfo}
+                        >
+                          {item.contentDetail.content}
+                        </MarkdownRenderer>
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               );
             case ResponseStreamDataType.Image:
@@ -599,6 +603,7 @@ function ChatResponse(props: any) {
     </div>
   );
 }
+const MemoizedChatResponse = memo(ChatResponse);
 
 async function submitCompletionRequest(
   request: IRunChatCompletionRequest,
@@ -647,30 +652,6 @@ async function submitCompletionRequest(
   }
 }
 
-function CheckBoxItem(props: any) {
-  const indent = props.indent || 0;
-
-  return (
-    <div
-      className={`checkbox-item checkbox-item-indent-${indent} ${props.header ? 'checkbox-item-header' : ''}`}
-      title={props.title}
-      onClick={event => props.onClick(event)}
-    >
-      <div className="checkbox-item-toggle">
-        {props.checked ? (
-          <MdCheckBox className="checkbox-icon" />
-        ) : (
-          <MdOutlineCheckBoxOutlineBlank className="checkbox-icon" />
-        )}
-        {props.label}
-      </div>
-      {props.title && (
-        <div className="checkbox-item-description">{props.title}</div>
-      )}
-    </div>
-  );
-}
-
 function SidebarComponent(props: any) {
   const [chatMessages, setChatMessages] = useState<IChatMessage[]>([]);
   const [prompt, setPrompt] = useState<string>('');
@@ -699,13 +680,16 @@ function SidebarComponent(props: any) {
     useState<IActiveDocumentInfo | null>(null);
   const [currentFileContextTitle, setCurrentFileContextTitle] = useState('');
   const telemetryEmitter: ITelemetryEmitter = props.getTelemetryEmitter();
-  const [chatMode, setChatMode] = useState('ask');
+  const [chatMode, setChatMode] = useState(NBIAPI.config.defaultChatMode);
+
   const [toolSelectionTitle, setToolSelectionTitle] =
     useState('Tool selection');
   const [selectedToolCount, setSelectedToolCount] = useState(0);
   const [notebookExecuteToolSelected, setNotebookExecuteToolSelected] =
     useState(false);
-  const [toolConfig, setToolConfig] = useState({
+
+  const [renderCount, setRenderCount] = useState(1);
+  const toolConfigRef = useRef({
     builtinToolsets: [
       { id: BuiltinToolsetType.NotebookEdit, name: 'Notebook edit' },
       { id: BuiltinToolsetType.NotebookExecute, name: 'Notebook execute' }
@@ -713,6 +697,16 @@ function SidebarComponent(props: any) {
     mcpServers: [],
     extensions: []
   });
+  const mcpServerSettingsRef = useRef(NBIAPI.config.mcpServerSettings);
+  const [mcpServerEnabledState, setMCPServerEnabledState] = useState(
+    new Map<string, Set<string>>(
+      mcpServerSettingsToEnabledState(
+        toolConfigRef.current.mcpServers,
+        mcpServerSettingsRef.current
+      )
+    )
+  );
+
   const [showModeTools, setShowModeTools] = useState(false);
   const toolSelectionsInitial: any = {
     builtinToolsets: [BuiltinToolsetType.NotebookEdit],
@@ -724,23 +718,37 @@ function SidebarComponent(props: any) {
     mcpServers: {},
     extensions: {}
   };
-  const [toolSelections, setToolSelections] = useState(toolSelectionsInitial);
+  const [toolSelections, setToolSelections] = useState(
+    structuredClone(toolSelectionsInitial)
+  );
   const [hasExtensionTools, setHasExtensionTools] = useState(false);
+  const [lastScrollTime, setLastScrollTime] = useState(0);
+  const [scrollPending, setScrollPending] = useState(false);
 
-  NBIAPI.configChanged.connect(() => {
-    setToolConfig(NBIAPI.config.toolConfig);
-  });
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      toolConfigRef.current = NBIAPI.config.toolConfig;
+      mcpServerSettingsRef.current = NBIAPI.config.mcpServerSettings;
+      const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
+        toolConfigRef.current.mcpServers,
+        mcpServerSettingsRef.current
+      );
+      setMCPServerEnabledState(newMcpServerEnabledState);
+      setToolSelections(structuredClone(toolSelectionsInitial));
+      setRenderCount(renderCount => renderCount + 1);
+    });
+  }, []);
 
   useEffect(() => {
     let hasTools = false;
-    for (const extension of toolConfig.extensions) {
+    for (const extension of toolConfigRef.current.extensions) {
       if (extension.toolsets.length > 0) {
         hasTools = true;
         break;
       }
     }
     setHasExtensionTools(hasTools);
-  }, [toolConfig]);
+  }, [toolConfigRef.current]);
 
   useEffect(() => {
     const builtinToolSelCount = toolSelections.builtinToolsets.length;
@@ -822,7 +830,9 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const mcpServer = toolConfig.mcpServers.find(server => server.id === id);
+    const mcpServer = toolConfigRef.current.mcpServers.find(
+      server => server.id === id
+    );
 
     const selectedServerTools: string[] = toolSelections.mcpServers[id];
 
@@ -841,10 +851,16 @@ function SidebarComponent(props: any) {
       delete newConfig.mcpServers[id];
       setToolSelections(newConfig);
     } else {
-      const mcpServer = toolConfig.mcpServers.find(server => server.id === id);
+      const mcpServer = toolConfigRef.current.mcpServers.find(
+        server => server.id === id
+      );
       const newConfig = { ...toolSelections };
       newConfig.mcpServers[id] = structuredClone(
-        mcpServer.tools.map((tool: any) => tool.name)
+        mcpServer.tools
+          .filter((tool: any) =>
+            mcpServerEnabledState.get(mcpServer.id).has(tool.name)
+          )
+          .map((tool: any) => tool.name)
       );
       setToolSelections(newConfig);
     }
@@ -891,7 +907,7 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const extension = toolConfig.extensions.find(
+    const extension = toolConfigRef.current.extensions.find(
       extension => extension.id === extensionId
     );
 
@@ -916,7 +932,9 @@ function SidebarComponent(props: any) {
       return false;
     }
 
-    const extension = toolConfig.extensions.find(ext => ext.id === extensionId);
+    const extension = toolConfigRef.current.extensions.find(
+      ext => ext.id === extensionId
+    );
     const extensionToolset = extension.toolsets.find(
       (toolset: any) => toolset.id === toolsetId
     );
@@ -948,7 +966,7 @@ function SidebarComponent(props: any) {
       setToolSelections(newConfig);
     } else {
       const newConfig = { ...toolSelections };
-      const extension = toolConfig.extensions.find(
+      const extension = toolConfigRef.current.extensions.find(
         ext => ext.id === extensionId
       );
       if (extensionId in newConfig.extensions) {
@@ -990,7 +1008,7 @@ function SidebarComponent(props: any) {
       }
       setToolSelections(newConfig);
     } else {
-      const extension = toolConfig.extensions.find(
+      const extension = toolConfigRef.current.extensions.find(
         ext => ext.id === extensionId
       );
       const extensionToolset = extension.toolsets.find(
@@ -1061,30 +1079,38 @@ function SidebarComponent(props: any) {
 
   useEffect(() => {
     const prefixes: string[] = [];
-    if (chatMode !== 'ask') {
-      prefixes.push('/clear');
-      setOriginalPrefixes(prefixes);
-      setPrefixSuggestions(prefixes);
-      return;
+    prefixes.push('/clear');
+
+    if (chatMode === 'ask') {
+      const chatParticipants = NBIAPI.config.chatParticipants;
+      for (const participant of chatParticipants) {
+        const id = participant.id;
+        const commands = participant.commands;
+        const participantPrefix = id === 'default' ? '' : `@${id}`;
+        if (participantPrefix !== '') {
+          prefixes.push(participantPrefix);
+        }
+        const commandPrefix =
+          participantPrefix === '' ? '' : `${participantPrefix} `;
+        for (const command of commands) {
+          prefixes.push(`${commandPrefix}/${command}`);
+        }
+      }
     }
 
-    const chatParticipants = NBIAPI.config.chatParticipants;
-    for (const participant of chatParticipants) {
-      const id = participant.id;
-      const commands = participant.commands;
-      const participantPrefix = id === 'default' ? '' : `@${id}`;
-      if (participantPrefix !== '') {
-        prefixes.push(participantPrefix);
-      }
-      const commandPrefix =
-        participantPrefix === '' ? '' : `${participantPrefix} `;
-      for (const command of commands) {
-        prefixes.push(`${commandPrefix}/${command}`);
+    const mcpServers = NBIAPI.config.toolConfig.mcpServers;
+    const mcpServerSettings = NBIAPI.config.mcpServerSettings;
+    for (const mcpServer of mcpServers) {
+      if (mcpServerSettings[mcpServer.id]?.disabled !== true) {
+        for (const prompt of mcpServer.prompts) {
+          prefixes.push(`/mcp:${mcpServer.id}:${prompt.name}`);
+        }
       }
     }
+
     setOriginalPrefixes(prefixes);
     setPrefixSuggestions(prefixes);
-  }, [chatMode]);
+  }, [chatMode, renderCount]);
 
   useEffect(() => {
     const fetchData = () => {
@@ -1120,11 +1146,41 @@ function SidebarComponent(props: any) {
     }
   };
 
-  const applyPrefixSuggestion = (prefix: string) => {
+  const applyPrefixSuggestion = async (prefix: string) => {
+    let mcpArguments = '';
+    if (prefix.startsWith('/mcp:')) {
+      mcpArguments = ':';
+      const serverId = prefix.split(':')[1];
+      const promptName = prefix.split(':')[2];
+      const promptConfig = NBIAPI.config.getMCPServerPrompt(
+        serverId,
+        promptName
+      );
+      if (
+        promptConfig &&
+        promptConfig.arguments &&
+        promptConfig.arguments.length > 0
+      ) {
+        const result = await props
+          .getApp()
+          .commands.execute('notebook-intelligence:show-form-input-dialog', {
+            title: 'Input Parameters',
+            fields: promptConfig.arguments
+          });
+        const argumentValues: string[] = [];
+        for (const argument of promptConfig.arguments) {
+          if (result[argument.name] !== undefined) {
+            argumentValues.push(`${argument.name}=${result[argument.name]}`);
+          }
+        }
+        mcpArguments = `(${argumentValues.join(', ')}):`;
+      }
+    }
+
     if (prefix.includes(prompt)) {
-      setPrompt(`${prefix} `);
+      setPrompt(`${prefix}${mcpArguments} `);
     } else {
-      setPrompt(`${prefix} ${prompt} `);
+      setPrompt(`${prefix} ${prompt}${mcpArguments} `);
     }
     setShowPopover(false);
     promptInputRef.current?.focus();
@@ -1154,7 +1210,16 @@ function SidebarComponent(props: any) {
 
   const handleChatToolsButtonClick = async () => {
     if (!showModeTools) {
-      NBIAPI.fetchCapabilities();
+      NBIAPI.fetchCapabilities().then(() => {
+        toolConfigRef.current = NBIAPI.config.toolConfig;
+        mcpServerSettingsRef.current = NBIAPI.config.mcpServerSettings;
+        const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
+          toolConfigRef.current.mcpServers,
+          mcpServerSettingsRef.current
+        );
+        setMCPServerEnabledState(newMcpServerEnabledState);
+        setRenderCount(renderCount => renderCount + 1);
+      });
     }
     setShowModeTools(!showModeTools);
   };
@@ -1174,9 +1239,6 @@ function SidebarComponent(props: any) {
         }
       }
     }
-
-    const promptPrefix =
-      promptPrefixParts.length > 0 ? promptPrefixParts.join(' ') + ' ' : '';
 
     lastMessageId.current = UUID.uuid4();
     lastRequestTime.current = new Date();
@@ -1249,7 +1311,7 @@ function SidebarComponent(props: any) {
         type: RunChatCompletionType.Chat,
         content: extractedPrompt,
         language: activeDocInfo.language,
-        filename: activeDocInfo.filename,
+        filename: activeDocInfo.filePath,
         additionalContext,
         chatMode,
         toolSelections: toolSelections
@@ -1272,6 +1334,7 @@ function SidebarComponent(props: any) {
                 id: UUID.uuid4(),
                 type: nbiContent.type,
                 content: nbiContent.content,
+                contentDetail: nbiContent.detail,
                 created: new Date(response.created)
               });
             } else {
@@ -1341,7 +1404,7 @@ function SidebarComponent(props: any) {
       }
     );
 
-    const newPrompt = prompt.startsWith('/settings') ? '' : promptPrefix;
+    const newPrompt = '';
 
     setPrompt(newPrompt);
     filterPrefixSuggestions(newPrompt);
@@ -1475,8 +1538,24 @@ function SidebarComponent(props: any) {
     }
   };
 
+  // Throttle scrollMessagesToBottom to only scroll every 500ms
+  const SCROLL_THROTTLE_TIME = 1000;
   const scrollMessagesToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const now = Date.now();
+    if (now - lastScrollTime >= SCROLL_THROTTLE_TIME) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setLastScrollTime(now);
+    } else if (!scrollPending) {
+      setScrollPending(true);
+      setTimeout(
+        () => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          setLastScrollTime(Date.now());
+          setScrollPending(false);
+        },
+        SCROLL_THROTTLE_TIME - (now - lastScrollTime)
+      );
+    }
   };
 
   const handleConfigurationClick = async () => {
@@ -1654,32 +1733,21 @@ function SidebarComponent(props: any) {
     return `${activeDocumentInfo.filename}${cellAndLineIndicator}`;
   };
 
-  const nbiConfig = NBIAPI.config;
-  const getGHLoginRequired = () => {
-    return (
-      nbiConfig.usingGitHubCopilotModel &&
-      NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.NotLoggedIn
-    );
-  };
-  const getChatEnabled = () => {
-    return nbiConfig.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-      ? !getGHLoginRequired()
-      : nbiConfig.llmProviders.find(
-          provider => provider.id === nbiConfig.chatModel.provider
-        );
-  };
-
-  const [ghLoginRequired, setGHLoginRequired] = useState(getGHLoginRequired());
-  const [chatEnabled, setChatEnabled] = useState(getChatEnabled());
-
-  NBIAPI.configChanged.connect(() => {
-    setGHLoginRequired(getGHLoginRequired());
-    setChatEnabled(getChatEnabled());
-  });
+  const [ghLoginRequired, setGHLoginRequired] = useState(
+    NBIAPI.getGHLoginRequired()
+  );
+  const [chatEnabled, setChatEnabled] = useState(NBIAPI.getChatEnabled());
 
   useEffect(() => {
-    setGHLoginRequired(getGHLoginRequired());
-    setChatEnabled(getChatEnabled());
+    NBIAPI.configChanged.connect(() => {
+      setGHLoginRequired(NBIAPI.getGHLoginRequired());
+      setChatEnabled(NBIAPI.getChatEnabled());
+    });
+  }, []);
+
+  useEffect(() => {
+    setGHLoginRequired(NBIAPI.getGHLoginRequired());
+    setChatEnabled(NBIAPI.getChatEnabled());
   }, [ghLoginStatus]);
 
   return (
@@ -1740,8 +1808,8 @@ function SidebarComponent(props: any) {
         ) : (
           <div className="sidebar-messages">
             {chatMessages.map((msg, index) => (
-              <ChatResponse
-                key={`key-${index}`}
+              <MemoizedChatResponse
+                key={msg.id}
                 message={msg}
                 openFile={props.openFile}
                 getApp={props.getApp}
@@ -1819,7 +1887,7 @@ function SidebarComponent(props: any) {
                     if (event.target.value === 'ask') {
                       setToolSelections(toolSelectionsEmpty);
                     } else if (event.target.value === 'agent') {
-                      setToolSelections(toolSelectionsInitial);
+                      setToolSelections(structuredClone(toolSelectionsInitial));
                     }
                     setShowModeTools(false);
                     setChatMode(event.target.value);
@@ -1923,7 +1991,7 @@ function SidebarComponent(props: any) {
               <div className="mode-tools-popover-tool-list">
                 <div className="mode-tools-group-header">Built-in</div>
                 <div className="mode-tools-group mode-tools-group-built-in">
-                  {toolConfig.builtinToolsets.map((toolset: any) => (
+                  {toolConfigRef.current.builtinToolsets.map((toolset: any) => (
                     <CheckBoxItem
                       key={toolset.id}
                       label={toolset.name}
@@ -1938,87 +2006,113 @@ function SidebarComponent(props: any) {
                     />
                   ))}
                 </div>
-                {toolConfig.mcpServers.length > 0 && (
-                  <div className="mode-tools-group-header">MCP Servers</div>
-                )}
-                {toolConfig.mcpServers.map((mcpServer, index: number) => (
-                  <div className="mode-tools-group">
-                    <CheckBoxItem
-                      label={mcpServer.id}
-                      header={true}
-                      checked={getMCPServerState(mcpServer.id)}
-                      onClick={() => onMCPServerClicked(mcpServer.id)}
-                    />
-                    {mcpServer.tools.map((tool: any, index: number) => (
-                      <CheckBoxItem
-                        label={tool.name}
-                        title={tool.description}
-                        indent={1}
-                        checked={getMCPServerToolState(mcpServer.id, tool.name)}
-                        onClick={() =>
-                          setMCPServerToolState(
-                            mcpServer.id,
-                            tool.name,
-                            !getMCPServerToolState(mcpServer.id, tool.name)
+                {renderCount > 0 &&
+                  mcpServerEnabledState.size > 0 &&
+                  toolConfigRef.current.mcpServers.length > 0 && (
+                    <div className="mode-tools-group-header">
+                      MCP Server Tools
+                    </div>
+                  )}
+                {renderCount > 0 &&
+                  toolConfigRef.current.mcpServers
+                    .filter(mcpServer =>
+                      mcpServerEnabledState.has(mcpServer.id)
+                    )
+                    .map((mcpServer, index: number) => (
+                      <div className="mode-tools-group">
+                        <CheckBoxItem
+                          label={mcpServer.id}
+                          header={true}
+                          checked={getMCPServerState(mcpServer.id)}
+                          onClick={() => onMCPServerClicked(mcpServer.id)}
+                        />
+                        {mcpServer.tools
+                          .filter((tool: any) =>
+                            mcpServerEnabledState
+                              .get(mcpServer.id)
+                              .has(tool.name)
                           )
-                        }
-                      />
+                          .map((tool: any, index: number) => (
+                            <CheckBoxItem
+                              label={tool.name}
+                              title={tool.description}
+                              indent={1}
+                              checked={getMCPServerToolState(
+                                mcpServer.id,
+                                tool.name
+                              )}
+                              onClick={() =>
+                                setMCPServerToolState(
+                                  mcpServer.id,
+                                  tool.name,
+                                  !getMCPServerToolState(
+                                    mcpServer.id,
+                                    tool.name
+                                  )
+                                )
+                              }
+                            />
+                          ))}
+                      </div>
                     ))}
-                  </div>
-                ))}
                 {hasExtensionTools && (
                   <div className="mode-tools-group-header">Extension tools</div>
                 )}
-                {toolConfig.extensions.map((extension, index: number) => (
-                  <div className="mode-tools-group">
-                    <CheckBoxItem
-                      label={`${extension.name} (${extension.id})`}
-                      header={true}
-                      checked={getExtensionState(extension.id)}
-                      onClick={() => onExtensionClicked(extension.id)}
-                    />
-                    {extension.toolsets.map((toolset: any, index: number) => (
-                      <>
-                        <CheckBoxItem
-                          label={`${toolset.name} (${toolset.id})`}
-                          title={toolset.description}
-                          indent={1}
-                          checked={getExtensionToolsetState(
-                            extension.id,
-                            toolset.id
-                          )}
-                          onClick={() =>
-                            onExtensionToolsetClicked(extension.id, toolset.id)
-                          }
-                        />
-                        {toolset.tools.map((tool: any, index: number) => (
+                {toolConfigRef.current.extensions.map(
+                  (extension, index: number) => (
+                    <div className="mode-tools-group">
+                      <CheckBoxItem
+                        label={`${extension.name} (${extension.id})`}
+                        header={true}
+                        checked={getExtensionState(extension.id)}
+                        onClick={() => onExtensionClicked(extension.id)}
+                      />
+                      {extension.toolsets.map((toolset: any, index: number) => (
+                        <>
                           <CheckBoxItem
-                            label={tool.name}
-                            title={tool.description}
-                            indent={2}
-                            checked={getExtensionToolsetToolState(
+                            label={`${toolset.name} (${toolset.id})`}
+                            title={toolset.description}
+                            indent={1}
+                            checked={getExtensionToolsetState(
                               extension.id,
-                              toolset.id,
-                              tool.name
+                              toolset.id
                             )}
                             onClick={() =>
-                              setExtensionToolsetToolState(
+                              onExtensionToolsetClicked(
                                 extension.id,
-                                toolset.id,
-                                tool.name,
-                                !getExtensionToolsetToolState(
-                                  extension.id,
-                                  toolset.id,
-                                  tool.name
-                                )
+                                toolset.id
                               )
                             }
                           />
-                        ))}
-                      </>
-                    ))}
-                  </div>
-                ))}
+                          {toolset.tools.map((tool: any, index: number) => (
+                            <CheckBoxItem
+                              label={tool.name}
+                              title={tool.description}
+                              indent={2}
+                              checked={getExtensionToolsetToolState(
+                                extension.id,
+                                toolset.id,
+                                tool.name
+                              )}
+                              onClick={() =>
+                                setExtensionToolsetToolState(
+                                  extension.id,
+                                  toolset.id,
+                                  tool.name,
+                                  !getExtensionToolsetToolState(
+                                    extension.id,
+                                    toolset.id,
+                                    tool.name
+                                  )
+                                )
+                              }
+                            />
+                          ))}
+                        </>
+                      ))}
+                    </div>
+                  )
+                )}
               </div>
             </div>
           )}
@@ -2167,8 +2261,8 @@ function InlinePromptComponent(props: any) {
         chatId: UUID.uuid4(),
         type: RunChatCompletionType.GenerateCode,
         content: prompt,
-        language: undefined,
-        filename: undefined,
+        language: props.language || 'python',
+        filename: props.filename || 'Untitled.ipynb',
         prefix: props.prefix,
         suffix: props.suffix,
         existingCode: props.existingCode,
@@ -2441,407 +2535,74 @@ function GitHubCopilotLoginDialogBodyComponent(props: any) {
   );
 }
 
-function ConfigurationDialogBodyComponent(props: any) {
-  const nbiConfig = NBIAPI.config;
-  const llmProviders = nbiConfig.llmProviders;
-  const [chatModels, setChatModels] = useState([]);
-  const [inlineCompletionModels, setInlineCompletionModels] = useState([]);
+export class FormInputDialogBody extends ReactWidget {
+  constructor(options: { fields: any; onDone: (formData: any) => void }) {
+    super();
 
-  const handleSaveClick = async () => {
-    const config: any = {
-      chat_model: {
-        provider: chatModelProvider,
-        model: chatModel,
-        properties: chatModelProperties
-      },
-      inline_completion_model: {
-        provider: inlineCompletionModelProvider,
-        model: inlineCompletionModel,
-        properties: inlineCompletionModelProperties
-      }
-    };
+    this._fields = options.fields || [];
+    this._onDone = options.onDone || (() => {});
+  }
 
-    if (
-      chatModelProvider === 'github-copilot' ||
-      inlineCompletionModelProvider === 'github-copilot'
-    ) {
-      config.store_github_access_token = storeGitHubAccessToken;
-    }
-
-    await NBIAPI.setConfig(config);
-
-    props.onSave();
-  };
-
-  const handleRefreshOllamaModelListClick = async () => {
-    await NBIAPI.updateOllamaModelList();
-    updateModelOptionsForProvider(chatModelProvider, 'chat');
-  };
-
-  const [chatModelProvider, setChatModelProvider] = useState(
-    nbiConfig.chatModel.provider || 'none'
-  );
-  const [inlineCompletionModelProvider, setInlineCompletionModelProvider] =
-    useState(nbiConfig.inlineCompletionModel.provider || 'none');
-  const [chatModel, setChatModel] = useState<string>(nbiConfig.chatModel.model);
-  const [chatModelProperties, setChatModelProperties] = useState<any[]>([]);
-  const [inlineCompletionModelProperties, setInlineCompletionModelProperties] =
-    useState<any[]>([]);
-  const [inlineCompletionModel, setInlineCompletionModel] = useState(
-    nbiConfig.inlineCompletionModel.model
-  );
-  const [storeGitHubAccessToken, setStoreGitHubAccessToken] = useState(
-    nbiConfig.storeGitHubAccessToken
-  );
-
-  const updateModelOptionsForProvider = (
-    providerId: string,
-    modelType: 'chat' | 'inline-completion'
-  ) => {
-    if (modelType === 'chat') {
-      setChatModelProvider(providerId);
-    } else {
-      setInlineCompletionModelProvider(providerId);
-    }
-    const models =
-      modelType === 'chat'
-        ? nbiConfig.chatModels
-        : nbiConfig.inlineCompletionModels;
-    const selectedModelId =
-      modelType === 'chat'
-        ? nbiConfig.chatModel.model
-        : nbiConfig.inlineCompletionModel.model;
-
-    const providerModels = models.filter(
-      (model: any) => model.provider === providerId
+  render(): JSX.Element {
+    return (
+      <FormInputDialogBodyComponent
+        fields={this._fields}
+        onDone={this._onDone}
+      />
     );
-    if (modelType === 'chat') {
-      setChatModels(providerModels);
-    } else {
-      setInlineCompletionModels(providerModels);
-    }
-    let selectedModel = providerModels.find(
-      (model: any) => model.id === selectedModelId
-    );
-    if (!selectedModel) {
-      selectedModel = providerModels?.[0];
-    }
-    if (selectedModel) {
-      if (modelType === 'chat') {
-        setChatModel(selectedModel.id);
-        setChatModelProperties(selectedModel.properties);
-      } else {
-        setInlineCompletionModel(selectedModel.id);
-        setInlineCompletionModelProperties(selectedModel.properties);
-      }
-    } else {
-      if (modelType === 'chat') {
-        setChatModelProperties([]);
-      } else {
-        setInlineCompletionModelProperties([]);
-      }
-    }
-  };
+  }
 
-  const onModelPropertyChange = (
-    modelType: 'chat' | 'inline-completion',
-    propertyId: string,
-    value: string
-  ) => {
-    const modelProperties =
-      modelType === 'chat'
-        ? chatModelProperties
-        : inlineCompletionModelProperties;
-    const updatedProperties = modelProperties.map((property: any) => {
-      if (property.id === propertyId) {
-        return { ...property, value };
-      }
-      return property;
-    });
-    if (modelType === 'chat') {
-      setChatModelProperties(updatedProperties);
-    } else {
-      setInlineCompletionModelProperties(updatedProperties);
-    }
-  };
+  private _fields: any;
+  private _onDone: (formData: any) => void;
+}
 
-  useEffect(() => {
-    updateModelOptionsForProvider(chatModelProvider, 'chat');
-    updateModelOptionsForProvider(
-      inlineCompletionModelProvider,
-      'inline-completion'
-    );
-  }, []);
+function FormInputDialogBodyComponent(props: any) {
+  const [formData, setFormData] = useState<any>({});
+
+  const handleInputChange = (event: any) => {
+    setFormData({ ...formData, [event.target.name]: event.target.value });
+  };
 
   return (
-    <div className="config-dialog">
-      <div className="config-dialog-body">
-        <div className="model-config-section">
-          <div className="model-config-section-header">Chat model</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>Provider</div>
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    onChange={event =>
-                      updateModelOptionsForProvider(event.target.value, 'chat')
-                    }
-                  >
-                    {llmProviders.map((provider: any, index: number) => (
-                      <option
-                        key={index}
-                        value={provider.id}
-                        selected={provider.id === chatModelProvider}
-                      >
-                        {provider.name}
-                      </option>
-                    ))}
-                    <option
-                      key={-1}
-                      value="none"
-                      selected={
-                        chatModelProvider === 'none' ||
-                        !llmProviders.find(
-                          provider => provider.id === chatModelProvider
-                        )
-                      }
-                    >
-                      None
-                    </option>
-                  </select>
-                </div>
-              </div>
-              {!['openai-compatible', 'litellm-compatible', 'none'].includes(
-                chatModelProvider
-              ) &&
-                chatModels.length > 0 && (
-                  <div className="model-config-section-column">
-                    <div>Model</div>
-                    {![
-                      OPENAI_COMPATIBLE_CHAT_MODEL_ID,
-                      LITELLM_COMPATIBLE_CHAT_MODEL_ID
-                    ].includes(chatModel) &&
-                      chatModels.length > 0 && (
-                        <div>
-                          <select
-                            className="jp-mod-styled"
-                            onChange={event => setChatModel(event.target.value)}
-                          >
-                            {chatModels.map((model: any, index: number) => (
-                              <option
-                                key={index}
-                                value={model.id}
-                                selected={model.id === chatModel}
-                              >
-                                {model.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                  </div>
-                )}
-            </div>
-
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {chatModelProvider === 'ollama' && chatModels.length === 0 && (
-                  <div className="ollama-warning-message">
-                    No Ollama models found! Make sure{' '}
-                    <a href="https://ollama.com/" target="_blank">
-                      Ollama
-                    </a>{' '}
-                    is running and models are downloaded to your computer.{' '}
-                    <a
-                      href="javascript:void(0)"
-                      onClick={handleRefreshOllamaModelListClick}
-                    >
-                      Try again
-                    </a>{' '}
-                    once ready.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {chatModelProperties.map((property: any, index: number) => (
-                  <div className="form-field-row" key={index}>
-                    <div className="form-field-description">
-                      {property.name} {property.optional ? '(optional)' : ''}
-                    </div>
-                    <input
-                      name="chat-model-id-input"
-                      placeholder={property.description}
-                      className="jp-mod-styled"
-                      spellCheck={false}
-                      value={property.value}
-                      onChange={event =>
-                        onModelPropertyChange(
-                          'chat',
-                          property.id,
-                          event.target.value
-                        )
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+    <div className="form-input-dialog-body">
+      <div className="form-input-dialog-body-content">
+        <div className="form-input-dialog-body-content-title">
+          {props.title}
         </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">Auto-complete model</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>Provider</div>
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    onChange={event =>
-                      updateModelOptionsForProvider(
-                        event.target.value,
-                        'inline-completion'
-                      )
-                    }
-                  >
-                    {llmProviders.map((provider: any, index: number) => (
-                      <option
-                        key={index}
-                        value={provider.id}
-                        selected={provider.id === inlineCompletionModelProvider}
-                      >
-                        {provider.name}
-                      </option>
-                    ))}
-                    <option
-                      key={-1}
-                      value="none"
-                      selected={
-                        inlineCompletionModelProvider === 'none' ||
-                        !llmProviders.find(
-                          provider =>
-                            provider.id === inlineCompletionModelProvider
-                        )
-                      }
-                    >
-                      None
-                    </option>
-                  </select>
-                </div>
-              </div>
-              {!['openai-compatible', 'litellm-compatible', 'none'].includes(
-                inlineCompletionModelProvider
-              ) && (
-                <div className="model-config-section-column">
-                  <div>Model</div>
-                  {![
-                    OPENAI_COMPATIBLE_INLINE_COMPLETION_MODEL_ID,
-                    LITELLM_COMPATIBLE_INLINE_COMPLETION_MODEL_ID
-                  ].includes(inlineCompletionModel) && (
-                    <div>
-                      <select
-                        className="jp-mod-styled"
-                        onChange={event =>
-                          setInlineCompletionModel(event.target.value)
-                        }
-                      >
-                        {inlineCompletionModels.map(
-                          (model: any, index: number) => (
-                            <option
-                              key={index}
-                              value={model.id}
-                              selected={model.id === inlineCompletionModel}
-                            >
-                              {model.name}
-                            </option>
-                          )
-                        )}
-                      </select>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {inlineCompletionModelProperties.map(
-                  (property: any, index: number) => (
-                    <div className="form-field-row" key={index}>
-                      <div className="form-field-description">
-                        {property.name} {property.optional ? '(optional)' : ''}
-                      </div>
-                      <input
-                        name="inline-completion-model-id-input"
-                        placeholder={property.description}
-                        className="jp-mod-styled"
-                        spellCheck={false}
-                        value={property.value}
-                        onChange={event =>
-                          onModelPropertyChange(
-                            'inline-completion',
-                            property.id,
-                            event.target.value
-                          )
-                        }
-                      />
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {(chatModelProvider === 'github-copilot' ||
-          inlineCompletionModelProvider === 'github-copilot') && (
-          <div className="model-config-section">
-            <div className="model-config-section-header access-token-config-header">
-              GitHub Copilot login{' '}
-              <a
-                href="https://github.com/notebook-intelligence/notebook-intelligence/blob/main/README.md#remembering-github-copilot-login"
-                target="_blank"
+        <div className="form-input-dialog-body-content-fields">
+          {props.fields.map((field: any) => (
+            <div
+              className="form-input-dialog-body-content-field"
+              key={field.name}
+            >
+              <label
+                className="form-input-dialog-body-content-field-label jp-mod-styled"
+                htmlFor={field.name}
               >
-                {' '}
-                <VscWarning
-                  className="access-token-warning"
-                  title="Click to learn more about security implications"
-                />
-              </a>
+                {field.name}
+                {field.required ? ' (required)' : ''}
+              </label>
+              <input
+                className="form-input-dialog-body-content-field-input jp-mod-styled"
+                type={field.type}
+                id={field.name}
+                name={field.name}
+                onChange={handleInputChange}
+                value={formData[field.name] || ''}
+              />
             </div>
-            <div className="model-config-section-body">
-              <div className="model-config-section-row">
-                <div className="model-config-section-column">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={storeGitHubAccessToken}
-                      onChange={event => {
-                        setStoreGitHubAccessToken(event.target.checked);
-                      }}
-                    />
-                    Remember my GitHub Copilot access token
-                  </label>
-                </div>
-              </div>
-            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ marginTop: '10px' }}>
+            <button
+              className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+              onClick={() => props.onDone(formData)}
+            >
+              <div className="jp-Dialog-buttonLabel">Done</div>
+            </button>
           </div>
-        )}
-      </div>
-
-      <div className="config-dialog-footer">
-        <button
-          className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-          onClick={handleSaveClick}
-        >
-          <div className="jp-Dialog-buttonLabel">Save</div>
-        </button>
+        </div>
       </div>
     </div>
   );

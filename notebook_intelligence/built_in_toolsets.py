@@ -20,6 +20,17 @@ async def create_new_notebook(**args) -> str:
 
 @nbapi.auto_approve
 @nbapi.tool
+async def rename_notebook(new_name: str, **args) -> str: 
+    """Renames the notebook.
+    Args:
+        new_name: New name for the notebook
+    """
+    response = args["response"]
+    ui_cmd_response = await response.run_ui_command('notebook-intelligence:rename-notebook', {'newName': new_name})
+    return str(ui_cmd_response)
+
+@nbapi.auto_approve
+@nbapi.tool
 async def add_markdown_cell(source: str, **args) -> str:
     """Adds a markdown cell to notebook.
     Args:
@@ -187,6 +198,8 @@ You are an assistant that creates and edits Jupyter notebooks. Notebooks are mad
 
 If you need to create a notebook use the create_new_notebook tool. If you need to add a code cell to the notebook use the add_code_cell tool. If you need to add a markdown cell to the notebook use the add_markdown_cell tool.
 
+If you need to rename a notebook use the rename_notebook tool.
+
 You can refer to cells in notebooks by their index. The first cell in the notebook has index 0, the second cell has index 1, and so on. You can get the number of cells in the notebook using the get_number_of_cells tool. You can get the type and source of a cell using the get_cell_type_and_source tool. You can get the output of a cell using the get_cell_output tool.
 
 If you need to make changes to an existing notebook use the tools to get existing cell type and source. Use the set_cell_type_and_source tool for updating cell type and source. You can set the cell type to either code or markdown. You can set the source of the cell to either source code or markdown text.
@@ -224,6 +237,7 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
         provider=None,
         tools=[
             create_new_notebook,
+            rename_notebook,
             add_markdown_cell,
             add_code_cell,
             get_number_of_cells,

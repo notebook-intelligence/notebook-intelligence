@@ -27,9 +27,9 @@ dependencies = [
     "tiktoken",
     "cryptography",
     "litellm>=1.62.1",
-    "openai",
+    "openai<1.100.0",
     "ollama",
-    "mcp"
+    "fastmcp"
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 
