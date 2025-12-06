@@ -83,6 +83,7 @@ import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
 import { SettingsPanel } from './components/settings-panel';
+import { ITerminalConnection } from '@jupyterlab/services/lib/terminal/terminal';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -130,6 +131,8 @@ namespace CommandIDs {
     'notebook-intelligence:open-mcp-config-editor';
   export const showFormInputDialog =
     'notebook-intelligence:show-form-input-dialog';
+  export const runCommandInTerminal =
+    'notebook-intelligence:run-command-in-terminal';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -971,6 +974,32 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           }
         } else {
           return 'Cannot rename non notebook files';
+        }
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.runCommandInTerminal, {
+      execute: async args => {
+        const command = args.command as string;
+        const terminal = await app.commands.execute('terminal:create-new', {
+          cwd: (args.cwd as string) || ActiveDocumentWatcher.currentDirectory
+        });
+
+        const session: ITerminalConnection = terminal?.content?.session;
+
+        session.messageReceived.connect((sender, message) => {
+          console.log('Message received in Jupyter terminal:', message);
+        });
+
+        if (session) {
+          session.send({
+            type: 'stdin',
+            content: [command + '\n'] // Add newline to execute the command
+          });
+
+          return 'Command executed in Jupyter terminal';
+        } else {
+          return 'Failed to execute command in Jupyter terminal';
         }
       }
     });

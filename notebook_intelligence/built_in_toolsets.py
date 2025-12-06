@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-from notebook_intelligence.api import ChatResponse, Toolset
+from time import time
+from notebook_intelligence.api import ChatResponse, MarkdownData, MarkdownPartData, Toolset
 import logging
 import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
@@ -534,7 +535,55 @@ async def execute_command(command: str, working_directory: str = ".", **args) ->
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
+@nbapi.tool
+async def run_command_in_jupyter_terminal(command: str, working_directory: str = ".", **args) -> str:
+    """Run a shell command in a Jupyter terminal within working_directory. This can be used to run long running processes like web applications.
+    
+    Args:
+        command: Shell command to execute in the terminal
+        working_directory: Directory to execute command in (relative to jupyter_root_dir, default is root)
+    """
+    try:
+        response = args["response"]
+        ui_cmd_response = await response.run_ui_command('notebook-intelligence:run-command-in-terminal', {
+            'command': command,
+            'cwd': working_directory
+        })
+        return ui_cmd_response
+    except Exception as e:
+        return f"Error running command in Jupyter terminal: {str(e)}"
 
+@nbapi.tool
+async def run_command_in_embedded_terminal(command: str, working_directory: str = ".", **args) -> str:
+    """Run a shell command in an embedded terminal within working_directory. Use this for short running shell commands.
+    
+    Args:
+        command: Shell command to execute in the terminal
+        working_directory: Directory to execute command in (relative to jupyter_root_dir, default is root)
+    """
+    try:
+        response = args["response"]
+        # run the command in a bash process and stream the output to the response
+        process = subprocess.Popen(command, shell=True, cwd=working_directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        response.stream(MarkdownPartData("<terminal-output>"))
+        for line in process.stdout:
+            response.stream(MarkdownPartData(line + "\n"))
+
+        # Wait for the process to finish and get the return code
+        process.wait()
+        response.stream(MarkdownPartData("</terminal-output>"))
+        
+        # Check for any errors
+        if process.returncode != 0:
+            stderr_output = process.stderr.read()
+            response.stream(MarkdownPartData(f"Error executing command: {command}\n"))
+            response.stream(MarkdownPartData(stderr_output + "\n"))
+        else:
+            response.stream(MarkdownPartData(f"Command executed successfully with return code: {process.returncode}"))
+        response.finish()
+        return "Command executed in embedded terminal"
+    except Exception as e:
+        return f"Error running command in embedded terminal: {str(e)}"
 
 NOTEBOOK_EDIT_INSTRUCTIONS = """
 You are an assistant that creates and edits Jupyter notebooks. Notebooks are made up of source code cells and markdown cells. Markdown cells have source in markdown format and code cells have source in a specified programming language. If no programming language is specified, then use Python for the language of the code.
@@ -668,7 +717,8 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
         description="Execute shell commands within Jupyter root directory",
         provider=None,
         tools=[
-            execute_command
+            run_command_in_jupyter_terminal,
+            run_command_in_embedded_terminal
         ],
         instructions=COMMAND_EXECUTE_INSTRUCTIONS
     ),

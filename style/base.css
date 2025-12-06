@@ -733,8 +733,11 @@ body[data-jp-theme-light='false'] .inline-popover {
   display: none;
   margin: 5px;
   padding: 0 5px;
-  border: 1px dashed var(--jp-border-color1);
+  border: 1px solid var(--jp-border-color2);
   border-radius: 5px;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: inset 0 0 15px 15px rgb(23 23 23 / 50%);
 }
 
 .expandable-content .collapsed-icon {
@@ -814,6 +817,14 @@ svg.access-token-warning {
 .checkbox-item-header .checkbox-item-toggle {
   color: var(--jp-ui-font-color0);
   font-weight: bold;
+}
+
+.mode-tools-group-built-in {
+  flex-flow: row wrap;
+}
+
+.mode-tools-group-built-in .checkbox-item {
+  width: 50%;
 }
 
 .mode-tools-group-built-in .checkbox-item-toggle {

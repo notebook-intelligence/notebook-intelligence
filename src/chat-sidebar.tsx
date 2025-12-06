@@ -265,6 +265,7 @@ interface IChatMessageContent {
   content: any;
   contentDetail?: any;
   created: Date;
+  reasoningTag?: string;
   reasoningContent?: string;
   reasoningFinished?: boolean;
   reasoningTime?: number;
@@ -326,6 +327,12 @@ function ChatResponse(props: any) {
   // group messages by type
   const groupedContents: IChatMessageContent[] = [];
   let lastItemType: ResponseStreamDataType | undefined;
+  const responseDetailTags = [
+    '<think>',
+    '</think>',
+    '<terminal-output>',
+    '</terminal-output>'
+  ];
 
   const extractReasoningContent = (item: IChatMessageContent) => {
     let currentContent = item.content as string;
@@ -337,21 +344,35 @@ function ChatResponse(props: any) {
     let reasoningStartTime = new Date();
     const reasoningEndTime = new Date();
 
-    const startPos = currentContent.indexOf('<think>');
+    let startPos = -1;
+    let startTag = '';
+    for (const tag of responseDetailTags) {
+      startPos = currentContent.indexOf(tag);
+      if (startPos >= 0) {
+        startTag = tag;
+        break;
+      }
+    }
 
     const hasStart = startPos >= 0;
     reasoningStartTime = new Date(item.created);
 
     if (hasStart) {
-      currentContent = currentContent.substring(startPos + 7);
+      currentContent = currentContent.substring(startPos + startTag.length);
     }
 
-    const endPos = currentContent.indexOf('</think>');
+    let endPos = -1;
+    for (const tag of responseDetailTags) {
+      endPos = currentContent.indexOf(tag);
+      if (endPos >= 0) {
+        break;
+      }
+    }
     const hasEnd = endPos >= 0;
 
     if (hasEnd) {
       reasoningContent += currentContent.substring(0, endPos);
-      currentContent = currentContent.substring(endPos + 8);
+      currentContent = currentContent.substring(endPos + startTag.length);
     } else {
       if (hasStart) {
         reasoningContent += currentContent;
@@ -360,6 +381,7 @@ function ChatResponse(props: any) {
     }
 
     item.content = currentContent;
+    item.reasoningTag = startTag;
     item.reasoningContent = reasoningContent;
     item.reasoningFinished = hasEnd;
     item.reasoningTime =
@@ -412,6 +434,21 @@ function ChatResponse(props: any) {
     }
   };
 
+  const getReasoningTitle = (item: IChatMessageContent) => {
+    if (item.reasoningTag === '<think>') {
+      return item.reasoningFinished
+        ? 'Thought'
+        : `Thinking (${Math.floor(item.reasoningTime)} s)`;
+    } else if (item.reasoningTag === '<terminal-output>') {
+      return item.reasoningFinished
+        ? 'Output'
+        : `Running (${Math.floor(item.reasoningTime)} s)`;
+    }
+    return item.reasoningFinished
+      ? 'Output'
+      : `Output (${Math.floor(item.reasoningTime)} s)`;
+  };
+
   return (
     <div
       className={`chat-message chat-message-${msg.from}`}
@@ -448,16 +485,14 @@ function ChatResponse(props: any) {
               return (
                 <>
                   {item.reasoningContent && (
-                    <div className="expandable-content">
+                    <div className="expandable-content expanded">
                       <div
                         className="expandable-content-title"
                         onClick={(event: any) => onExpandCollapseClick(event)}
                       >
                         <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
                         <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {item.reasoningFinished
-                          ? 'Thought'
-                          : `Thinking (${Math.floor(item.reasoningTime)} s)`}
+                        {getReasoningTitle(item)}
                       </div>
                       <div className="expandable-content-text">
                         <MarkdownRenderer
@@ -478,7 +513,7 @@ function ChatResponse(props: any) {
                     {item.content}
                   </MarkdownRenderer>
                   {item.contentDetail ? (
-                    <div className="expandable-content">
+                    <div className="expandable-content expanded">
                       <div
                         className="expandable-content-title"
                         onClick={(event: any) => onExpandCollapseClick(event)}
