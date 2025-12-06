@@ -1,12 +1,13 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 from time import time
-from notebook_intelligence.api import ChatResponse, MarkdownData, MarkdownPartData, Toolset
+from notebook_intelligence.api import ChatResponse, MarkdownPartData, Toolset
 import logging
 import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
 from pathlib import Path
 import subprocess
+import fnmatch
 
 from notebook_intelligence.util import get_jupyter_root_dir
 
@@ -342,6 +343,7 @@ async def search_files(
 
 @nbapi.tool
 async def list_files(
+    pattern: str = "**/*",
     directory: str = ".", 
     recursive: bool = False, 
     include_files: bool = True, 
@@ -352,6 +354,7 @@ async def list_files(
     """List files and/or directories within a directory in jupyter_root_dir.
 
     Args:
+        pattern: Glob pattern to filter files (e.g., "*.py", "**/*.txt")
         directory: Directory to list (relative to jupyter_root_dir, default is root)
         recursive: Whether to list contents recursively (default False)
         include_files: Whether to include files (default True)
@@ -375,25 +378,40 @@ async def list_files(
                 return
             for item in sorted(current_dir.iterdir()):
                 item_relpath = rel_path / item.name
-                if item.is_dir():
-                    if include_dirs:
-                        items.append(f"[dir] {item_relpath}")
-                    if recursive:
-                        _scan_dir(item, item_relpath, depth + 1)
-                elif item.is_file():
-                    if include_files:
-                        items.append(f"[file] {item_relpath}")
+                # Check if relative path matches the pattern.
+                if fnmatch.fnmatch(str(item_relpath), pattern) or (
+                    (item.is_dir() and recursive)
+                    and pattern.endswith("/*") and fnmatch.fnmatch(str(item_relpath) + "/", pattern)
+                ):
+                    if item.is_dir():
+                        if include_dirs:
+                            items.append(f"[dir] {item_relpath}")
+                        if recursive:
+                            _scan_dir(item, item_relpath, depth + 1)
+                    elif item.is_file():
+                        if include_files:
+                            items.append(f"[file] {item_relpath}")
+                elif item.is_dir() and recursive:
+                    # Scan the directory even if dir itself does not match, in case children do.
+                    _scan_dir(item, item_relpath, depth + 1)
 
-        _scan_dir(list_dir, Path(directory).resolve().relative_to(Path(".").resolve()), 1) if recursive else [
-            items.append(f"[{'dir' if item.is_dir() else 'file'}] {item.name}")
-            for item in sorted(list_dir.iterdir())
-            if (item.is_file() and include_files) or (item.is_dir() and include_dirs)
-        ]
+        # For recursive: walk subdirs, non-recursive: just list this dir
+        root_rel_path = Path(directory)
+        if recursive:
+            _scan_dir(list_dir, root_rel_path, 1)
+        else:
+            for item in sorted(list_dir.iterdir()):
+                item_relpath = root_rel_path / item.name
+                if fnmatch.fnmatch(str(item_relpath), pattern):
+                    if item.is_file() and include_files:
+                        items.append(f"[file] {item_relpath}")
+                    elif item.is_dir() and include_dirs:
+                        items.append(f"[dir] {item_relpath}")
 
         if items:
-            return f"Contents of '{directory}':\n" + "\n".join(str(x) for x in items)
+            return f"Contents of '{directory}' (pattern: '{pattern}'):\n" + "\n".join(str(x) for x in items)
         else:
-            return f"Directory '{directory}' is empty"
+            return f"No files or directories matching pattern '{pattern}' in '{directory}'"
     except Exception as e:
         return f"Error listing files: {str(e)}"
 
