@@ -724,23 +724,51 @@ function SettingsPanelComponentMCPServers(props: any) {
                       </div>
                       {getMCPServerEnabled(server.id) && (
                         <div>
-                          {server.tools.map((tool: any) => (
-                            <PillItem
-                              label={tool.name}
-                              title={tool.description}
-                              checked={getMCPServerToolEnabled(
-                                server.id,
-                                tool.name
-                              )}
-                              onClick={() => {
-                                setMCPServerToolEnabled(
-                                  server.id,
-                                  tool.name,
-                                  !getMCPServerToolEnabled(server.id, tool.name)
-                                );
-                              }}
-                            ></PillItem>
-                          ))}
+                          {server.tools.length > 0 && (
+                            <div className="mcp-server-tools">
+                              <div className="mcp-server-tools-header">
+                                Tools
+                              </div>
+                              <div>
+                                {server.tools.map((tool: any) => (
+                                  <PillItem
+                                    label={tool.name}
+                                    title={tool.description}
+                                    checked={getMCPServerToolEnabled(
+                                      server.id,
+                                      tool.name
+                                    )}
+                                    onClick={() => {
+                                      setMCPServerToolEnabled(
+                                        server.id,
+                                        tool.name,
+                                        !getMCPServerToolEnabled(
+                                          server.id,
+                                          tool.name
+                                        )
+                                      );
+                                    }}
+                                  ></PillItem>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {server.prompts.length > 0 && (
+                            <div className="mcp-server-prompts">
+                              <div className="mcp-server-prompts-header">
+                                Prompts
+                              </div>
+                              <div>
+                                {server.prompts.map((prompt: any) => (
+                                  <PillItem
+                                    label={prompt.name}
+                                    title={prompt.description}
+                                    checked={true}
+                                  ></PillItem>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
