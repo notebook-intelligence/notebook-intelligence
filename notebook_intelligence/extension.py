@@ -17,12 +17,12 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 import tornado
 from tornado import websocket
-from traitlets import Unicode
-from notebook_intelligence.api import BuiltinToolset, CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
+from traitlets import Bool, List, Unicode
+from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env
 from notebook_intelligence.context_factory import RuleContextFactory
 
 ai_service_manager: AIServiceManager = None
@@ -31,7 +31,8 @@ tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
 class GetCapabilitiesHandler(APIHandler):
-    notebook_execute_tool = 'enabled'
+    disabled_tools = []
+    allow_enabling_tools_with_env = False
 
     @tornado.web.authenticated
     def get(self):
@@ -39,8 +40,11 @@ class GetCapabilitiesHandler(APIHandler):
         ai_service_manager.update_models_from_config()
         nbi_config = ai_service_manager.nbi_config
         llm_providers = ai_service_manager.llm_providers.values()
-        notebook_execute_tool_enabled = self.notebook_execute_tool == 'enabled' or (self.notebook_execute_tool == 'env_enabled' and os.getenv('NBI_NOTEBOOK_EXECUTE_TOOL', 'disabled') == 'enabled')
-        allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name} for toolset in built_in_toolsets.values() if toolset.id != BuiltinToolset.NotebookExecute or notebook_execute_tool_enabled]
+        def is_tool_enabled(tool: str) -> bool:
+            if self.disabled_tools is None:
+                return True
+            return tool not in self.disabled_tools or (self.allow_enabling_tools_with_env and is_builtin_tool_enabled_in_env(tool))
+        allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name} for toolset in built_in_toolsets.values() if is_tool_enabled(toolset.id)]
         mcp_servers = ai_service_manager.get_mcp_servers()
         mcp_server_tools = [{
             "id": mcp_server.name,
@@ -717,14 +721,22 @@ class NotebookIntelligence(ExtensionApp):
     handlers = []
     root_dir = ''
 
-    notebook_execute_tool = Unicode(
-        default_value="enabled",
+    disabled_tools = List(
+        trait=Unicode,
+        default_value=None,
         help="""
-        Notebook execute tool options.
+        List of built-in tools to disable. Valid tool names: nbi-notebook-edit, nbi-notebook-execute, nbi-python-file-edit, nbi-file-edit, nbi-file-read, nbi-command-execute.
 
-        'enabled' - Enable notebook execute tool (default).
-        'disabled' - Disabled notebook execute tool.
-        'env_enabled' - Disabled by default, can be enabled using 'NBI_NOTEBOOK_EXECUTE_TOOL=enabled'.
+        Example: ['nbi-python-file-edit', 'nbi-command-execute']
+        """,
+        allow_none=True,
+        config=True,
+    )
+
+    allow_enabling_tools_with_env = Bool(
+        default_value=False,
+        help="""
+        Allow enabling disabled tools with environment variable (NBI_ENABLED_BUILTIN_TOOLS).
         """,
         allow_none=True,
         config=True,
@@ -770,7 +782,8 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_rules = url_path_join(base_url, "notebook-intelligence", "rules")
         route_pattern_rules_toggle = url_path_join(base_url, "notebook-intelligence", "rules", r"([^/]+)", "toggle")
         route_pattern_rules_reload = url_path_join(base_url, "notebook-intelligence", "rules", "reload")
-        GetCapabilitiesHandler.notebook_execute_tool = self.notebook_execute_tool
+        GetCapabilitiesHandler.disabled_tools = self.disabled_tools
+        GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),

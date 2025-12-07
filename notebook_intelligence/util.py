@@ -2,6 +2,7 @@
 
 import os
 import base64
+from typing import Set
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet
@@ -9,6 +10,7 @@ import asyncio
 from tornado import ioloop
 
 _jupyter_root_dir: str = None
+_enabled_tools: Set[str] = None
 
 def set_jupyter_root_dir(root_dir: str):
     global _jupyter_root_dir
@@ -72,6 +74,23 @@ def decrypt_with_password(password: str, encrypted_data_with_salt: bytes) -> byt
     decrypted_data = f.decrypt(encrypted_data)
 
     return decrypted_data
+
+def get_enabled_tools_in_env() -> Set[str]:
+  global _enabled_tools
+  if _enabled_tools is not None:
+    return _enabled_tools
+  
+  # load enabled tools from environment variable
+  _enabled_tools = set()
+  enabled_tools_list = os.getenv('NBI_ENABLED_TOOLS', '').split(',')
+  for tool in enabled_tools_list:
+    tool = tool.strip() 
+    if tool:
+      _enabled_tools.add(tool)
+  return _enabled_tools
+
+def is_tool_enabled_in_env(tool: str) -> bool:
+  return tool in get_enabled_tools_in_env()
 
 class ThreadSafeWebSocketConnector():
   def __init__(self, websocket_handler):
