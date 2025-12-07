@@ -75,22 +75,22 @@ def decrypt_with_password(password: str, encrypted_data_with_salt: bytes) -> byt
 
     return decrypted_data
 
-def get_enabled_tools_in_env() -> Set[str]:
+def get_enabled_builtin_tools_in_env() -> Set[str]:
   global _enabled_tools
   if _enabled_tools is not None:
     return _enabled_tools
   
-  # load enabled tools from environment variable
+  # load enabled built-in tools from environment variable
   _enabled_tools = set()
-  enabled_tools_list = os.getenv('NBI_ENABLED_TOOLS', '').split(',')
+  enabled_tools_list = os.getenv('NBI_ENABLED_BUILTIN_TOOLS', '').split(',')
   for tool in enabled_tools_list:
     tool = tool.strip() 
     if tool:
       _enabled_tools.add(tool)
   return _enabled_tools
 
-def is_tool_enabled_in_env(tool: str) -> bool:
-  return tool in get_enabled_tools_in_env()
+def is_builtin_tool_enabled_in_env(tool: str) -> bool:
+  return tool in get_enabled_builtin_tools_in_env()
 
 class ThreadSafeWebSocketConnector():
   def __init__(self, websocket_handler):
