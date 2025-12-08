@@ -749,7 +749,7 @@ function SidebarComponent(props: any) {
 
   const [showModeTools, setShowModeTools] = useState(false);
   const toolSelectionsInitial: any = {
-    builtinToolsets: [BuiltinToolsetType.NotebookEdit],
+    builtinToolsets: [],
     mcpServers: {},
     extensions: {}
   };
@@ -765,6 +765,51 @@ function SidebarComponent(props: any) {
   const [lastScrollTime, setLastScrollTime] = useState(0);
   const [scrollPending, setScrollPending] = useState(false);
 
+  const cleanupRemovedToolsFromToolSelections = () => {
+    const newToolSelections = { ...toolSelections };
+    // if servers or tool is not in mcpServerEnabledState, remove it from newToolSelections
+    for (const serverId in newToolSelections.mcpServers) {
+      if (!mcpServerEnabledState.has(serverId)) {
+        delete newToolSelections.mcpServers[serverId];
+      } else {
+        for (const tool of newToolSelections.mcpServers[serverId]) {
+          if (!mcpServerEnabledState.get(serverId).has(tool)) {
+            newToolSelections.mcpServers[serverId].splice(
+              newToolSelections.mcpServers[serverId].indexOf(tool),
+              1
+            );
+          }
+        }
+      }
+    }
+    for (const extensionId in newToolSelections.extensions) {
+      if (!mcpServerEnabledState.has(extensionId)) {
+        delete newToolSelections.extensions[extensionId];
+      } else {
+        for (const toolsetId in newToolSelections.extensions[extensionId]) {
+          for (const tool of newToolSelections.extensions[extensionId][
+            toolsetId
+          ]) {
+            if (!mcpServerEnabledState.get(extensionId).has(tool)) {
+              newToolSelections.extensions[extensionId][toolsetId].splice(
+                newToolSelections.extensions[extensionId][toolsetId].indexOf(
+                  tool
+                ),
+                1
+              );
+            }
+          }
+        }
+      }
+    }
+    setToolSelections(newToolSelections);
+    setRenderCount(renderCount => renderCount + 1);
+  };
+
+  useEffect(() => {
+    cleanupRemovedToolsFromToolSelections();
+  }, [mcpServerEnabledState]);
+
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       toolConfigRef.current = NBIAPI.config.toolConfig;
@@ -774,7 +819,6 @@ function SidebarComponent(props: any) {
         mcpServerSettingsRef.current
       );
       setMCPServerEnabledState(newMcpServerEnabledState);
-      setToolSelections(structuredClone(toolSelectionsInitial));
       setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
@@ -1927,8 +1971,6 @@ function SidebarComponent(props: any) {
                   onChange={event => {
                     if (event.target.value === 'ask') {
                       setToolSelections(toolSelectionsEmpty);
-                    } else if (event.target.value === 'agent') {
-                      setToolSelections(structuredClone(toolSelectionsInitial));
                     }
                     setShowModeTools(false);
                     setChatMode(event.target.value);
