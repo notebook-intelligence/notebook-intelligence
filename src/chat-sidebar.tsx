@@ -725,8 +725,7 @@ function SidebarComponent(props: any) {
   const [toolSelectionTitle, setToolSelectionTitle] =
     useState('Tool selection');
   const [selectedToolCount, setSelectedToolCount] = useState(0);
-  const [notebookExecuteToolSelected, setNotebookExecuteToolSelected] =
-    useState(false);
+  const [unsafeToolSelected, setUnsafeToolSelected] = useState(false);
 
   const [renderCount, setRenderCount] = useState(1);
   const toolConfigRef = useRef({
@@ -866,9 +865,15 @@ function SidebarComponent(props: any) {
     setSelectedToolCount(
       builtinToolSelCount + mcpServerToolSelCount + extensionToolSelCount
     );
-    setNotebookExecuteToolSelected(
-      toolSelections.builtinToolsets.includes(
-        BuiltinToolsetType.NotebookExecute
+    setUnsafeToolSelected(
+      toolSelections.builtinToolsets.some((toolsetName: string) =>
+        [
+          BuiltinToolsetType.NotebookEdit,
+          BuiltinToolsetType.NotebookExecute,
+          BuiltinToolsetType.PythonFileEdit,
+          BuiltinToolsetType.FileEdit,
+          BuiltinToolsetType.CommandExecute
+        ].includes(toolsetName as unknown as BuiltinToolsetType)
       )
     );
     setToolSelectionTitle(
@@ -1982,11 +1987,11 @@ function SidebarComponent(props: any) {
               </div>
               {chatMode !== 'ask' && (
                 <div
-                  className={`user-input-footer-button tools-button ${notebookExecuteToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
+                  className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
                   onClick={() => handleChatToolsButtonClick()}
                   title={
-                    notebookExecuteToolSelected
-                      ? `Notebook execute tool selected!\n${toolSelectionTitle}`
+                    unsafeToolSelected
+                      ? `Tool selection can cause irreversible changes! Review each tool execution carefully.\n${toolSelectionTitle}`
                       : toolSelectionTitle
                   }
                 >
