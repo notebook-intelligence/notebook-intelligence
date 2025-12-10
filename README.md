@@ -75,6 +75,15 @@ To let Notebook Intelligence remember your GitHub access token, go to Notebook I
 
 If your stored access token fails to login (due to expiration or other reasons), you will be prompted to relogin on the UI.
 
+## Built-in Tools
+
+- **Notebook Edit** (nbi-notebook-edit): Edit notebook using the JupyterLab notebook editor.
+- **Notebook Execute** (nbi-notebook-execute): Run notebooks in JupyterLab UI.
+- **Python File Edit** (nbi-python-file-edit): Edit Python files using the JupyterLab file editor.
+- **File Edit** (nbi-file-edit): Edit files in the Jupyter root directory.
+- **File Read** (nbi-file-read): Read files in the Jupyter root directory.
+- **Command Execute** (nbi-command-execute): Execute shell commands using embedded terminal in Agent UI or JupyterLab terminal.
+
 ### Disabling Built-in tools
 
 All built-in toolas are enabled by default in Agent Mode. However, you can disable them and make them controlled by an environment variable.
@@ -84,6 +93,8 @@ In order to disable any built-in tool use the `disabled_tools` config:
 ```python
 c.NotebookIntelligence.disabled_tools = ["nbi-notebook-execute","nbi-python-file-edit"]
 ```
+
+Valid built-in tool values are `nbi-notebook-edit`, `nbi-notebook-execute`, `nbi-python-file-edit`, `nbi-file-edit`, `nbi-file-read`, `nbi-command-execute`.
 
 In order to disable a built-in tool by default but allow re-enabling using an environment variable use the `allow_enabling_tools_with_env` config:
 
