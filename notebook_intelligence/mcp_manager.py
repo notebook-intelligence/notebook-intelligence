@@ -11,14 +11,16 @@ from typing import Any, Union
 import uuid
 from fastmcp.client import StdioTransport, StreamableHttpTransport
 from mcp import StdioServerParameters
+import mcp
 from mcp.client.stdio import get_default_environment as mcp_get_default_environment
-from mcp.types import CallToolResult, TextContent, ImageContent
-from tornado import ioloop
-from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, HTMLFrameData, ImageData, MCPPrompt, MCPServer, MCPServerStatus, MarkdownData, ProgressData, PromptArgument, SignalImpl, Tool, ToolPreInvokeResponse
+from mcp.types import TextContent, ImageContent
+from notebook_intelligence.api import BackendMessageType, ChatCommand, ChatRequest, ChatResponse, ImageData, MCPPrompt, MCPServer, MCPServerStatus, MarkdownData, ProgressData, PromptArgument, SignalImpl, Tool, ToolPreInvokeResponse
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import logging
 from enum import Enum
 from fastmcp import Client
+from ._version import __version__ as NBI_VERSION
+EDITOR_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 
 from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
@@ -172,6 +174,11 @@ class MCPServerImpl(MCPServer):
         self._client_thread = None
         self._status = MCPServerStatus.NotConnected
         self._tool_prompt_list_lock = threading.Lock()
+        self._mcp_client_info=mcp.types.Implementation(
+            name=EDITOR_VERSION,
+            title=EDITOR_VERSION,
+            version=NBI_VERSION
+        )
         self.connect()
 
     @property
@@ -311,12 +318,12 @@ class MCPServerImpl(MCPServer):
                 command=self._stdio_params.command,
                 args=self._stdio_params.args,
                 env=self._stdio_params.env
-            ))
+            ), client_info=self._mcp_client_info)
         elif self._streamable_http_params is not None:
             return Client(transport=StreamableHttpTransport(
                 url=self._streamable_http_params.url,
                 headers=self._streamable_http_params.headers
-            ))
+            ), client_info=self._mcp_client_info)
 
     async def _get_client(self) -> Client:
         if self._stdio_params is None and self._streamable_http_params is None:
