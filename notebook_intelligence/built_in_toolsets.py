@@ -667,7 +667,7 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
     BuiltinToolset.NotebookEdit: Toolset(
         id=BuiltinToolset.NotebookEdit,
         name="Notebook edit",
-        description="Notebook edit",
+        description="Edit notebook using the JupyterLab notebook editor",
         provider=None,
         tools=[
             create_new_notebook,
@@ -687,7 +687,7 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
     BuiltinToolset.NotebookExecute: Toolset(
         id=BuiltinToolset.NotebookExecute,
         name="Notebook execute",
-        description="Notebook execute",
+        description="Run notebooks in JupyterLab UI",
         provider=None,
         tools=[
             run_cell
@@ -697,7 +697,7 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
     BuiltinToolset.PythonFileEdit: Toolset(
         id=BuiltinToolset.PythonFileEdit,
         name="Python file edit",
-        description="Python file edit",
+        description="Edit Python files using the JupyterLab file editor",
         provider=None,
         tools=[
             create_new_python_file,
@@ -732,7 +732,7 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
     BuiltinToolset.CommandExecute: Toolset(
         id=BuiltinToolset.CommandExecute,
         name="Command execute",
-        description="Execute shell commands within Jupyter root directory",
+        description="Execute shell commands using embedded terminal in Agent UI or JupyterLab terminal",
         provider=None,
         tools=[
             run_command_in_jupyter_terminal,

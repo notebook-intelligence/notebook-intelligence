@@ -2084,6 +2084,7 @@ function SidebarComponent(props: any) {
                       key={toolset.id}
                       label={toolset.name}
                       checked={getBuiltinToolsetState(toolset.id)}
+                      tooltip={toolset.description}
                       header={true}
                       onClick={() => {
                         setBuiltinToolsetState(

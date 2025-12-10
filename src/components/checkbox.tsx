@@ -10,7 +10,7 @@ export function CheckBoxItem(props: any) {
   return (
     <div
       className={`checkbox-item checkbox-item-indent-${indent} ${props.header ? 'checkbox-item-header' : ''}`}
-      title={props.title}
+      title={props.tooltip || props.title || ''}
       onClick={event => props.onClick(event)}
     >
       <div className="checkbox-item-toggle">

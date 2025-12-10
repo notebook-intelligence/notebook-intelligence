@@ -44,7 +44,7 @@ class GetCapabilitiesHandler(APIHandler):
             if self.disabled_tools is None:
                 return True
             return tool not in self.disabled_tools or (self.allow_enabling_tools_with_env and is_builtin_tool_enabled_in_env(tool))
-        allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name} for toolset in built_in_toolsets.values() if is_tool_enabled(toolset.id)]
+        allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name, "description": toolset.description} for toolset in built_in_toolsets.values() if is_tool_enabled(toolset.id)]
         mcp_servers = ai_service_manager.get_mcp_servers()
         mcp_server_tools = [{
             "id": mcp_server.name,
