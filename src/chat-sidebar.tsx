@@ -70,6 +70,7 @@ export interface IRunChatCompletionRequest {
   type: RunChatCompletionType;
   content: string;
   language?: string;
+  currentDirectory?: string;
   filename?: string;
   prefix?: string;
   suffix?: string;
@@ -80,6 +81,7 @@ export interface IRunChatCompletionRequest {
 }
 
 export interface IChatSidebarOptions {
+  getCurrentDirectory: () => string;
   getActiveDocumentInfo: () => IActiveDocumentInfo;
   getActiveSelectionContent: () => string;
   getCurrentCellContents: () => ICellContents;
@@ -99,6 +101,7 @@ export class ChatSidebar extends ReactWidget {
   render(): JSX.Element {
     return (
       <SidebarComponent
+        getCurrentDirectory={this._options.getCurrentDirectory}
         getActiveDocumentInfo={this._options.getActiveDocumentInfo}
         getActiveSelectionContent={this._options.getActiveSelectionContent}
         getCurrentCellContents={this._options.getCurrentCellContents}
@@ -262,6 +265,7 @@ interface IChatMessageContent {
   content: any;
   contentDetail?: any;
   created: Date;
+  reasoningTag?: string;
   reasoningContent?: string;
   reasoningFinished?: boolean;
   reasoningTime?: number;
@@ -323,6 +327,12 @@ function ChatResponse(props: any) {
   // group messages by type
   const groupedContents: IChatMessageContent[] = [];
   let lastItemType: ResponseStreamDataType | undefined;
+  const responseDetailTags = [
+    '<think>',
+    '</think>',
+    '<terminal-output>',
+    '</terminal-output>'
+  ];
 
   const extractReasoningContent = (item: IChatMessageContent) => {
     let currentContent = item.content as string;
@@ -334,21 +344,35 @@ function ChatResponse(props: any) {
     let reasoningStartTime = new Date();
     const reasoningEndTime = new Date();
 
-    const startPos = currentContent.indexOf('<think>');
+    let startPos = -1;
+    let startTag = '';
+    for (const tag of responseDetailTags) {
+      startPos = currentContent.indexOf(tag);
+      if (startPos >= 0) {
+        startTag = tag;
+        break;
+      }
+    }
 
     const hasStart = startPos >= 0;
     reasoningStartTime = new Date(item.created);
 
     if (hasStart) {
-      currentContent = currentContent.substring(startPos + 7);
+      currentContent = currentContent.substring(startPos + startTag.length);
     }
 
-    const endPos = currentContent.indexOf('</think>');
+    let endPos = -1;
+    for (const tag of responseDetailTags) {
+      endPos = currentContent.indexOf(tag);
+      if (endPos >= 0) {
+        break;
+      }
+    }
     const hasEnd = endPos >= 0;
 
     if (hasEnd) {
       reasoningContent += currentContent.substring(0, endPos);
-      currentContent = currentContent.substring(endPos + 8);
+      currentContent = currentContent.substring(endPos + startTag.length);
     } else {
       if (hasStart) {
         reasoningContent += currentContent;
@@ -357,6 +381,7 @@ function ChatResponse(props: any) {
     }
 
     item.content = currentContent;
+    item.reasoningTag = startTag;
     item.reasoningContent = reasoningContent;
     item.reasoningFinished = hasEnd;
     item.reasoningTime =
@@ -409,6 +434,21 @@ function ChatResponse(props: any) {
     }
   };
 
+  const getReasoningTitle = (item: IChatMessageContent) => {
+    if (item.reasoningTag === '<think>') {
+      return item.reasoningFinished
+        ? 'Thought'
+        : `Thinking (${Math.floor(item.reasoningTime)} s)`;
+    } else if (item.reasoningTag === '<terminal-output>') {
+      return item.reasoningFinished
+        ? 'Output'
+        : `Running (${Math.floor(item.reasoningTime)} s)`;
+    }
+    return item.reasoningFinished
+      ? 'Output'
+      : `Output (${Math.floor(item.reasoningTime)} s)`;
+  };
+
   return (
     <div
       className={`chat-message chat-message-${msg.from}`}
@@ -445,16 +485,14 @@ function ChatResponse(props: any) {
               return (
                 <>
                   {item.reasoningContent && (
-                    <div className="expandable-content">
+                    <div className="expandable-content expanded">
                       <div
                         className="expandable-content-title"
                         onClick={(event: any) => onExpandCollapseClick(event)}
                       >
                         <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
                         <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {item.reasoningFinished
-                          ? 'Thought'
-                          : `Thinking (${Math.floor(item.reasoningTime)} s)`}
+                        {getReasoningTitle(item)}
                       </div>
                       <div className="expandable-content-text">
                         <MarkdownRenderer
@@ -475,7 +513,7 @@ function ChatResponse(props: any) {
                     {item.content}
                   </MarkdownRenderer>
                   {item.contentDetail ? (
-                    <div className="expandable-content">
+                    <div className="expandable-content expanded">
                       <div
                         className="expandable-content-title"
                         onClick={(event: any) => onExpandCollapseClick(event)}
@@ -616,6 +654,7 @@ async function submitCompletionRequest(
         request.chatId,
         request.content,
         request.language || 'python',
+        request.currentDirectory || '',
         request.filename || 'Untitled.ipynb',
         request.additionalContext || [],
         request.chatMode,
@@ -631,6 +670,7 @@ async function submitCompletionRequest(
         request.chatId,
         request.content,
         request.language || 'python',
+        request.currentDirectory || '',
         request.filename || 'Untitled.ipynb',
         [],
         'ask',
@@ -685,8 +725,7 @@ function SidebarComponent(props: any) {
   const [toolSelectionTitle, setToolSelectionTitle] =
     useState('Tool selection');
   const [selectedToolCount, setSelectedToolCount] = useState(0);
-  const [notebookExecuteToolSelected, setNotebookExecuteToolSelected] =
-    useState(false);
+  const [unsafeToolSelected, setUnsafeToolSelected] = useState(false);
 
   const [renderCount, setRenderCount] = useState(1);
   const toolConfigRef = useRef({
@@ -709,7 +748,7 @@ function SidebarComponent(props: any) {
 
   const [showModeTools, setShowModeTools] = useState(false);
   const toolSelectionsInitial: any = {
-    builtinToolsets: [BuiltinToolsetType.NotebookEdit],
+    builtinToolsets: [],
     mcpServers: {},
     extensions: {}
   };
@@ -725,6 +764,51 @@ function SidebarComponent(props: any) {
   const [lastScrollTime, setLastScrollTime] = useState(0);
   const [scrollPending, setScrollPending] = useState(false);
 
+  const cleanupRemovedToolsFromToolSelections = () => {
+    const newToolSelections = { ...toolSelections };
+    // if servers or tool is not in mcpServerEnabledState, remove it from newToolSelections
+    for (const serverId in newToolSelections.mcpServers) {
+      if (!mcpServerEnabledState.has(serverId)) {
+        delete newToolSelections.mcpServers[serverId];
+      } else {
+        for (const tool of newToolSelections.mcpServers[serverId]) {
+          if (!mcpServerEnabledState.get(serverId).has(tool)) {
+            newToolSelections.mcpServers[serverId].splice(
+              newToolSelections.mcpServers[serverId].indexOf(tool),
+              1
+            );
+          }
+        }
+      }
+    }
+    for (const extensionId in newToolSelections.extensions) {
+      if (!mcpServerEnabledState.has(extensionId)) {
+        delete newToolSelections.extensions[extensionId];
+      } else {
+        for (const toolsetId in newToolSelections.extensions[extensionId]) {
+          for (const tool of newToolSelections.extensions[extensionId][
+            toolsetId
+          ]) {
+            if (!mcpServerEnabledState.get(extensionId).has(tool)) {
+              newToolSelections.extensions[extensionId][toolsetId].splice(
+                newToolSelections.extensions[extensionId][toolsetId].indexOf(
+                  tool
+                ),
+                1
+              );
+            }
+          }
+        }
+      }
+    }
+    setToolSelections(newToolSelections);
+    setRenderCount(renderCount => renderCount + 1);
+  };
+
+  useEffect(() => {
+    cleanupRemovedToolsFromToolSelections();
+  }, [mcpServerEnabledState]);
+
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       toolConfigRef.current = NBIAPI.config.toolConfig;
@@ -734,7 +818,6 @@ function SidebarComponent(props: any) {
         mcpServerSettingsRef.current
       );
       setMCPServerEnabledState(newMcpServerEnabledState);
-      setToolSelections(structuredClone(toolSelectionsInitial));
       setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
@@ -782,9 +865,15 @@ function SidebarComponent(props: any) {
     setSelectedToolCount(
       builtinToolSelCount + mcpServerToolSelCount + extensionToolSelCount
     );
-    setNotebookExecuteToolSelected(
-      toolSelections.builtinToolsets.includes(
-        BuiltinToolsetType.NotebookExecute
+    setUnsafeToolSelected(
+      toolSelections.builtinToolsets.some((toolsetName: string) =>
+        [
+          BuiltinToolsetType.NotebookEdit,
+          BuiltinToolsetType.NotebookExecute,
+          BuiltinToolsetType.PythonFileEdit,
+          BuiltinToolsetType.FileEdit,
+          BuiltinToolsetType.CommandExecute
+        ].includes(toolsetName as unknown as BuiltinToolsetType)
       )
     );
     setToolSelectionTitle(
@@ -1311,6 +1400,7 @@ function SidebarComponent(props: any) {
         type: RunChatCompletionType.Chat,
         content: extractedPrompt,
         language: activeDocInfo.language,
+        currentDirectory: props.getCurrentDirectory(),
         filename: activeDocInfo.filePath,
         additionalContext,
         chatMode,
@@ -1886,8 +1976,6 @@ function SidebarComponent(props: any) {
                   onChange={event => {
                     if (event.target.value === 'ask') {
                       setToolSelections(toolSelectionsEmpty);
-                    } else if (event.target.value === 'agent') {
-                      setToolSelections(structuredClone(toolSelectionsInitial));
                     }
                     setShowModeTools(false);
                     setChatMode(event.target.value);
@@ -1899,11 +1987,11 @@ function SidebarComponent(props: any) {
               </div>
               {chatMode !== 'ask' && (
                 <div
-                  className={`user-input-footer-button tools-button ${notebookExecuteToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
+                  className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
                   onClick={() => handleChatToolsButtonClick()}
                   title={
-                    notebookExecuteToolSelected
-                      ? `Notebook execute tool selected!\n${toolSelectionTitle}`
+                    unsafeToolSelected
+                      ? `Tool selection can cause irreversible changes! Review each tool execution carefully.\n${toolSelectionTitle}`
                       : toolSelectionTitle
                   }
                 >
@@ -1996,6 +2084,7 @@ function SidebarComponent(props: any) {
                       key={toolset.id}
                       label={toolset.name}
                       checked={getBuiltinToolsetState(toolset.id)}
+                      tooltip={toolset.description}
                       header={true}
                       onClick={() => {
                         setBuiltinToolsetState(

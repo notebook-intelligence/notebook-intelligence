@@ -456,11 +456,14 @@ def _aggregate_streaming_response(client: sseclient.SSEClient) -> dict:
             if 'arguments' in tool_call['function'] and tool_call['function']['arguments'] == '':
                 tool_call['function']['arguments'] = '{}'
 
+        # if tool_call doesnt have name remove (Claude Sonnet 4 issue)
+        tool_calls = [tool_call for tool_call in final_tool_calls if 'name' in tool_call['function'] and tool_call['function']]
+
         return {
             "choices": [
                 {
                     "message": {
-                        "tool_calls": final_tool_calls if len(final_tool_calls) > 0 else None,
+                        "tool_calls": tool_calls if len(tool_calls) > 0 else None,
                         "content": final_content,
                         "role": "assistant"
                     }

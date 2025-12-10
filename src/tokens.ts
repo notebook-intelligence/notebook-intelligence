@@ -100,7 +100,11 @@ export interface IToolSelections {
 
 export enum BuiltinToolsetType {
   NotebookEdit = 'nbi-notebook-edit',
-  NotebookExecute = 'nbi-notebook-execute'
+  NotebookExecute = 'nbi-notebook-execute',
+  PythonFileEdit = 'nbi-python-file-edit',
+  FileEdit = 'nbi-file-edit',
+  FileRead = 'nbi-file-read',
+  CommandExecute = 'nbi-command-execute'
 }
 
 export const GITHUB_COPILOT_PROVIDER_ID = 'github-copilot';

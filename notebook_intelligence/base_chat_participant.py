@@ -116,7 +116,7 @@ class CreateNewNotebookTool(Tool):
         if not self._auto_approve:
             confirmationTitle = "Approve"
             confirmationMessage = "Are you sure you want to call this tool?"
-        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", confirmationTitle, confirmationMessage)
+        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", detail={"title": "Parameters", "content": json.dumps(tool_args)}, confirmationTitle=confirmationTitle, confirmationMessage=confirmationMessage)
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         cell_sources = tool_args.get('cell_sources', [])
@@ -188,7 +188,7 @@ class AddMarkdownCellToNotebookTool(Tool):
         if not self._auto_approve:
             confirmationTitle = "Approve"
             confirmationMessage = "Are you sure you want to call this tool?"
-        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", confirmationTitle, confirmationMessage)
+        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", detail={"title": "Parameters", "content": json.dumps(tool_args)}, confirmationTitle=confirmationTitle, confirmationMessage=confirmationMessage)
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         notebook_file_path = tool_args.get('notebook_file_path', '')
@@ -252,7 +252,7 @@ class AddCodeCellTool(Tool):
         if not self._auto_approve:
             confirmationTitle = "Approve"
             confirmationMessage = "Are you sure you want to call this tool?"
-        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", confirmationTitle, confirmationMessage)
+        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", detail={"title": "Parameters", "content": json.dumps(tool_args)}, confirmationTitle=confirmationTitle, confirmationMessage=confirmationMessage)
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         notebook_file_path = tool_args.get('notebook_file_path', '')

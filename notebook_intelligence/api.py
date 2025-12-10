@@ -50,6 +50,9 @@ class BuiltinToolset(str, Enum):
     NotebookEdit = 'nbi-notebook-edit'
     NotebookExecute = 'nbi-notebook-execute'
     PythonFileEdit = 'nbi-python-file-edit'
+    FileEdit = 'nbi-file-edit'
+    FileRead = 'nbi-file-read'
+    CommandExecute = 'nbi-command-execute'
 
 class MCPServerStatus(str, Enum):
     NotConnected = 'not-connected'
@@ -379,7 +382,7 @@ class SimpleTool(Tool):
         if not self._auto_approve:
             confirmationTitle = "Approve"
             confirmationMessage = "Are you sure you want to call this tool?"
-        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", confirmationTitle, confirmationMessage)
+        return ToolPreInvokeResponse(f"Calling tool '{self.name}'", detail={"title": "Parameters", "content": json.dumps(tool_args)}, confirmationTitle=confirmationTitle, confirmationMessage=confirmationMessage)
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         fn_args = tool_args.copy()
@@ -485,7 +488,7 @@ def tool(tool_function: Callable) -> SimpleTool:
         },
     }
 
-    return SimpleTool(tool_function, mcp_tool.name, mcp_tool.description, schema, mcp_tool.name, auto_approve, has_var_args)
+    return SimpleTool(tool_function, mcp_tool.name, mcp_tool.description, schema, mcp_tool.name, auto_approve=False, has_var_args=has_var_args)
 
 class ChatMode:
     def __init__(self, id: str, name: str, instructions: str = None):

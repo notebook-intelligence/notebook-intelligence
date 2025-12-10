@@ -32,7 +32,7 @@ import { NotebookPanel } from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
-import { IDefaultFileBrowser } from '@jupyterlab/filebrowser';
+import { FileBrowserModel, IDefaultFileBrowser } from '@jupyterlab/filebrowser';
 
 import { ContentsManager, KernelSpecManager } from '@jupyterlab/services';
 
@@ -83,6 +83,7 @@ import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
 import { SettingsPanel } from './components/settings-panel';
+import { ITerminalConnection } from '@jupyterlab/services/lib/terminal/terminal';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -130,6 +131,8 @@ namespace CommandIDs {
     'notebook-intelligence:open-mcp-config-editor';
   export const showFormInputDialog =
     'notebook-intelligence:show-form-input-dialog';
+  export const runCommandInTerminal =
+    'notebook-intelligence:run-command-in-terminal';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -160,7 +163,8 @@ const BACKEND_TELEMETRY_LISTENER_NAME = 'backend-telemetry-listener';
 class ActiveDocumentWatcher {
   static initialize(
     app: JupyterLab,
-    languageRegistry: IEditorLanguageRegistry
+    languageRegistry: IEditorLanguageRegistry,
+    fileBrowser: IDefaultFileBrowser
   ) {
     ActiveDocumentWatcher._languageRegistry = languageRegistry;
 
@@ -171,6 +175,13 @@ class ActiveDocumentWatcher {
     ActiveDocumentWatcher.activeDocumentInfo.activeWidget =
       app.shell.currentWidget;
     ActiveDocumentWatcher.handleWatchDocument();
+
+    if (fileBrowser) {
+      const onPathChanged = (model: FileBrowserModel) => {
+        ActiveDocumentWatcher.currentDirectory = model.path;
+      };
+      fileBrowser.model.pathChanged.connect(onPathChanged);
+    }
   }
 
   static watchDocument(widget: Widget) {
@@ -314,6 +325,8 @@ class ActiveDocumentWatcher {
       })
     );
   }
+
+  static currentDirectory: string = '';
 
   static activeDocumentInfo: IActiveDocumentInfo = {
     language: 'python',
@@ -724,6 +737,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
     panel.title.icon = sidebarIcon;
     const sidebar = new ChatSidebar({
+      getCurrentDirectory: (): string => {
+        return ActiveDocumentWatcher.currentDirectory;
+      },
       getActiveDocumentInfo: (): IActiveDocumentInfo => {
         return ActiveDocumentWatcher.activeDocumentInfo;
       },
@@ -744,7 +760,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
     panel.addWidget(sidebar);
-    app.shell.add(panel, 'left', { rank: 1000 });
+    app.shell.add(panel, 'right', { rank: 1000 });
     app.shell.activateById(panel.id);
 
     const updateSidebarIcon = () => {
@@ -958,6 +974,32 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           }
         } else {
           return 'Cannot rename non notebook files';
+        }
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.runCommandInTerminal, {
+      execute: async args => {
+        const command = args.command as string;
+        const terminal = await app.commands.execute('terminal:create-new', {
+          cwd: (args.cwd as string) || ActiveDocumentWatcher.currentDirectory
+        });
+
+        const session: ITerminalConnection = terminal?.content?.session;
+
+        session.messageReceived.connect((sender, message) => {
+          console.log('Message received in Jupyter terminal:', message);
+        });
+
+        if (session) {
+          session.send({
+            type: 'stdin',
+            content: [command + '\n'] // Add newline to execute the command
+          });
+
+          return 'Command executed in Jupyter terminal';
+        } else {
+          return 'Failed to execute command in Jupyter terminal';
         }
       }
     });
@@ -1848,7 +1890,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     }
 
     const jlabApp = app as JupyterLab;
-    ActiveDocumentWatcher.initialize(jlabApp, languageRegistry);
+    ActiveDocumentWatcher.initialize(jlabApp, languageRegistry, defaultBrowser);
 
     return extensionService;
   }
