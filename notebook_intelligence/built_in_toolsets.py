@@ -7,7 +7,6 @@ import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
 from pathlib import Path
 import subprocess
-import fnmatch
 
 from notebook_intelligence.util import get_jupyter_root_dir
 
@@ -343,7 +342,7 @@ async def search_files(
 
 @nbapi.tool
 async def list_files(
-    pattern: str = "**/*",
+    pattern: str = "*",
     directory: str = ".", 
     recursive: bool = False, 
     include_files: bool = True, 
@@ -371,42 +370,45 @@ async def list_files(
             return f"'{directory}' is not a directory"
 
         items = []
-
-        def _scan_dir(current_dir, rel_path, depth):
-            nonlocal items
-            if depth > max_depth:
-                return
-            for item in sorted(current_dir.iterdir()):
-                item_relpath = rel_path / item.name
-                # Check if relative path matches the pattern.
-                if fnmatch.fnmatch(str(item_relpath), pattern) or (
-                    (item.is_dir() and recursive)
-                    and pattern.endswith("/*") and fnmatch.fnmatch(str(item_relpath) + "/", pattern)
-                ):
-                    if item.is_dir():
-                        if include_dirs:
-                            items.append(f"[dir] {item_relpath}")
-                        if recursive:
-                            _scan_dir(item, item_relpath, depth + 1)
-                    elif item.is_file():
-                        if include_files:
-                            items.append(f"[file] {item_relpath}")
-                elif item.is_dir() and recursive:
-                    # Scan the directory even if dir itself does not match, in case children do.
-                    _scan_dir(item, item_relpath, depth + 1)
-
-        # For recursive: walk subdirs, non-recursive: just list this dir
         root_rel_path = Path(directory)
-        if recursive:
-            _scan_dir(list_dir, root_rel_path, 1)
+
+        def _get_depth(item_path: Path, base_path: Path) -> int:
+            """Calculate the depth of item_path relative to base_path."""
+            try:
+                rel = item_path.relative_to(base_path)
+                return len(rel.parts)
+            except ValueError:
+                return 0
+
+        # Use glob for pattern matching - handles ** patterns correctly
+        # If pattern contains ** or recursive is True, use recursive glob
+        if recursive or "**" in pattern:
+            # For recursive listing, prepend **/ if pattern doesn't have it
+            glob_pattern = pattern if "**" in pattern else f"**/{pattern}"
+            matched_items = list(list_dir.glob(glob_pattern))
         else:
-            for item in sorted(list_dir.iterdir()):
-                item_relpath = root_rel_path / item.name
-                if fnmatch.fnmatch(str(item_relpath), pattern):
-                    if item.is_file() and include_files:
-                        items.append(f"[file] {item_relpath}")
-                    elif item.is_dir() and include_dirs:
-                        items.append(f"[dir] {item_relpath}")
+            # Non-recursive: just match in the current directory
+            matched_items = list(list_dir.glob(pattern))
+
+        # Sort and filter results
+        for item in sorted(matched_items):
+            # Apply max_depth filter for recursive searches
+            depth = _get_depth(item, list_dir)
+            if recursive and depth > max_depth:
+                continue
+
+            # Build relative path for display
+            try:
+                item_relpath = root_rel_path / item.relative_to(list_dir)
+            except ValueError:
+                item_relpath = item
+
+            if item.is_dir():
+                if include_dirs:
+                    items.append(f"[dir] {item_relpath}")
+            elif item.is_file():
+                if include_files:
+                    items.append(f"[file] {item_relpath}")
 
         if items:
             return f"Contents of '{directory}' (pattern: '{pattern}'):\n" + "\n".join(str(x) for x in items)

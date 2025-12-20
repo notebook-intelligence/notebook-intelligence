@@ -1168,7 +1168,6 @@ function SidebarComponent(props: any) {
 
   useEffect(() => {
     const prefixes: string[] = [];
-    prefixes.push('/clear');
 
     if (chatMode === 'ask') {
       const chatParticipants = NBIAPI.config.chatParticipants;
@@ -1185,6 +1184,8 @@ function SidebarComponent(props: any) {
           prefixes.push(`${commandPrefix}/${command}`);
         }
       }
+    } else {
+      prefixes.push('/clear');
     }
 
     const mcpServers = NBIAPI.config.toolConfig.mcpServers;

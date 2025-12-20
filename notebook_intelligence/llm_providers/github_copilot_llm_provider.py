@@ -66,6 +66,7 @@ class GitHubCopilotLLMProvider(LLMProvider):
             GitHubCopilotChatModel(self, "gpt-4.1", "GPT-4.1", 128000, True),
             GitHubCopilotChatModel(self, "gpt-4o", "GPT-4o", 128000, True),
             GitHubCopilotChatModel(self, "gpt-5", "GPT-5", 128000, True),
+            GitHubCopilotChatModel(self, "claude-sonnet-4.5", "Claude Sonnet 4.5", 144000, True),
             GitHubCopilotChatModel(self, "claude-sonnet-4", "Claude Sonnet 4", 80000, True),
             GitHubCopilotChatModel(self, "gemini-2.5-pro", "Gemini 2.5 Pro", 128000, True),
         ]
