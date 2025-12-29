@@ -28,6 +28,17 @@ export interface IDeviceVerificationInfo {
   userCode: string;
 }
 
+export enum ClaudeModelType {
+  Default = '',
+  ClaudeOpus45 = 'claude-opus-4-5',
+  ClaudeHaiku45 = 'claude-haiku-4-5'
+}
+
+export enum ClaudeToolType {
+  ClaudeCodeTools = 'claude-code:built-in-tools',
+  JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
+}
+
 export class NBIConfig {
   get userHomeDir(): string {
     return this.capabilities.user_home_dir;
@@ -96,6 +107,14 @@ export class NBIConfig {
 
   get mcpServerSettings(): any {
     return this.capabilities.mcp_server_settings;
+  }
+
+  get claudeSettings(): any {
+    return this.capabilities.claude_settings;
+  }
+
+  get isInClaudeCodeMode(): boolean {
+    return this.claudeSettings.enabled === true;
   }
 
   capabilities: any = {};

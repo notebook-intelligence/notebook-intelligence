@@ -126,6 +126,10 @@ class NBIConfig:
         return self.get('mcp_server_settings', {})
 
     @property
+    def claude_settings(self):
+        return self.get('claude_settings', {})
+
+    @property
     def rules_enabled(self) -> bool:
         """Check if the ruleset system is enabled."""
         return self.get('rules_enabled', True)

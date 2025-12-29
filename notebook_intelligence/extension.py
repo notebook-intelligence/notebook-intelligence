@@ -100,6 +100,7 @@ class GetCapabilitiesHandler(APIHandler):
                 "extensions": extensions
             },
             "mcp_server_settings": nbi_config.mcp_server_settings,
+            "claude_settings": nbi_config.claude_settings,
             "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
@@ -117,7 +118,7 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings", "claude_settings"])
         has_model_change = "chat_model" in data or "inline_completion_model" in data
         for key in data:
             if key in valid_keys:
@@ -575,14 +576,15 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 extension_tools=toolSelections.get('extensions', {})
             )
 
+            chat_history = self.chat_history.get_history(chatId)
+            chat_history_initial_size = len(chat_history)
+
             current_directory = data.get('currentDirectory', '')
             if chat_mode.id == 'agent' and current_directory != '':
                 current_directory_file_msg = f"Current directory open in Jupyter is: '{current_directory}'"
                 if filename != '':
                     current_directory_file_msg += f" and current file is: '{filename}'"
-                self.chat_history.add_message(chatId, {"role": "user", "content": current_directory_file_msg})
-
-            request_chat_history = self.chat_history.get_history(chatId).copy()
+                chat_history.append({"role": "user", "content": current_directory_file_msg})
 
             token_limit = 100 if ai_service_manager.chat_model is None else ai_service_manager.chat_model.context_window
             token_budget =  0.8 * token_limit
@@ -602,10 +604,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 if token_count > token_budget:
                     context_content = context_content[:int(token_budget)] + "..."
 
-                request_chat_history.append({"role": "user", "content": f"Use this as additional context: ```{context_content}```. It is from current file: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
-                self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
+                chat_history.append({"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
 
-            self.chat_history.add_message(chatId, {"role": "user", "content": prompt})
+            chat_history.append({"role": "user", "content": prompt})
 
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()
@@ -619,6 +620,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 root_dir=NotebookIntelligence.root_dir
             )
             
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            # last prompt is added later
+            request_chat_history = chat_history[chat_history_initial_size:-1] if not is_claude_code_mode else chat_history[:-1]
             thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter),))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
@@ -630,7 +634,8 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             existing_code = data['existingCode']
             language = data['language']
             filename = data['filename']
-            chat_mode = ChatMode('ask', 'Ask')
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            chat_mode = ChatMode('inline-chat', 'Inline Chat') if is_claude_code_mode else ChatMode('ask', 'Ask')
             if prefix != '':
                 self.chat_history.add_message(chatId, {"role": "user", "content": f"This code section comes before the code section you will generate, use as context. Leading content: ```{prefix}```"})
             if suffix != '':

@@ -485,6 +485,12 @@ pre:has(.code-block-header) {
   height: 12px;
 }
 
+.claude-icon svg {
+  width: 16px;
+  height: 16px;
+  color: #d97757;
+}
+
 .send-button {
   display: flex;
   align-items: center;
@@ -855,6 +861,8 @@ svg.access-token-warning {
 }
 
 .nbi-settings-panel-tab {
+  display: flex;
+  gap: 5px;
   cursor: pointer;
   padding: 10px;
   border-radius: 4px;
@@ -950,4 +958,14 @@ svg.access-token-warning {
 .mcp-server-prompts-header {
   margin: 5px;
   font-style: italic;
+}
+
+.config-dialog-body a {
+  color: var(--jp-content-link-color);
+}
+
+.chat-mode-widgets-container .claude-icon svg {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
 }

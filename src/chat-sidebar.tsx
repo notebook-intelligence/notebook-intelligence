@@ -54,6 +54,7 @@ import {
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
+import claudeSvg from '../style/claude.svg';
 
 export enum RunChatCompletionType {
   Chat,
@@ -449,6 +450,8 @@ function ChatResponse(props: any) {
       : `Output (${Math.floor(item.reasoningTime)} s)`;
   };
 
+  const chatParticipantId = msg.participant?.id || 'default';
+
   return (
     <div
       className={`chat-message chat-message-${msg.from}`}
@@ -458,7 +461,7 @@ function ChatResponse(props: any) {
         <div className="chat-message-from">
           {msg.participant?.iconPath && (
             <div
-              className={`chat-message-from-icon ${msg.participant?.id === 'default' ? 'chat-message-from-icon-default' : ''} ${isDarkTheme() ? 'dark' : ''}`}
+              className={`chat-message-from-icon chat-message-from-icon-${chatParticipantId} ${isDarkTheme() ? 'dark' : ''}`}
             >
               <img src={msg.participant.iconPath} />
             </div>
@@ -1969,24 +1972,26 @@ function SidebarComponent(props: any) {
             )}
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
-              <div>
-                <select
-                  className="chat-mode-select"
-                  title="Chat mode"
-                  value={chatMode}
-                  onChange={event => {
-                    if (event.target.value === 'ask') {
-                      setToolSelections(toolSelectionsEmpty);
-                    }
-                    setShowModeTools(false);
-                    setChatMode(event.target.value);
-                  }}
-                >
-                  <option value="ask">Ask</option>
-                  <option value="agent">Agent</option>
-                </select>
-              </div>
-              {chatMode !== 'ask' && (
+              {!NBIAPI.config.isInClaudeCodeMode && (
+                <div>
+                  <select
+                    className="chat-mode-select"
+                    title="Chat mode"
+                    value={chatMode}
+                    onChange={event => {
+                      if (event.target.value === 'ask') {
+                        setToolSelections(toolSelectionsEmpty);
+                      }
+                      setShowModeTools(false);
+                      setChatMode(event.target.value);
+                    }}
+                  >
+                    <option value="ask">Ask</option>
+                    <option value="agent">Agent</option>
+                  </select>
+                </div>
+              )}
+              {chatMode !== 'ask' && !NBIAPI.config.isInClaudeCodeMode && (
                 <div
                   className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
                   onClick={() => handleChatToolsButtonClick()}
@@ -1999,6 +2004,12 @@ function SidebarComponent(props: any) {
                   <VscTools />
                   {selectedToolCount > 0 && <>{selectedToolCount}</>}
                 </div>
+              )}
+              {NBIAPI.config.isInClaudeCodeMode && (
+                <span
+                  className="claude-icon"
+                  dangerouslySetInnerHTML={{ __html: claudeSvg }}
+                ></span>
               )}
             </div>
             <div>

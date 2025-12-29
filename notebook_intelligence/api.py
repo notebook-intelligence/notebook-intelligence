@@ -65,6 +65,10 @@ class MCPServerStatus(str, Enum):
     UpdatingPromptList = 'updating-prompt-list'
     UpdatedPromptList = 'updated-prompt-list'
 
+class ClaudeToolType(str, Enum):
+  ClaudeCodeTools = 'claude-code:built-in-tools'
+  JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
+
 class Signal:
     def __init__(self):
         self._listeners = []

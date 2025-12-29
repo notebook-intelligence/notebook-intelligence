@@ -161,7 +161,7 @@ async def save_notebook(**args) -> str:
     response: ChatResponse = args["response"]
     ui_cmd_response = await response.run_ui_command('docmanager:save')
 
-    return f"Save the notebook"
+    return f"Saved the notebook"
 
 @nbapi.auto_approve
 @nbapi.tool
