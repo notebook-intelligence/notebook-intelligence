@@ -674,9 +674,13 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         if jupyter_ui_tools_enabled:
             allowed_tools.extend(["mcp__juit__create-new-notebook", "mcp__juit__add-markdown-cell", "mcp__juit__add-code-cell", "mcp__juit__get-number-of-cells", "mcp__juit__get-cell-type-and-source", "mcp__juit__get-cell-output", "mcp__juit__set-cell-type-and-source", "mcp__juit__delete-cell", "mcp__juit__insert-cell", "mcp__juit__run-cell", "mcp__juit__save-notebook", "mcp__juit__rename-notebook", "mcp__juit__run-command-in-jupyter-terminal"])
         setting_sources = claude_settings.get('setting_sources')
+        chat_model_id = claude_settings.get('chat_model', '').strip()
+        if chat_model_id == "":
+            chat_model_id = None
 
         client_options = ClaudeAgentOptions(
             cwd=get_jupyter_root_dir(),
+            model=chat_model_id,
             mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
             setting_sources=setting_sources,
