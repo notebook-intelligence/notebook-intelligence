@@ -20,6 +20,7 @@ from tornado import websocket
 from traitlets import Bool, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
+from notebook_intelligence.claude import ClaudeCodeChatParticipant
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env
@@ -105,6 +106,9 @@ class GetCapabilitiesHandler(APIHandler):
         }
         for participant_id in ai_service_manager.chat_participants:
             participant = ai_service_manager.chat_participants[participant_id]
+            # prevent duplicate participants
+            if participant.id in [p["id"] for p in response["chat_participants"]]:
+                continue
             response["chat_participants"].append({
                 "id": participant.id,
                 "name": participant.name,
@@ -680,6 +684,11 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 return
             handlers.response_emitter.on_user_input(msg['data'])
         elif messageType == RequestDataType.ClearChatHistory:
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            if is_claude_code_mode:
+                default_chat_participant = ai_service_manager.default_chat_participant
+                if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                    default_chat_participant.clear_chat_history()
             self.chat_history.clear()
         elif messageType == RequestDataType.RunUICommandResponse:
             handlers = self._messageCallbackHandlers.get(messageId)

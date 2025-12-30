@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 
 from anthropic import Anthropic
-from notebook_intelligence.api import CancelToken, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, SignalImpl
+from notebook_intelligence.api import CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
@@ -29,7 +29,8 @@ CLAUDE_DEFAULT_INLINE_COMPLETION_MODEL = "claude-sonnet-4-5"
 CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
 
 class ClaudeAgentEventType(str, Enum):
-    ListTools = 'list-tools'
+    GetServerInfo = 'get-server-info'
+    ClearChatHistory = 'clear-chat-history'
     CallTool = 'call-tool'
     StopServer = 'stop-server'
     ListPrompts = 'list-prompts'
@@ -43,7 +44,8 @@ class ClaudeAgentClientStatus(str, Enum):
     Disconnecting = 'disconnecting'
     FailedToConnect = 'failed-to-connect'
     Connected = 'connected'
-    UpdatingToolList = 'updating-tool-list'
+    UpdatingServerInfo = 'updating-server-info'
+    UpdatedServerInfo = 'updated-server-info'
     UpdatedToolList = 'updated-tool-list'
     UpdatingPromptList = 'updating-prompt-list'
     UpdatedPromptList = 'updated-prompt-list'
@@ -191,7 +193,8 @@ class ClaudeCodeClient():
         self._client_thread_signal = None
         self._client_thread = None
         self._status = ClaudeAgentClientStatus.NotConnected
-        self._tool_prompt_list_lock = threading.Lock()
+        self._server_info: dict[str, Any] | None = None
+        self._server_info_lock = threading.Lock()
         self.connect()
     
     @property
@@ -217,6 +220,7 @@ class ClaudeCodeClient():
                 args=(self._client_thread_func(),)
             )
             self._client_thread.start()
+            self._update_server_info_async()
         except Exception as e:
             self._client_thread = None
             log.error(f"Error occurred while connecting to Claude agent client: {str(e)}")
@@ -238,14 +242,13 @@ class ClaudeCodeClient():
         self._client_thread_signal = None
         self._client_thread = None
 
-    def _update_tool_and_prompt_list_async(self):
-        thread = threading.Thread(target=self._update_tool_and_prompt_list, args=())
+    def _update_server_info_async(self):
+        thread = threading.Thread(target=self._update_server_info, args=())
         thread.start()
     
-    def _update_tool_and_prompt_list(self):
-        with self._tool_prompt_list_lock:
-            self.update_tool_list()
-            self.update_prompts_list()
+    def _update_server_info(self):
+        with self._server_info_lock:
+            self.update_server_info()
     
     def _set_status(self, status: ClaudeAgentClientStatus):
         self._status = status
@@ -259,6 +262,7 @@ class ClaudeCodeClient():
         try:
             async with await self._get_client() as client:
                 self._set_status(ClaudeAgentClientStatus.Connected)
+
                 while True:
                     event = self._client_queue.get(block=True)
                     event_id = event["id"]
@@ -271,11 +275,11 @@ class ClaudeCodeClient():
                             set_current_response(response)
 
                             messages = request.chat_history
-                            query = ''
+                            query_lines = []
                             for msg in messages:
                                 if msg["role"] == "user":
-                                    query += msg["content"]
-                            await client.query(query)
+                                    query_lines.append(msg["content"])
+                            await client.query("\n".join(query_lines))
                             async for message in client.receive_response():
                                 if isinstance(message, AssistantMessage):
                                     for block in message.content:
@@ -291,7 +295,6 @@ class ClaudeCodeClient():
                                         content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
                                         response.stream(MarkdownData(content))
                                 else:
-                                    # print(f"Claude assistant message: {message}")
                                     pass
                         except Exception as e:
                             log.error(f"Error occurred while querying Claude agent: {str(e)}")
@@ -300,16 +303,29 @@ class ClaudeCodeClient():
                                 "id": event_id,
                                 "data": "query completed"
                             })
-                    elif event_type == ClaudeAgentEventType.ListTools:
+                    elif event_type == ClaudeAgentEventType.GetServerInfo:
                         try:
-                            tool_list = await client.list_tools()
+                            server_info = await client.get_server_info()
                         except Exception as e:
-                            log.error(f"Error occurred while listing Claude agent tools: {str(e)}")
-                            tool_list = []
+                            log.error(f"Error occurred while getting server info: {str(e)}")
+                            server_info = None
                         finally:
                             self._client_thread_signal.emit({
                                 "id": event_id,
-                                "data": tool_list
+                                "data": server_info
+                            })
+                    elif event_type == ClaudeAgentEventType.ClearChatHistory:
+                        try:
+                           await client.query('/clear')
+                           async for message in client.receive_response():
+                                # clear response messages
+                                pass
+                        except Exception as e:
+                            log.error(f"Error occurred while clearing chat history: {str(e)}")
+                        finally:
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": "chat history cleared"
                             })
                     elif event_type == ClaudeAgentEventType.CallTool:
                         try:
@@ -406,16 +422,16 @@ class ClaudeCodeClient():
                 }
             time.sleep(0.1)
 
-    def update_tool_list(self):
+    def update_server_info(self):
         if not self.is_connected():
             return
-        self._set_status(ClaudeAgentClientStatus.UpdatingToolList)
-        response = self._send_claude_agent_request(ClaudeAgentEventType.ListTools)
+        self._set_status(ClaudeAgentClientStatus.UpdatingServerInfo)
+        response = self._send_claude_agent_request(ClaudeAgentEventType.GetServerInfo)
         if response["success"]:
-            self._mcp_tools = response["data"]
+            self._server_info = response["data"]
         else:
-            log.error(f"MCP server '{self.name}' failed to update tool list: {response['error']}")
-        self._set_status(ClaudeAgentClientStatus.UpdatedToolList)
+            log.error(f"Claude agent client failed to update server info: {response['error']}")
+        self._set_status(ClaudeAgentClientStatus.UpdatedServerInfo)
 
     def call_tool(self, tool_name: str, tool_args: dict):
         if not self.is_connected():
@@ -442,6 +458,10 @@ class ClaudeCodeClient():
         else:
             log.error(f"MCP server '{self.name}' failed to update prompts: {response['error']}")
         self._set_status(ClaudeAgentClientStatus.UpdatedPromptList)
+
+    @property
+    def server_info(self) -> dict[str, Any] | None:
+        return self._server_info
 
     def query(self, request: ChatRequest, response: ChatResponse):
         if not self.is_connected():
@@ -472,6 +492,16 @@ class ClaudeCodeClient():
             return response["data"]
         else:
             log.error(f"Claude agent inline completions failed: {response['error']}")
+            return response["error"]
+
+    def clear_chat_history(self):
+        if not self.is_connected():
+            return
+        response = self._send_claude_agent_request(ClaudeAgentEventType.ClearChatHistory)
+        if response["success"]:
+            return response["data"]
+        else:
+            log.error(f"Claude agent client failed to clear chat history: {response['error']}")
             return response["error"]
 
 
@@ -704,6 +734,25 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
     def icon_path(self) -> str:
         return CLAUDE_CODE_ICON_URL
     
+    @property
+    def commands(self) -> list[ChatCommand]:
+        participant_commands = [
+            ChatCommand(name='clear', description='Clear chat history')
+        ]
+        server_info = self._client.server_info
+        if server_info is not None:
+            commands = server_info.get('commands', [])
+            for command in commands:
+                participant_commands.append(ChatCommand(name=command['name'], description=command['description']))
+            return participant_commands
+        else:
+            return [
+                ChatCommand(name='compact', description='Compact chat history'),
+                ChatCommand(name='context', description='Show context of the chat'),
+                ChatCommand(name='cost', description='Show cost of the chat'),
+                ChatCommand(name='clear', description='Clear chat history'),
+            ]
+    
     def chat_prompt(self, model_provider: str, model_name: str) -> str:
         return ""
 
@@ -730,3 +779,6 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             log.error(f"Error while handling chat request!\n{e}")
             response.stream(MarkdownData(f"Oops! There was a problem handling chat request. Please try again with a different prompt."))
             response.finish()
+
+    def clear_chat_history(self):
+        self._client.clear_chat_history()

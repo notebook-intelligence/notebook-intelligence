@@ -19,6 +19,7 @@ import { NBIAPI, GitHubCopilotLoginStatus } from './api';
 import {
   BackendMessageType,
   BuiltinToolsetType,
+  CLAUDE_CODE_CHAT_PARTICIPANT_ID,
   ContextType,
   IActiveDocumentInfo,
   ICellContents,
@@ -1172,23 +1173,35 @@ function SidebarComponent(props: any) {
   useEffect(() => {
     const prefixes: string[] = [];
 
-    if (chatMode === 'ask') {
-      const chatParticipants = NBIAPI.config.chatParticipants;
-      for (const participant of chatParticipants) {
-        const id = participant.id;
-        const commands = participant.commands;
-        const participantPrefix = id === 'default' ? '' : `@${id}`;
-        if (participantPrefix !== '') {
-          prefixes.push(participantPrefix);
-        }
-        const commandPrefix =
-          participantPrefix === '' ? '' : `${participantPrefix} `;
+    if (NBIAPI.config.isInClaudeCodeMode) {
+      const claudeChatParticipant = NBIAPI.config.chatParticipants.find(
+        participant => participant.id === CLAUDE_CODE_CHAT_PARTICIPANT_ID
+      );
+      if (claudeChatParticipant) {
+        const commands = claudeChatParticipant.commands;
         for (const command of commands) {
-          prefixes.push(`${commandPrefix}/${command}`);
+          prefixes.push(`/${command}`);
         }
       }
     } else {
-      prefixes.push('/clear');
+      if (chatMode === 'ask') {
+        const chatParticipants = NBIAPI.config.chatParticipants;
+        for (const participant of chatParticipants) {
+          const id = participant.id;
+          const commands = participant.commands;
+          const participantPrefix = id === 'default' ? '' : `@${id}`;
+          if (participantPrefix !== '') {
+            prefixes.push(participantPrefix);
+          }
+          const commandPrefix =
+            participantPrefix === '' ? '' : `${participantPrefix} `;
+          for (const command of commands) {
+            prefixes.push(`${commandPrefix}/${command}`);
+          }
+        }
+      } else {
+        prefixes.push('/clear');
+      }
     }
 
     const mcpServers = NBIAPI.config.toolConfig.mcpServers;

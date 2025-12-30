@@ -108,6 +108,7 @@ export enum BuiltinToolsetType {
 }
 
 export const GITHUB_COPILOT_PROVIDER_ID = 'github-copilot';
+export const CLAUDE_CODE_CHAT_PARTICIPANT_ID = 'claude-code';
 
 export enum TelemetryEventType {
   InlineCompletionRequest = 'inline-completion-request',
