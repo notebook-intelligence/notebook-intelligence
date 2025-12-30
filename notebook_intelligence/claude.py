@@ -85,7 +85,7 @@ def model_info_from_id(model_id: str) -> dict:
         "context_window": 200000,
     }
 
-class ClaudeCodeChatModel(ChatModel):
+class ClaudeChatModel(ChatModel):
     def __init__(self, model_id: str, api_key: str = None, base_url: str = None):
         super().__init__(provider=None)
         if model_id == "":
@@ -176,7 +176,6 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
             if isinstance(block, AnthropicTextBlock):
                 code += block.text
         return extract_llm_generated_code(code)
-
 
 
 class ClaudeCodeClient():
@@ -703,7 +702,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         try:
             claude_settings = request.host.nbi_config.claude_settings
             chat_model_id = claude_settings.get('chat_model', '').strip()
-            chat_model = ClaudeCodeChatModel(
+            chat_model = ClaudeChatModel(
                 chat_model_id,
                 claude_settings.get('api_key', None),
                 claude_settings.get('base_url', None)
