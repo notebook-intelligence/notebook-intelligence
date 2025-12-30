@@ -139,6 +139,11 @@ class ConfigHandler(APIHandler):
                         if server_settings.get("disabled") == True:
                             disabled_mcp_servers.append(server_id)
                     ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
+                elif key == "claude_settings":
+                    if ai_service_manager.is_claude_code_mode:
+                        default_chat_participant = ai_service_manager.default_chat_participant
+                        if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                            default_chat_participant.update_client_debounced()
 
         ai_service_manager.nbi_config.save()
         if has_model_change:

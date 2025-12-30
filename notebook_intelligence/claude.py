@@ -44,6 +44,7 @@ class ClaudeAgentClientStatus(str, Enum):
     UpdatedServerInfo = 'updated-server-info'
 
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "120"))
+CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "3"))
 
 _current_response = None
 
@@ -190,7 +191,15 @@ class ClaudeCodeClient():
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
         self.connect()
-    
+
+    @property
+    def client_options(self) -> ClaudeAgentOptions:
+        return self._client_options
+
+    @client_options.setter
+    def client_options(self, value: ClaudeAgentOptions):
+        self._client_options = value
+
     @property
     def websocket_connector(self) -> ThreadSafeWebSocketConnector:
         return self._websocket_connector
@@ -239,6 +248,8 @@ class ClaudeCodeClient():
         self._client_queue = None
         self._client_thread_signal = None
         self._client_thread = None
+        self._client = None
+        self._server_info = None
 
     def _update_server_info_async(self):
         thread = threading.Thread(target=self._update_server_info, args=())
@@ -426,6 +437,10 @@ class ClaudeCodeClient():
         else:
             log.error(f"Claude agent client failed to clear chat history: {response['error']}")
             return response["error"]
+    
+    def reconnect(self):
+        self.disconnect()
+        self.connect()
 
 
 @tool("create-new-notebook", "Creates a new empty notebook.", {})
@@ -632,33 +647,10 @@ async def custom_permission_handler(
 class ClaudeCodeChatParticipant(BaseChatParticipant):
     def __init__(self, host: Host):
         super().__init__()
-        claude_settings = host.nbi_config.claude_settings
-        self._jupyter_ui_tools_mcp_server = create_sdk_mcp_server(
-            name="jui",
-            version="1.0.0",
-            tools=[create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal]
-        )
-        mcp_servers = {}
-        jupyter_ui_tools_enabled = ClaudeToolType.JupyterUITools in claude_settings.get('tools', [])
-        if jupyter_ui_tools_enabled:
-            mcp_servers["jui"] = self._jupyter_ui_tools_mcp_server
-        allowed_tools = []
-        if jupyter_ui_tools_enabled:
-            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__delete-cell", "mcp__jui__insert-cell", "mcp__jui__run-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__run-command-in-jupyter-terminal"])
-        setting_sources = claude_settings.get('setting_sources')
-        chat_model_id = claude_settings.get('chat_model', '').strip()
-        if chat_model_id == "":
-            chat_model_id = None
-
-        client_options = ClaudeAgentOptions(
-            cwd=get_jupyter_root_dir(),
-            model=chat_model_id,
-            mcp_servers=mcp_servers,
-            allowed_tools=allowed_tools,
-            setting_sources=setting_sources,
-            can_use_tool=custom_permission_handler,
-        )
-        self._client = ClaudeCodeClient(host.websocket_connector, client_options)
+        self._update_client_debounced_timer = None
+        self._host = host
+        self._client_options: ClaudeAgentOptions = self._create_client_options()
+        self._client = ClaudeCodeClient(host.websocket_connector, self._client_options)
 
     @property
     def id(self) -> str:
@@ -722,6 +714,50 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             log.error(f"Error while handling chat request!\n{e}")
             response.stream(MarkdownData(f"Oops! There was a problem handling chat request. Please try again with a different prompt."))
             response.finish()
+    
+    def _create_client_options(self) -> ClaudeAgentOptions:
+        claude_settings = self._host.nbi_config.claude_settings
+        self._jupyter_ui_tools_mcp_server = create_sdk_mcp_server(
+            name="jui",
+            version="1.0.0",
+            tools=[create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal]
+        )
+        mcp_servers = {}
+        jupyter_ui_tools_enabled = ClaudeToolType.JupyterUITools in claude_settings.get('tools', [])
+        if jupyter_ui_tools_enabled:
+            mcp_servers["jui"] = self._jupyter_ui_tools_mcp_server
+        allowed_tools = []
+        if jupyter_ui_tools_enabled:
+            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__delete-cell", "mcp__jui__insert-cell", "mcp__jui__run-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__run-command-in-jupyter-terminal"])
+        setting_sources = claude_settings.get('setting_sources')
+        chat_model_id = claude_settings.get('chat_model', '').strip()
+        if chat_model_id == "":
+            chat_model_id = None
+
+        client_options = ClaudeAgentOptions(
+            cwd=get_jupyter_root_dir(),
+            model=chat_model_id,
+            mcp_servers=mcp_servers,
+            allowed_tools=allowed_tools,
+            setting_sources=setting_sources,
+            can_use_tool=custom_permission_handler,
+        )
+        return client_options
 
     def clear_chat_history(self):
         self._client.clear_chat_history()
+        self._client.reconnect()
+
+    def update_client(self):
+        self._client_options = self._create_client_options()
+        self._client.client_options = self._client_options
+        self._client.reconnect()
+
+    def update_client_debounced(self):
+        if self._update_client_debounced_timer is not None:
+            self._update_client_debounced_timer.cancel()
+        self._update_client_debounced_timer = asyncio.get_event_loop().create_task(self._update_client_debounced())
+
+    async def _update_client_debounced(self):
+        await asyncio.sleep(CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME)
+        self.update_client()
