@@ -11,14 +11,14 @@ from typing import Any
 import uuid
 
 from anthropic import Anthropic
-from notebook_intelligence.api import CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, SignalImpl
+from notebook_intelligence.api import BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
 from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, query, ClaudeAgentOptions, ClaudeSDKClient, tool
 from anthropic.types.text_block import TextBlock as AnthropicTextBlock
 
-from notebook_intelligence.util import extract_llm_generated_code, get_jupyter_root_dir
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, extract_llm_generated_code, get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
 
@@ -186,8 +186,9 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
 
 
 class ClaudeCodeClient():
-    def __init__(self, client_options: ClaudeAgentOptions):
+    def __init__(self, websocket_connector: ThreadSafeWebSocketConnector, client_options: ClaudeAgentOptions):
         self._client_options = client_options
+        self._websocket_connector = websocket_connector
         self._client = None
         self._client_queue = None
         self._client_thread_signal = None
@@ -196,6 +197,10 @@ class ClaudeCodeClient():
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
         self.connect()
+    
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return self._websocket_connector
     
     @property
     def status(self) -> ClaudeAgentClientStatus:
@@ -252,11 +257,11 @@ class ClaudeCodeClient():
     
     def _set_status(self, status: ClaudeAgentClientStatus):
         self._status = status
-        # if self._manager.websocket_connector is not None:
-        #     self._manager.websocket_connector.write_message({
-        #         "type": BackendMessageType.ClaudeAgentClientStatusChange,
-        #         "data": {}
-        #     })
+        if self._websocket_connector is not None:
+            self._websocket_connector.write_message({
+                "type": BackendMessageType.ClaudeCodeStatusChange,
+                "data": {}
+            })
 
     async def _client_thread_func(self):
         try:
@@ -716,7 +721,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             setting_sources=setting_sources,
             can_use_tool=custom_permission_handler,
         )
-        self._client = ClaudeCodeClient(client_options)
+        self._client = ClaudeCodeClient(host.websocket_connector, client_options)
 
     @property
     def id(self) -> str:

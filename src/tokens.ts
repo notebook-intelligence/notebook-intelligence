@@ -33,7 +33,8 @@ export enum BackendMessageType {
   StreamEnd = 'stream-end',
   RunUICommand = 'run-ui-command',
   GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change',
-  MCPServerStatusChange = 'mcp-server-status-change'
+  MCPServerStatusChange = 'mcp-server-status-change',
+  ClaudeCodeStatusChange = 'claude-code-status-change'
 }
 
 export enum ResponseStreamDataType {

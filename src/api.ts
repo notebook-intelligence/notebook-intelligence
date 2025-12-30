@@ -143,7 +143,10 @@ export class NBIAPI {
 
     this._messageReceived.connect((_, msg) => {
       msg = JSON.parse(msg);
-      if (msg.type === BackendMessageType.MCPServerStatusChange) {
+      if (
+        msg.type === BackendMessageType.MCPServerStatusChange ||
+        msg.type === BackendMessageType.ClaudeCodeStatusChange
+      ) {
         this.fetchCapabilities();
       } else if (
         msg.type === BackendMessageType.GitHubCopilotLoginStatusChange
