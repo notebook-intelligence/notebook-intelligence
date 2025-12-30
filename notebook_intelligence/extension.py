@@ -474,6 +474,28 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                     }
                 ]
             }
+        elif data_type == ResponseStreamDataType.AskUserQuestion:
+            data = {
+                "choices": [
+                    {
+                        "delta": {
+                            "nbiContent": {
+                                "type": data_type,
+                                "content": {
+                                    "identifier": data.identifier,
+                                    "title": data.title,
+                                    "message": data.message,
+                                    "questions": data.questions if data.questions is not None else [],
+                                    "submitLabel": data.submitLabel if data.submitLabel is not None else "Submit",
+                                    "cancelLabel": data.cancelLabel if data.cancelLabel is not None else "Cancel"
+                                }
+                            },
+                            "content": "",
+                            "role": "assistant"
+                        }
+                    }
+                ]
+            }
         elif data_type == ResponseStreamDataType.MarkdownPart:
             content = data.content
             data = {

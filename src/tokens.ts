@@ -46,7 +46,8 @@ export enum ResponseStreamDataType {
   Button = 'button',
   Anchor = 'anchor',
   Progress = 'progress',
-  Confirmation = 'confirmation'
+  Confirmation = 'confirmation',
+  AskUserQuestion = 'ask-user-question'
 }
 
 export enum ContextType {

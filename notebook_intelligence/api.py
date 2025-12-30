@@ -44,6 +44,7 @@ class ResponseStreamDataType(str, Enum):
     Anchor = 'anchor'
     Progress = 'progress'
     Confirmation = 'confirmation'
+    AskUserQuestion = 'ask-user-question'
 
     def __str__(self) -> str:
         return self.value
@@ -199,6 +200,20 @@ class ConfirmationData(ResponseStreamData):
     @property
     def data_type(self) -> ResponseStreamDataType:
         return ResponseStreamDataType.Confirmation
+
+@dataclass
+class AskUserQuestionData(ResponseStreamData):
+    identifier: dict = None
+    title: str = ''
+    message: str = ''
+    questions: list[dict]= None
+    submitLabel: str = 'Submit'
+    cancelLabel: str = 'Cancel'
+
+    @property
+    def data_type(self) -> ResponseStreamDataType:
+        return ResponseStreamDataType.AskUserQuestion
+
 
 class ContextRequestType(Enum):
     InlineCompletion = 'inline-completion'

@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 
 from anthropic import Anthropic
-from notebook_intelligence.api import BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
+from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
@@ -596,19 +596,38 @@ async def custom_permission_handler(
 
     response = get_current_response()
     callback_id = str(uuid.uuid4())
-    response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
-    response.stream(ConfirmationData(
-        message=f"Are you sure you want to call this tool?",
-        confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
-        cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
-    ))
-    user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
-    if user_input['confirmed'] == False:
-        response.finish()
-        return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
-    log.debug(f"Allowing tool {tool_name} with input {input_data}")
-    return PermissionResultAllow(input_data)
+    if tool_name == "AskUserQuestion":
+        response.stream(AskUserQuestionData(
+            identifier={"id": response.message_id, "callback_id": callback_id},
+            questions=input_data['questions']
+        ))
+        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+        if user_input['confirmed'] == False or len(user_input['selectedAnswers']) == 0:
+            return PermissionResultDeny(message="User did not choose any options", interrupt=True)
+        else:
+            selected_answers = user_input['selectedAnswers']
+            answers = {}
+            for question in selected_answers.keys():
+                answers[question] = ", ".join(selected_answers[question])
+            return PermissionResultAllow(updated_input={
+                "questions": input_data['questions'],
+                "answers": answers
+            })
+    else:
+        response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
+        response.stream(ConfirmationData(
+            message=f"Are you sure you want to call this tool?",
+            confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
+            cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
+        ))
+        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+        if user_input['confirmed'] == False:
+            response.finish()
+            return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
+
+        log.debug(f"Allowing tool {tool_name} with input {input_data}")
+        return PermissionResultAllow(input_data)
 
 class ClaudeCodeChatParticipant(BaseChatParticipant):
     def __init__(self, host: Host):

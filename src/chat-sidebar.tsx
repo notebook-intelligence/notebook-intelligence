@@ -56,6 +56,7 @@ import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 import claudeSvg from '../style/claude.svg';
+import { AskUserQuestion } from './components/ask-user-question';
 
 export enum RunChatCompletionType {
   Chat,
@@ -626,6 +627,44 @@ function ChatResponse(props: any) {
                       {item.content.cancelLabel}
                     </div>
                   </button>
+                </div>
+              );
+            case ResponseStreamDataType.AskUserQuestion:
+              return answeredForms.get(item.id) ===
+                'confirmed' ? null : answeredForms.get(item.id) ===
+                'canceled' ? (
+                <div>&#10006; Canceled</div>
+              ) : (
+                <div
+                  className="chat-confirmation-form ask-user-question"
+                  key={`key-${index}`}
+                >
+                  <AskUserQuestion
+                    userQuestions={item}
+                    onSubmit={(selectedAnswers: any) => {
+                      markFormConfirmed(item.id);
+                      runCommand('notebook-intelligence:chat-user-input', {
+                        id: item.content.identifier.id,
+                        data: {
+                          callback_id: item.content.identifier.callback_id,
+                          data: {
+                            confirmed: true,
+                            selectedAnswers
+                          }
+                        }
+                      });
+                    }}
+                    onCancel={() => {
+                      markFormCanceled(item.id);
+                      runCommand('notebook-intelligence:chat-user-input', {
+                        id: item.content.identifier.id,
+                        data: {
+                          callback_id: item.content.identifier.callback_id,
+                          data: { confirmed: false }
+                        }
+                      });
+                    }}
+                  />
                 </div>
               );
           }
