@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 
 from anthropic import Anthropic
-from notebook_intelligence.api import BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, SignalImpl
+from notebook_intelligence.api import BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
@@ -684,6 +684,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             return await self.handle_inline_chat_request(request, response, options)
         self._current_chat_request = request
 
+        response.stream(ProgressData("Thinking..."))
         self._client.query(request, response)
         response.finish()
 
