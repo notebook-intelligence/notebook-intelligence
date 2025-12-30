@@ -698,7 +698,7 @@ async function submitCompletionRequest(
         request.content,
         request.language || 'python',
         request.currentDirectory || '',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         request.additionalContext || [],
         request.chatMode,
         request.toolSelections || {},
@@ -714,7 +714,7 @@ async function submitCompletionRequest(
         request.content,
         request.language || 'python',
         request.currentDirectory || '',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         [],
         'ask',
         {},
@@ -729,7 +729,7 @@ async function submitCompletionRequest(
         request.suffix || '',
         request.existingCode || '',
         request.language || 'python',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         responseEmitter
       );
   }
@@ -2415,7 +2415,7 @@ function InlinePromptComponent(props: any) {
         type: RunChatCompletionType.GenerateCode,
         content: prompt,
         language: props.language || 'python',
-        filename: props.filename || 'Untitled.ipynb',
+        filename: props.filename || '',
         prefix: props.prefix,
         suffix: props.suffix,
         existingCode: props.existingCode,

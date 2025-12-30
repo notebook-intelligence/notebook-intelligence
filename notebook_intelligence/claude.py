@@ -287,7 +287,11 @@ class ClaudeCodeClient():
                             for msg in messages:
                                 if msg["role"] == "user":
                                     query_lines.append(msg["content"])
-                            await client.query("\n".join(query_lines))
+                            # if a command is present, remove other lines
+                            if len(query_lines) > 0 and query_lines[-1].startswith('/'):
+                                query_lines = query_lines[-1:]
+                            client_query = "\n".join([line.strip() for line in query_lines])
+                            await client.query(client_query)
                             async for message in client.receive_response():
                                 if isinstance(message, AssistantMessage):
                                     for block in message.content:
@@ -734,6 +738,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             chat_model_id = None
 
         client_options = ClaudeAgentOptions(
+            system_prompt=self._create_system_prompt(jupyter_ui_tools_enabled),
             cwd=get_jupyter_root_dir(),
             model=chat_model_id,
             mcp_servers=mcp_servers,
@@ -742,6 +747,14 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             can_use_tool=custom_permission_handler,
         )
         return client_options
+
+    def _create_system_prompt(self, jupyter_ui_tools_enabled: bool) -> str:
+        return f"""You are an AI programming assistant integrated into JupyterLab which is an IDE for Jupyter notebooks.
+Assume Python if the language is not specified.
+JupyterLab is launched from a working directory and it can only access files in this directory and its subdirectories. Follow the same rule for file system access. Working directory for current session is '{get_jupyter_root_dir()}'.
+If messages contain relative file paths, assume they are relative to the working directory.
+{"You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server." if jupyter_ui_tools_enabled else ""}
+"""
 
     def clear_chat_history(self):
         self._client.clear_chat_history()
