@@ -2059,6 +2059,7 @@ function SidebarComponent(props: any) {
               )}
               {NBIAPI.config.isInClaudeCodeMode && (
                 <span
+                  title="Claude mode"
                   className="claude-icon"
                   dangerouslySetInnerHTML={{ __html: claudeSvg }}
                 ></span>
