@@ -15,7 +15,7 @@ from notebook_intelligence.api import BackendMessageType, CancelToken, ChatComma
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
-from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, query, ClaudeAgentOptions, ClaudeSDKClient, tool
+from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 from anthropic.types.text_block import TextBlock as AnthropicTextBlock
 
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, extract_llm_generated_code, get_jupyter_root_dir
@@ -30,13 +30,9 @@ CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
 
 class ClaudeAgentEventType(str, Enum):
     GetServerInfo = 'get-server-info'
-    ClearChatHistory = 'clear-chat-history'
-    CallTool = 'call-tool'
-    StopServer = 'stop-server'
-    ListPrompts = 'list-prompts'
-    GetPromptValue = 'get-prompt-value'
     Query = 'query'
-    InlineCompletions = 'inline-completions'
+    ClearChatHistory = 'clear-chat-history'
+    StopClient = 'stop-server'
 
 class ClaudeAgentClientStatus(str, Enum):
     NotConnected = 'not-connected'
@@ -46,9 +42,6 @@ class ClaudeAgentClientStatus(str, Enum):
     Connected = 'connected'
     UpdatingServerInfo = 'updating-server-info'
     UpdatedServerInfo = 'updated-server-info'
-    UpdatedToolList = 'updated-tool-list'
-    UpdatingPromptList = 'updating-prompt-list'
-    UpdatedPromptList = 'updated-prompt-list'
 
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "120"))
 
@@ -237,7 +230,7 @@ class ClaudeCodeClient():
 
         self._set_status(ClaudeAgentClientStatus.Disconnecting)
 
-        response = self._send_claude_agent_request(ClaudeAgentEventType.StopServer)
+        response = self._send_claude_agent_request(ClaudeAgentEventType.StopClient)
         if not response["success"]:
             log.error(f"Claude agent client failed to stop: {response['error']}")
 
@@ -332,45 +325,12 @@ class ClaudeCodeClient():
                                 "id": event_id,
                                 "data": "chat history cleared"
                             })
-                    elif event_type == ClaudeAgentEventType.CallTool:
-                        try:
-                            result = await client.call_tool(event["args"]["tool_name"], event["args"]["tool_args"])
-                        except Exception as e:
-                            result = f"Error occurred while calling MCP tool {event['args']['tool_name']}: {str(e)}"
-                            log.error(result)
-                        finally:
-                            self._client_thread_signal.emit({
-                                "id": event_id,
-                                "data": result
-                            })
-                    elif event_type == ClaudeAgentEventType.StopServer:
+                    elif event_type == ClaudeAgentEventType.StopClient:
                         self._client_thread_signal.emit({
                             "id": event_id,
                             "data": "stopped"
                         })
                         return
-                    elif event_type == ClaudeAgentEventType.ListPrompts:
-                        try:
-                            prompts = await client.list_prompts()
-                        except Exception as e:
-                            log.error(f"Error occurred while listing MCP prompts: {str(e)}")
-                            prompts = []
-                        finally:
-                            self._client_thread_signal.emit({
-                                "id": event_id,
-                                "data": prompts
-                            })
-                    elif event_type == ClaudeAgentEventType.GetPromptValue:
-                        try:
-                            prompt = await client.get_prompt(event["args"]["prompt_name"], event["args"]["prompt_args"])
-                        except Exception as e:
-                            prompt = None
-                            log.error(f"Error occurred while getting MCP prompt value {event['args']['prompt_name']}: {str(e)}")
-                        finally:
-                            self._client_thread_signal.emit({
-                                "id": event_id,
-                                "data": prompt.messages
-                            })
                     else:
                         log.error(f"Unknown event type {event}")
         except Exception as e:
@@ -438,32 +398,6 @@ class ClaudeCodeClient():
             log.error(f"Claude agent client failed to update server info: {response['error']}")
         self._set_status(ClaudeAgentClientStatus.UpdatedServerInfo)
 
-    def call_tool(self, tool_name: str, tool_args: dict):
-        if not self.is_connected():
-            return f"MCP server '{self.name}' is not connected"
-
-        response = self._send_claude_agent_request(ClaudeAgentEventType.CallTool, {
-            "tool_name": tool_name,
-            "tool_args": tool_args
-        })
-
-        if response["success"]:
-            return response["data"]
-        else:
-            log.error(f"MCP server '{self.name}' failed to call tool: {response['error']}")
-            return response["error"]
-    
-    def update_prompts_list(self):
-        if not self.is_connected():
-            return
-        self._set_status(ClaudeAgentClientStatus.UpdatingPromptList)
-        response = self._send_claude_agent_request(ClaudeAgentEventType.ListPrompts)
-        if response["success"]:
-            self._mcp_prompts = response["data"]
-        else:
-            log.error(f"MCP server '{self.name}' failed to update prompts: {response['error']}")
-        self._set_status(ClaudeAgentClientStatus.UpdatedPromptList)
-
     @property
     def server_info(self) -> dict[str, Any] | None:
         return self._server_info
@@ -481,22 +415,6 @@ class ClaudeCodeClient():
             return response["data"]
         else:
             log.error(f"Claude agent query failed: {response['error']}")
-            return response["error"]
-
-    def inline_completions(self, prefix: str, suffix: str, language: str):
-        if not self.is_connected():
-            return f"Claude agent is not connected"
-
-        response = self._send_claude_agent_request(ClaudeAgentEventType.InlineCompletions, {
-            "prefix": prefix,
-            "suffix": suffix,
-            "language": language
-        })
-
-        if response["success"]:
-            return response["data"]
-        else:
-            log.error(f"Claude agent inline completions failed: {response['error']}")
             return response["error"]
 
     def clear_chat_history(self):
