@@ -83,6 +83,7 @@ class AIServiceManager(Host):
     def websocket_connector(self, _websocket_connector: ThreadSafeWebSocketConnector):
         self._websocket_connector = _websocket_connector
         self._mcp_manager.websocket_connector = _websocket_connector
+        self._claude_code_chat_participant.websocket_connector = _websocket_connector
 
     def initialize(self):
         self.chat_participants = {}

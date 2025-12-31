@@ -202,6 +202,10 @@ class ClaudeCodeClient():
     @property
     def websocket_connector(self) -> ThreadSafeWebSocketConnector:
         return self._websocket_connector
+
+    @websocket_connector.setter
+    def websocket_connector(self, websocket_connector: ThreadSafeWebSocketConnector):
+        self._websocket_connector = websocket_connector
     
     @property
     def status(self) -> ClaudeAgentClientStatus:
@@ -261,10 +265,13 @@ class ClaudeCodeClient():
     def _set_status(self, status: ClaudeAgentClientStatus):
         self._status = status
         if self._websocket_connector is not None:
-            self._websocket_connector.write_message({
-                "type": BackendMessageType.ClaudeCodeStatusChange,
-                "data": {}
-            })
+            try:
+                self._websocket_connector.write_message({
+                        "type": BackendMessageType.ClaudeCodeStatusChange,
+                        "data": {}
+                    })
+            except Exception as e:
+                log.error(f"Error occurred while sending status message to websocket: {str(e)}")
 
     async def _client_thread_func(self):
         try:
@@ -709,6 +716,14 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
                 ChatCommand(name='cost', description='Show cost of the chat'),
                 ChatCommand(name='clear', description='Clear chat history'),
             ]
+
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return self._client.websocket_connector
+    
+    @websocket_connector.setter
+    def websocket_connector(self, websocket_connector: ThreadSafeWebSocketConnector):
+        self._client.websocket_connector = websocket_connector
     
     def chat_prompt(self, model_provider: str, model_name: str) -> str:
         return ""
