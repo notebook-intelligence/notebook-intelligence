@@ -200,20 +200,26 @@ export class NBIAPI {
   }
 
   static getChatEnabled() {
-    return this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-      ? !this.getGHLoginRequired()
-      : this.config.llmProviders.find(
-          provider => provider.id === this.config.chatModel.provider
-        );
+    return (
+      this.config.isInClaudeCodeMode ||
+      (this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+        ? !this.getGHLoginRequired()
+        : this.config.llmProviders.find(
+            provider => provider.id === this.config.chatModel.provider
+          ))
+    );
   }
 
   static getInlineCompletionEnabled() {
-    return this.config.inlineCompletionModel.provider ===
-      GITHUB_COPILOT_PROVIDER_ID
-      ? !this.getGHLoginRequired()
-      : this.config.llmProviders.find(
-          provider => provider.id === this.config.inlineCompletionModel.provider
-        );
+    return (
+      this.config.isInClaudeCodeMode ||
+      (this.config.inlineCompletionModel.provider === GITHUB_COPILOT_PROVIDER_ID
+        ? !this.getGHLoginRequired()
+        : this.config.llmProviders.find(
+            provider =>
+              provider.id === this.config.inlineCompletionModel.provider
+          ))
+    );
   }
 
   static async loginToGitHub() {

@@ -363,13 +363,13 @@ class AIServiceManager(Host):
         return self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
 
     async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
-        if self.chat_model is None:
+        is_claude_code_mode = self.is_claude_code_mode
+        if not is_claude_code_mode and self.chat_model is None:
             response.stream(MarkdownData("Chat model is not set!"))
             response.stream(ButtonData("Configure", "notebook-intelligence:open-configuration-dialog"))
             response.finish()
             return
         request.host = self
-        is_claude_code_mode = self.is_claude_code_mode
         prompt_parts = PromptParts(input=request.prompt, participant=CLAUDE_CODE_CHAT_PARTICIPANT_ID) if is_claude_code_mode else AIServiceManager.parse_prompt(request.prompt)
 
         # add MCP server prompt messages to chat history
