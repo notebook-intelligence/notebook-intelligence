@@ -783,7 +783,10 @@ If messages contain relative file paths, assume they are relative to the working
     def update_client(self):
         self._client_options = self._create_client_options()
         self._client.client_options = self._client_options
-        self._client.reconnect()
+        self._client.disconnect()
+        claude_enabled = self._host.nbi_config.claude_settings.get('enabled', False)
+        if claude_enabled:
+            self._client.connect()
 
     def update_client_debounced(self):
         if self._update_client_debounced_timer is not None:

@@ -124,6 +124,7 @@ class ConfigHandler(APIHandler):
         data = json.loads(self.request.body)
         valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings", "claude_settings"])
         has_model_change = "chat_model" in data or "inline_completion_model" in data
+        has_claude_settings_change = False
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
@@ -140,14 +141,21 @@ class ConfigHandler(APIHandler):
                             disabled_mcp_servers.append(server_id)
                     ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
                 elif key == "claude_settings":
-                    if ai_service_manager.is_claude_code_mode:
-                        default_chat_participant = ai_service_manager.default_chat_participant
-                        if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
-                            default_chat_participant.update_client_debounced()
+                    has_claude_settings_change = True
+                    default_chat_participant = ai_service_manager.default_chat_participant
+                    if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                        # needed to disconnect
+                        default_chat_participant.update_client_debounced()
 
         ai_service_manager.nbi_config.save()
-        if has_model_change:
+        if has_model_change or has_claude_settings_change:
             ai_service_manager.update_models_from_config()
+        if has_claude_settings_change:
+            default_chat_participant = ai_service_manager.default_chat_participant
+            if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                # needed to reconnect / update
+                default_chat_participant.update_client_debounced()
+
         self.finish(json.dumps({}))
 
 class UpdateProviderModelsHandler(APIHandler):
