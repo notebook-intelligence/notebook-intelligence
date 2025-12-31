@@ -94,7 +94,6 @@ class AIServiceManager(Host):
         self._mcp_manager = MCPManager(self.nbi_config.mcp)
         for participant in self._mcp_manager.get_mcp_participants():
             self.register_chat_participant(participant)
-        self.register_chat_participant(self._claude_code_chat_participant)
 
         self.update_models_from_config()
         self.initialize_extensions()
@@ -134,8 +133,11 @@ class AIServiceManager(Host):
         self._default_chat_participant = default_chat_participant
 
         if is_claude_code_mode:
+            self.register_chat_participant(self._claude_code_chat_participant)
             claude_settings = self.nbi_config.claude_settings
             self._inline_completion_model = ClaudeCodeInlineCompletionModel(claude_settings.get('inline_completion_model', ''), claude_settings.get('api_key', None), claude_settings.get('base_url', None))
+        else:
+            self.unregister_chat_participant(self._claude_code_chat_participant)
 
         self.chat_participants[DEFAULT_CHAT_PARTICIPANT_ID] = self._default_chat_participant
 
@@ -186,6 +188,10 @@ class AIServiceManager(Host):
             log.error(f"Participant ID '{participant.id}' is already in use!")
             return
         self.chat_participants[participant.id] = participant
+
+    def unregister_chat_participant(self, participant: ChatParticipant):
+        if participant.id in self.chat_participants:
+            del self.chat_participants[participant.id]
 
     def register_llm_provider(self, provider: LLMProvider) -> None:
         if provider.id in RESERVED_LLM_PROVIDER_IDS:
