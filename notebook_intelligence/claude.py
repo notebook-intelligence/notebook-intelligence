@@ -595,7 +595,7 @@ async def run_command_in_jupyter_terminal(args) -> str:
     
     Args:
         command: Shell command to execute in the terminal
-        working_directory: Directory to execute command in (relative to jupyter_root_dir, default is root)
+        working_directory: Directory to execute command in (relative to Jupyter working directory, default is '' which translates to the Jupyter working directory root)
     """
     try:
         response = get_current_response()
