@@ -757,6 +757,11 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         if chat_model_id == "":
             chat_model_id = None
 
+        env = {}
+        base_url = claude_settings.get('base_url', '')
+        if base_url != '':
+            env['ANTHROPIC_BASE_URL'] = base_url
+
         client_options = ClaudeAgentOptions(
             system_prompt=self._create_system_prompt(jupyter_ui_tools_enabled),
             cwd=get_jupyter_root_dir(),
@@ -765,6 +770,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             allowed_tools=allowed_tools,
             setting_sources=setting_sources,
             can_use_tool=custom_permission_handler,
+            env=env,
         )
         return client_options
 

@@ -133,7 +133,8 @@ class AIServiceManager(Host):
         self._default_chat_participant = default_chat_participant
 
         if is_claude_code_mode:
-            self.register_chat_participant(self._claude_code_chat_participant)
+            if self._claude_code_chat_participant.id not in self.chat_participants:
+                self.register_chat_participant(self._claude_code_chat_participant)
             claude_settings = self.nbi_config.claude_settings
             self._inline_completion_model = ClaudeCodeInlineCompletionModel(claude_settings.get('inline_completion_model', ''), claude_settings.get('api_key', None), claude_settings.get('base_url', None))
         else:
