@@ -824,17 +824,24 @@ function SettingsPanelComponentClaude(props: any) {
     nbiConfig.isInClaudeCodeMode
   );
   const [chatModel, setChatModel] = useState(
-    nbiConfig.claudeSettings.chat_model
+    nbiConfig.claudeSettings.chat_model ?? ClaudeModelType.Default
   );
   const [inlineCompletionModel, setInlineCompletionModel] = useState(
-    nbiConfig.claudeSettings.inline_completion_model
+    nbiConfig.claudeSettings.inline_completion_model ?? ClaudeModelType.Default
   );
-  const [apiKey, setApiKey] = useState(nbiConfig.claudeSettings.api_key);
-  const [baseUrl, setBaseUrl] = useState(nbiConfig.claudeSettings.base_url);
+  const [apiKey, setApiKey] = useState(nbiConfig.claudeSettings.api_key ?? '');
+  const [baseUrl, setBaseUrl] = useState(
+    nbiConfig.claudeSettings.base_url ?? ''
+  );
   const [settingSources, setSettingSources] = useState(
-    nbiConfig.claudeSettings.setting_sources
+    nbiConfig.claudeSettings.setting_sources ?? []
   );
-  const [tools, setTools] = useState(nbiConfig.claudeSettings.tools);
+  const [tools, setTools] = useState(
+    nbiConfig.claudeSettings.tools ?? [
+      ClaudeToolType.ClaudeCodeTools,
+      ClaudeToolType.JupyterUITools
+    ]
+  );
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
