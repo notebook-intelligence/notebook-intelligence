@@ -291,23 +291,27 @@ class ClaudeCodeClient():
                             if len(query_lines) > 0 and query_lines[-1].startswith('/'):
                                 query_lines = query_lines[-1:]
                             client_query = "\n".join([line.strip() for line in query_lines])
-                            await client.query(client_query)
-                            async for message in client.receive_response():
-                                if isinstance(message, AssistantMessage):
-                                    for block in message.content:
-                                        if isinstance(block, TextBlock):
-                                            response.stream(MarkdownData(block.text))
-                                elif isinstance(message, UserMessage):
-                                    if isinstance(message.content, str):
-                                        content = message.content
-                                        content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
-                                        response.stream(MarkdownData(content))
-                                    elif isinstance(message.content, TextBlock):
-                                        content = message.content.text
-                                        content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
-                                        response.stream(MarkdownData(content))
-                                else:
-                                    pass
+
+                            if not request.cancel_token.is_cancel_requested:
+                                await client.query(client_query)
+                                async for message in client.receive_response():
+                                    if request.cancel_token.is_cancel_requested:
+                                        continue
+                                    if isinstance(message, AssistantMessage):
+                                        for block in message.content:
+                                            if isinstance(block, TextBlock):
+                                                response.stream(MarkdownData(block.text))
+                                    elif isinstance(message, UserMessage):
+                                        if isinstance(message.content, str):
+                                            content = message.content
+                                            content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
+                                            response.stream(MarkdownData(content))
+                                        elif isinstance(message.content, TextBlock):
+                                            content = message.content.text
+                                            content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
+                                            response.stream(MarkdownData(content))
+                                    else:
+                                        pass
                         except Exception as e:
                             log.error(f"Error occurred while querying Claude agent: {str(e)}")
                         finally:
@@ -604,6 +608,22 @@ async def run_command_in_jupyter_terminal(args) -> str:
         return tool_text_response(f"Error running command in Jupyter terminal: {str(e)}")
 
 
+@tool("open-file-in-jupyter-ui", "Opens a file in the Jupyter UI.", {"file_path": str})
+async def open_file_in_jupyter_ui(args) -> str:
+    """Open a file in the Jupyter UI.
+    
+    Args:
+        file_path: Path to the file to open
+    """
+    try:
+        response = get_current_response()
+        ui_cmd_response = await response.run_ui_command('docmanager:open', {
+            'path': args['file_path']
+        })
+        return tool_text_response(ui_cmd_response)
+    except Exception as e:
+        return tool_text_response(f"Error opening file in Jupyter UI: {str(e)}")
+
 async def custom_permission_handler(
     tool_name: str,
     input_data: dict,
@@ -723,7 +743,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         self._jupyter_ui_tools_mcp_server = create_sdk_mcp_server(
             name="jui",
             version="1.0.0",
-            tools=[create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal]
+            tools=[create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal, open_file_in_jupyter_ui]
         )
         mcp_servers = {}
         jupyter_ui_tools_enabled = ClaudeToolType.JupyterUITools in claude_settings.get('tools', [])
@@ -731,7 +751,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             mcp_servers["jui"] = self._jupyter_ui_tools_mcp_server
         allowed_tools = []
         if jupyter_ui_tools_enabled:
-            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__delete-cell", "mcp__jui__insert-cell", "mcp__jui__run-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__run-command-in-jupyter-terminal"])
+            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__delete-cell", "mcp__jui__insert-cell", "mcp__jui__run-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__run-command-in-jupyter-terminal", "mcp__jui__open-file-in-jupyter-ui"])
         setting_sources = claude_settings.get('setting_sources')
         chat_model_id = claude_settings.get('chat_model', '').strip()
         if chat_model_id == "":
@@ -753,7 +773,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
 Assume Python if the language is not specified.
 JupyterLab is launched from a working directory and it can only access files in this directory and its subdirectories. Follow the same rule for file system access. Working directory for current session is '{get_jupyter_root_dir()}'.
 If messages contain relative file paths, assume they are relative to the working directory.
-{"You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server." if jupyter_ui_tools_enabled else ""}
+{"You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server. When interacting with JupyterLab UI, use relative file paths for file paths." if jupyter_ui_tools_enabled else ""}
 """
 
     def clear_chat_history(self):
