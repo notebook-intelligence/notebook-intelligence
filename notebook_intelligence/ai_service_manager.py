@@ -12,6 +12,7 @@ from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, Inl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
+from notebook_intelligence.claude import CLAUDE_CODE_CHAT_PARTICIPANT_ID, ClaudeCodeChatParticipant, ClaudeCodeInlineCompletionModel
 from notebook_intelligence.llm_providers.github_copilot_llm_provider import GitHubCopilotLLMProvider
 from notebook_intelligence.llm_providers.litellm_compatible_llm_provider import LiteLLMCompatibleLLMProvider
 from notebook_intelligence.llm_providers.ollama_llm_provider import OllamaLLMProvider
@@ -82,9 +83,11 @@ class AIServiceManager(Host):
     def websocket_connector(self, _websocket_connector: ThreadSafeWebSocketConnector):
         self._websocket_connector = _websocket_connector
         self._mcp_manager.websocket_connector = _websocket_connector
+        self._claude_code_chat_participant.websocket_connector = _websocket_connector
 
     def initialize(self):
         self.chat_participants = {}
+        self._claude_code_chat_participant = ClaudeCodeChatParticipant(self)
         self.register_llm_provider(GitHubCopilotLLMProvider())
         self.register_llm_provider(self._openai_compatible_llm_provider)
         self.register_llm_provider(self._litellm_compatible_llm_provider)
@@ -125,9 +128,18 @@ class AIServiceManager(Host):
             for property in properties:
                 self._inline_completion_model.set_property_value(property['id'], property['value'])
 
+        is_claude_code_mode = self.is_claude_code_mode
         is_github_copilot_chat_model = isinstance(chat_model_provider, GitHubCopilotLLMProvider)
-        default_chat_participant = GithubCopilotChatParticipant() if is_github_copilot_chat_model else BaseChatParticipant()
+        default_chat_participant = self._claude_code_chat_participant if is_claude_code_mode else GithubCopilotChatParticipant() if is_github_copilot_chat_model else BaseChatParticipant()
         self._default_chat_participant = default_chat_participant
+
+        if is_claude_code_mode:
+            if self._claude_code_chat_participant.id not in self.chat_participants:
+                self.register_chat_participant(self._claude_code_chat_participant)
+            claude_settings = self.nbi_config.claude_settings
+            self._inline_completion_model = ClaudeCodeInlineCompletionModel(claude_settings.get('inline_completion_model', ''), claude_settings.get('api_key', None), claude_settings.get('base_url', None))
+        else:
+            self.unregister_chat_participant(self._claude_code_chat_participant)
 
         self.chat_participants[DEFAULT_CHAT_PARTICIPANT_ID] = self._default_chat_participant
 
@@ -179,6 +191,10 @@ class AIServiceManager(Host):
             return
         self.chat_participants[participant.id] = participant
 
+    def unregister_chat_participant(self, participant: ChatParticipant):
+        if participant.id in self.chat_participants:
+            del self.chat_participants[participant.id]
+
     def register_llm_provider(self, provider: LLMProvider) -> None:
         if provider.id in RESERVED_LLM_PROVIDER_IDS:
             log.error(f"LLM Provider ID '{provider.id}' is reserved!")
@@ -226,6 +242,10 @@ class AIServiceManager(Host):
     @property
     def embedding_model(self) -> EmbeddingModel:
         return self._embedding_model
+
+    @property
+    def is_claude_code_mode(self) -> bool:
+        return self.nbi_config.claude_settings.get('enabled', False)
 
     # prompt format: @participant /command input
     # or /mcp:server_name:prompt_name input
@@ -351,13 +371,14 @@ class AIServiceManager(Host):
         return self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
 
     async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
-        if self.chat_model is None:
+        is_claude_code_mode = self.is_claude_code_mode
+        if not is_claude_code_mode and self.chat_model is None:
             response.stream(MarkdownData("Chat model is not set!"))
             response.stream(ButtonData("Configure", "notebook-intelligence:open-configuration-dialog"))
             response.finish()
             return
         request.host = self
-        prompt_parts = AIServiceManager.parse_prompt(request.prompt)
+        prompt_parts = PromptParts(input=request.prompt, participant=CLAUDE_CODE_CHAT_PARTICIPANT_ID) if is_claude_code_mode else AIServiceManager.parse_prompt(request.prompt)
 
         # add MCP server prompt messages to chat history
         if prompt_parts.mcp_prompt_name != "":

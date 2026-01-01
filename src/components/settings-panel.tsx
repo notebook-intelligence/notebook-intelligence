@@ -6,10 +6,11 @@ import { VscWarning } from 'react-icons/vsc';
 import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
-import { NBIAPI } from '../api';
+import { ClaudeModelType, ClaudeToolType, NBIAPI } from '../api';
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
 import { mcpServerSettingsToEnabledState } from './mcp-util';
+import claudeSvg from '../../style/claude.svg';
 
 const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
 const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
@@ -69,6 +70,11 @@ function SettingsPanelComponent(props: any) {
             onEditMCPConfigClicked={props.onEditMCPConfigClicked}
           />
         )}
+        {activeTab === 'claude' && (
+          <SettingsPanelComponentClaude
+            onEditMCPConfigClicked={props.onEditMCPConfigClicked}
+          />
+        )}
       </div>
     </div>
   );
@@ -87,6 +93,19 @@ function SettingsPanelTabsComponent(props: any) {
         }}
       >
         General
+      </div>
+      <div
+        className={`nbi-settings-panel-tab ${activeTab === 'claude' ? 'active' : ''}`}
+        onClick={() => {
+          setActiveTab('claude');
+          props.onTabSelected('claude');
+        }}
+      >
+        <span
+          className="claude-icon"
+          dangerouslySetInnerHTML={{ __html: claudeSvg }}
+        ></span>
+        Claude
       </div>
       <div
         className={`nbi-settings-panel-tab ${activeTab === 'mcp-servers' ? 'active' : ''}`}
@@ -788,6 +807,307 @@ function SettingsPanelComponentMCPServers(props: any) {
                 >
                   <div className="jp-Dialog-buttonLabel">Add / Edit</div>
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanelComponentClaude(props: any) {
+  const nbiConfig = NBIAPI.config;
+  const claudeSettingsRef = useRef<any>(nbiConfig.claudeSettings);
+  const [_renderCount, setRenderCount] = useState(1);
+  const [claudeEnabled, setClaudeEnabled] = useState(
+    nbiConfig.isInClaudeCodeMode
+  );
+  const [chatModel, setChatModel] = useState(
+    nbiConfig.claudeSettings.chat_model ?? ClaudeModelType.Default
+  );
+  const [inlineCompletionModel, setInlineCompletionModel] = useState(
+    nbiConfig.claudeSettings.inline_completion_model ?? ClaudeModelType.Default
+  );
+  const [apiKey, setApiKey] = useState(nbiConfig.claudeSettings.api_key ?? '');
+  const [baseUrl, setBaseUrl] = useState(
+    nbiConfig.claudeSettings.base_url ?? ''
+  );
+  const [settingSources, setSettingSources] = useState(
+    nbiConfig.claudeSettings.setting_sources ?? []
+  );
+  const [tools, setTools] = useState(
+    nbiConfig.claudeSettings.tools ?? [
+      ClaudeToolType.ClaudeCodeTools,
+      ClaudeToolType.JupyterUITools
+    ]
+  );
+
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      claudeSettingsRef.current = nbiConfig.claudeSettings;
+      setRenderCount(renderCount => renderCount + 1);
+    });
+  }, []);
+
+  const syncSettingsToServerState = () => {
+    NBIAPI.setConfig({
+      claude_settings: {
+        enabled: claudeEnabled,
+        chat_model: chatModel,
+        inline_completion_model: inlineCompletionModel,
+        api_key: apiKey,
+        base_url: baseUrl,
+        setting_sources: settingSources,
+        tools: tools
+      }
+    });
+  };
+
+  useEffect(() => {
+    syncSettingsToServerState();
+  }, [
+    claudeEnabled,
+    chatModel,
+    inlineCompletionModel,
+    apiKey,
+    baseUrl,
+    settingSources,
+    tools
+  ]);
+
+  return (
+    <div className="config-dialog">
+      <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Enable Claude mode</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                This requires a{' '}
+                <a href="https://claude.ai" target="_blank">
+                  Claude
+                </a>{' '}
+                account and{' '}
+                <a href="https://code.claude.com/" target="_blank">
+                  Claude Code
+                </a>{' '}
+                installed in your system.
+              </span>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Enable Claude mode"
+                    checked={claudeEnabled}
+                    onClick={() => {
+                      setClaudeEnabled(!claudeEnabled);
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">Models</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>Chat model</div>
+                <div>
+                  <select
+                    className="jp-mod-styled"
+                    onChange={event => setChatModel(event.target.value)}
+                  >
+                    <option
+                      value={ClaudeModelType.Default}
+                      selected={chatModel === ClaudeModelType.Default}
+                    >
+                      Default (recommended)
+                    </option>
+                    <option
+                      value={ClaudeModelType.ClaudeOpus45}
+                      selected={chatModel === ClaudeModelType.ClaudeOpus45}
+                    >
+                      Claude Opus 4.5
+                    </option>
+                    <option
+                      value={ClaudeModelType.ClaudeHaiku45}
+                      selected={chatModel === ClaudeModelType.ClaudeHaiku45}
+                    >
+                      Claude Haiku 4.5
+                    </option>
+                  </select>
+                </div>
+              </div>
+              <div className="model-config-section-column">
+                <div>Auto-complete model</div>
+                <div>
+                  <select
+                    className="jp-mod-styled"
+                    onChange={event =>
+                      setInlineCompletionModel(event.target.value)
+                    }
+                  >
+                    <option
+                      value={ClaudeModelType.Default}
+                      selected={
+                        inlineCompletionModel === ClaudeModelType.Default
+                      }
+                    >
+                      Default (recommended)
+                    </option>
+                    <option
+                      value={ClaudeModelType.ClaudeOpus45}
+                      selected={
+                        inlineCompletionModel === ClaudeModelType.ClaudeOpus45
+                      }
+                    >
+                      Claude Opus 4.5
+                    </option>
+                    <option
+                      value={ClaudeModelType.ClaudeHaiku45}
+                      selected={
+                        inlineCompletionModel === ClaudeModelType.ClaudeHaiku45
+                      }
+                    >
+                      Claude Haiku 4.5
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Chat Agent setting sources
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="User"
+                    checked={settingSources.includes('user')}
+                    onClick={() => {
+                      setSettingSources(
+                        settingSources.includes('user')
+                          ? settingSources.filter(
+                              (source: string) => source !== 'user'
+                            )
+                          : [...settingSources, 'user']
+                      );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Project (Jupyter root directory)"
+                    checked={settingSources.includes('project')}
+                    onClick={() => {
+                      setSettingSources(
+                        settingSources.includes('project')
+                          ? settingSources.filter(
+                              (source: string) => source !== 'project'
+                            )
+                          : [...settingSources, 'project']
+                      );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">Chat Agent tools</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Claude Code tools"
+                    checked={tools.includes(ClaudeToolType.ClaudeCodeTools)}
+                    disabled={true}
+                    onClick={() => {
+                      setTools(
+                        tools.includes(ClaudeToolType.ClaudeCodeTools)
+                          ? tools.filter(
+                              (tool: string) =>
+                                tool !== ClaudeToolType.ClaudeCodeTools
+                            )
+                          : [...tools, ClaudeToolType.ClaudeCodeTools]
+                      );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Jupyter UI tools"
+                    checked={tools.includes(ClaudeToolType.JupyterUITools)}
+                    onClick={() => {
+                      setTools(
+                        tools.includes(ClaudeToolType.JupyterUITools)
+                          ? tools.filter(
+                              (tool: string) =>
+                                tool !== ClaudeToolType.JupyterUITools
+                            )
+                          : [...tools, ClaudeToolType.JupyterUITools]
+                      );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">Claude account</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div className="form-field-row">
+                  <div className="form-field-description">
+                    API Key (optional)
+                  </div>
+                  <input
+                    name="chat-model-id-input"
+                    placeholder="API Key"
+                    className="jp-mod-styled"
+                    spellCheck={false}
+                    value={apiKey}
+                    onChange={event => setApiKey(event.target.value)}
+                  />
+                </div>
+                <div className="form-field-row">
+                  <div className="form-field-description">
+                    Base URL (optional)
+                  </div>
+                  <input
+                    name="chat-model-id-input"
+                    placeholder="https://api.anthropic.com"
+                    className="jp-mod-styled"
+                    spellCheck={false}
+                    value={baseUrl}
+                    onChange={event => setBaseUrl(event.target.value)}
+                  />
+                </div>
               </div>
             </div>
           </div>

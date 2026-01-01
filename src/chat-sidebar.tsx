@@ -19,6 +19,7 @@ import { NBIAPI, GitHubCopilotLoginStatus } from './api';
 import {
   BackendMessageType,
   BuiltinToolsetType,
+  CLAUDE_CODE_CHAT_PARTICIPANT_ID,
   ContextType,
   IActiveDocumentInfo,
   ICellContents,
@@ -54,6 +55,8 @@ import {
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
+import claudeSvg from '../style/claude.svg';
+import { AskUserQuestion } from './components/ask-user-question';
 
 export enum RunChatCompletionType {
   Chat,
@@ -449,6 +452,8 @@ function ChatResponse(props: any) {
       : `Output (${Math.floor(item.reasoningTime)} s)`;
   };
 
+  const chatParticipantId = msg.participant?.id || 'default';
+
   return (
     <div
       className={`chat-message chat-message-${msg.from}`}
@@ -458,7 +463,7 @@ function ChatResponse(props: any) {
         <div className="chat-message-from">
           {msg.participant?.iconPath && (
             <div
-              className={`chat-message-from-icon ${msg.participant?.id === 'default' ? 'chat-message-from-icon-default' : ''} ${isDarkTheme() ? 'dark' : ''}`}
+              className={`chat-message-from-icon chat-message-from-icon-${chatParticipantId} ${isDarkTheme() ? 'dark' : ''}`}
             >
               <img src={msg.participant.iconPath} />
             </div>
@@ -624,6 +629,44 @@ function ChatResponse(props: any) {
                   </button>
                 </div>
               );
+            case ResponseStreamDataType.AskUserQuestion:
+              return answeredForms.get(item.id) ===
+                'confirmed' ? null : answeredForms.get(item.id) ===
+                'canceled' ? (
+                <div>&#10006; Canceled</div>
+              ) : (
+                <div
+                  className="chat-confirmation-form ask-user-question"
+                  key={`key-${index}`}
+                >
+                  <AskUserQuestion
+                    userQuestions={item}
+                    onSubmit={(selectedAnswers: any) => {
+                      markFormConfirmed(item.id);
+                      runCommand('notebook-intelligence:chat-user-input', {
+                        id: item.content.identifier.id,
+                        data: {
+                          callback_id: item.content.identifier.callback_id,
+                          data: {
+                            confirmed: true,
+                            selectedAnswers
+                          }
+                        }
+                      });
+                    }}
+                    onCancel={() => {
+                      markFormCanceled(item.id);
+                      runCommand('notebook-intelligence:chat-user-input', {
+                        id: item.content.identifier.id,
+                        data: {
+                          callback_id: item.content.identifier.callback_id,
+                          data: { confirmed: false }
+                        }
+                      });
+                    }}
+                  />
+                </div>
+              );
           }
           return null;
         })}
@@ -655,7 +698,7 @@ async function submitCompletionRequest(
         request.content,
         request.language || 'python',
         request.currentDirectory || '',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         request.additionalContext || [],
         request.chatMode,
         request.toolSelections || {},
@@ -671,7 +714,7 @@ async function submitCompletionRequest(
         request.content,
         request.language || 'python',
         request.currentDirectory || '',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         [],
         'ask',
         {},
@@ -686,7 +729,7 @@ async function submitCompletionRequest(
         request.suffix || '',
         request.existingCode || '',
         request.language || 'python',
-        request.filename || 'Untitled.ipynb',
+        request.filename || '',
         responseEmitter
       );
   }
@@ -1169,23 +1212,35 @@ function SidebarComponent(props: any) {
   useEffect(() => {
     const prefixes: string[] = [];
 
-    if (chatMode === 'ask') {
-      const chatParticipants = NBIAPI.config.chatParticipants;
-      for (const participant of chatParticipants) {
-        const id = participant.id;
-        const commands = participant.commands;
-        const participantPrefix = id === 'default' ? '' : `@${id}`;
-        if (participantPrefix !== '') {
-          prefixes.push(participantPrefix);
-        }
-        const commandPrefix =
-          participantPrefix === '' ? '' : `${participantPrefix} `;
+    if (NBIAPI.config.isInClaudeCodeMode) {
+      const claudeChatParticipant = NBIAPI.config.chatParticipants.find(
+        participant => participant.id === CLAUDE_CODE_CHAT_PARTICIPANT_ID
+      );
+      if (claudeChatParticipant) {
+        const commands = claudeChatParticipant.commands;
         for (const command of commands) {
-          prefixes.push(`${commandPrefix}/${command}`);
+          prefixes.push(`/${command}`);
         }
       }
     } else {
-      prefixes.push('/clear');
+      if (chatMode === 'ask') {
+        const chatParticipants = NBIAPI.config.chatParticipants;
+        for (const participant of chatParticipants) {
+          const id = participant.id;
+          const commands = participant.commands;
+          const participantPrefix = id === 'default' ? '' : `@${id}`;
+          if (participantPrefix !== '') {
+            prefixes.push(participantPrefix);
+          }
+          const commandPrefix =
+            participantPrefix === '' ? '' : `${participantPrefix} `;
+          for (const command of commands) {
+            prefixes.push(`${commandPrefix}/${command}`);
+          }
+        }
+      } else {
+        prefixes.push('/clear');
+      }
     }
 
     const mcpServers = NBIAPI.config.toolConfig.mcpServers;
@@ -1969,24 +2024,26 @@ function SidebarComponent(props: any) {
             )}
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
-              <div>
-                <select
-                  className="chat-mode-select"
-                  title="Chat mode"
-                  value={chatMode}
-                  onChange={event => {
-                    if (event.target.value === 'ask') {
-                      setToolSelections(toolSelectionsEmpty);
-                    }
-                    setShowModeTools(false);
-                    setChatMode(event.target.value);
-                  }}
-                >
-                  <option value="ask">Ask</option>
-                  <option value="agent">Agent</option>
-                </select>
-              </div>
-              {chatMode !== 'ask' && (
+              {!NBIAPI.config.isInClaudeCodeMode && (
+                <div>
+                  <select
+                    className="chat-mode-select"
+                    title="Chat mode"
+                    value={chatMode}
+                    onChange={event => {
+                      if (event.target.value === 'ask') {
+                        setToolSelections(toolSelectionsEmpty);
+                      }
+                      setShowModeTools(false);
+                      setChatMode(event.target.value);
+                    }}
+                  >
+                    <option value="ask">Ask</option>
+                    <option value="agent">Agent</option>
+                  </select>
+                </div>
+              )}
+              {chatMode !== 'ask' && !NBIAPI.config.isInClaudeCodeMode && (
                 <div
                   className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
                   onClick={() => handleChatToolsButtonClick()}
@@ -1999,6 +2056,13 @@ function SidebarComponent(props: any) {
                   <VscTools />
                   {selectedToolCount > 0 && <>{selectedToolCount}</>}
                 </div>
+              )}
+              {NBIAPI.config.isInClaudeCodeMode && (
+                <span
+                  title="Claude mode"
+                  className="claude-icon"
+                  dangerouslySetInnerHTML={{ __html: claudeSvg }}
+                ></span>
               )}
             </div>
             <div>
@@ -2352,7 +2416,7 @@ function InlinePromptComponent(props: any) {
         type: RunChatCompletionType.GenerateCode,
         content: prompt,
         language: props.language || 'python',
-        filename: props.filename || 'Untitled.ipynb',
+        filename: props.filename || '',
         prefix: props.prefix,
         suffix: props.suffix,
         existingCode: props.existingCode,

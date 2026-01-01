@@ -398,9 +398,10 @@ class NBIInlineCompletionProvider
 
     const nbiConfig = NBIAPI.config;
     const inlineCompletionsEnabled =
-      nbiConfig.inlineCompletionModel.provider === GITHUB_COPILOT_PROVIDER_ID
+      nbiConfig.isInClaudeCodeMode ||
+      (nbiConfig.inlineCompletionModel.provider === GITHUB_COPILOT_PROVIDER_ID
         ? NBIAPI.getLoginStatus() === GitHubCopilotLoginStatus.LoggedIn
-        : nbiConfig.inlineCompletionModel.provider !== 'none';
+        : nbiConfig.inlineCompletionModel.provider !== 'none');
 
     this._telemetryEmitter.emitTelemetryEvent({
       type: TelemetryEventType.InlineCompletionRequest,
@@ -1020,9 +1021,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     };
 
     const isChatEnabled = (): boolean => {
-      return NBIAPI.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-        ? !githubLoginRequired()
-        : NBIAPI.config.chatModel.provider !== 'none';
+      return (
+        NBIAPI.config.isInClaudeCodeMode ||
+        (NBIAPI.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+          ? !githubLoginRequired()
+          : NBIAPI.config.chatModel.provider !== 'none')
+      );
     };
 
     const isActiveCellCodeCell = (): boolean => {
@@ -1876,12 +1880,17 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           item: githubCopilotStatusBarItem,
           align: 'right',
           rank: 100,
-          isActive: () => NBIAPI.config.usingGitHubCopilotModel
+          isActive: () =>
+            !NBIAPI.config.isInClaudeCodeMode &&
+            NBIAPI.config.usingGitHubCopilotModel
         }
       );
 
       NBIAPI.configChanged.connect(() => {
-        if (NBIAPI.config.usingGitHubCopilotModel) {
+        if (
+          !NBIAPI.config.isInClaudeCodeMode &&
+          NBIAPI.config.usingGitHubCopilotModel
+        ) {
           githubCopilotStatusBarItem.show();
         } else {
           githubCopilotStatusBarItem.hide();

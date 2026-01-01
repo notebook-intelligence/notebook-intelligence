@@ -20,6 +20,7 @@ from tornado import websocket
 from traitlets import Bool, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
+from notebook_intelligence.claude import ClaudeCodeChatParticipant
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env
@@ -100,10 +101,14 @@ class GetCapabilitiesHandler(APIHandler):
                 "extensions": extensions
             },
             "mcp_server_settings": nbi_config.mcp_server_settings,
+            "claude_settings": nbi_config.claude_settings,
             "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
             participant = ai_service_manager.chat_participants[participant_id]
+            # prevent duplicate participants
+            if participant.id in [p["id"] for p in response["chat_participants"]]:
+                continue
             response["chat_participants"].append({
                 "id": participant.id,
                 "name": participant.name,
@@ -117,8 +122,9 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings", "claude_settings"])
         has_model_change = "chat_model" in data or "inline_completion_model" in data
+        has_claude_settings_change = False
         for key in data:
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
@@ -134,10 +140,22 @@ class ConfigHandler(APIHandler):
                         if server_settings.get("disabled") == True:
                             disabled_mcp_servers.append(server_id)
                     ai_service_manager.update_mcp_server_connections(disabled_mcp_servers)
+                elif key == "claude_settings":
+                    has_claude_settings_change = True
+                    default_chat_participant = ai_service_manager.default_chat_participant
+                    if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                        # needed to disconnect
+                        default_chat_participant.update_client_debounced()
 
         ai_service_manager.nbi_config.save()
-        if has_model_change:
+        if has_model_change or has_claude_settings_change:
             ai_service_manager.update_models_from_config()
+        if has_claude_settings_change:
+            default_chat_participant = ai_service_manager.default_chat_participant
+            if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                # needed to reconnect / update
+                default_chat_participant.update_client_debounced()
+
         self.finish(json.dumps({}))
 
 class UpdateProviderModelsHandler(APIHandler):
@@ -469,6 +487,28 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                     }
                 ]
             }
+        elif data_type == ResponseStreamDataType.AskUserQuestion:
+            data = {
+                "choices": [
+                    {
+                        "delta": {
+                            "nbiContent": {
+                                "type": data_type,
+                                "content": {
+                                    "identifier": data.identifier,
+                                    "title": data.title,
+                                    "message": data.message,
+                                    "questions": data.questions if data.questions is not None else [],
+                                    "submitLabel": data.submitLabel if data.submitLabel is not None else "Submit",
+                                    "cancelLabel": data.cancelLabel if data.cancelLabel is not None else "Cancel"
+                                }
+                            },
+                            "content": "",
+                            "role": "assistant"
+                        }
+                    }
+                ]
+            }
         elif data_type == ResponseStreamDataType.MarkdownPart:
             content = data.content
             data = {
@@ -575,14 +615,16 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 extension_tools=toolSelections.get('extensions', {})
             )
 
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            chat_history = self.chat_history.get_history(chatId)
+            chat_history_initial_size = len(chat_history)
+
             current_directory = data.get('currentDirectory', '')
-            if chat_mode.id == 'agent' and current_directory != '':
-                current_directory_file_msg = f"Current directory open in Jupyter is: '{current_directory}'"
+            if (is_claude_code_mode or chat_mode.id == 'agent') and current_directory != '':
+                current_directory_file_msg = f"Additional context: Current directory open in Jupyter is: '{current_directory}'"
                 if filename != '':
                     current_directory_file_msg += f" and current file is: '{filename}'"
-                self.chat_history.add_message(chatId, {"role": "user", "content": current_directory_file_msg})
-
-            request_chat_history = self.chat_history.get_history(chatId).copy()
+                chat_history.append({"role": "user", "content": current_directory_file_msg})
 
             token_limit = 100 if ai_service_manager.chat_model is None else ai_service_manager.chat_model.context_window
             token_budget =  0.8 * token_limit
@@ -602,10 +644,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 if token_count > token_budget:
                     context_content = context_content[:int(token_budget)] + "..."
 
-                request_chat_history.append({"role": "user", "content": f"Use this as additional context: ```{context_content}```. It is from current file: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
-                self.chat_history.add_message(chatId, {"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
+                chat_history.append({"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
 
-            self.chat_history.add_message(chatId, {"role": "user", "content": prompt})
+            chat_history.append({"role": "user", "content": prompt})
 
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()
@@ -618,7 +659,9 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 chat_mode_id=chat_mode.id,
                 root_dir=NotebookIntelligence.root_dir
             )
-            
+
+            # last prompt is added later
+            request_chat_history = chat_history[chat_history_initial_size:-1] if not is_claude_code_mode else chat_history[:-1]
             thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter),))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
@@ -630,7 +673,8 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             existing_code = data['existingCode']
             language = data['language']
             filename = data['filename']
-            chat_mode = ChatMode('ask', 'Ask')
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            chat_mode = ChatMode('inline-chat', 'Inline Chat') if is_claude_code_mode else ChatMode('ask', 'Ask')
             if prefix != '':
                 self.chat_history.add_message(chatId, {"role": "user", "content": f"This code section comes before the code section you will generate, use as context. Leading content: ```{prefix}```"})
             if suffix != '':
@@ -675,6 +719,11 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 return
             handlers.response_emitter.on_user_input(msg['data'])
         elif messageType == RequestDataType.ClearChatHistory:
+            is_claude_code_mode = ai_service_manager.is_claude_code_mode
+            if is_claude_code_mode:
+                default_chat_participant = ai_service_manager.default_chat_participant
+                if isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+                    default_chat_participant.clear_chat_history()
             self.chat_history.clear()
         elif messageType == RequestDataType.RunUICommandResponse:
             handlers = self._messageCallbackHandlers.get(messageId)

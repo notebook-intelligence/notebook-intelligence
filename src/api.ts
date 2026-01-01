@@ -28,6 +28,17 @@ export interface IDeviceVerificationInfo {
   userCode: string;
 }
 
+export enum ClaudeModelType {
+  Default = '',
+  ClaudeOpus45 = 'claude-opus-4-5',
+  ClaudeHaiku45 = 'claude-haiku-4-5'
+}
+
+export enum ClaudeToolType {
+  ClaudeCodeTools = 'claude-code:built-in-tools',
+  JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
+}
+
 export class NBIConfig {
   get userHomeDir(): string {
     return this.capabilities.user_home_dir;
@@ -98,6 +109,14 @@ export class NBIConfig {
     return this.capabilities.mcp_server_settings;
   }
 
+  get claudeSettings(): any {
+    return this.capabilities.claude_settings;
+  }
+
+  get isInClaudeCodeMode(): boolean {
+    return this.claudeSettings.enabled === true;
+  }
+
   capabilities: any = {};
   chatParticipants: IChatParticipant[] = [];
 
@@ -124,7 +143,10 @@ export class NBIAPI {
 
     this._messageReceived.connect((_, msg) => {
       msg = JSON.parse(msg);
-      if (msg.type === BackendMessageType.MCPServerStatusChange) {
+      if (
+        msg.type === BackendMessageType.MCPServerStatusChange ||
+        msg.type === BackendMessageType.ClaudeCodeStatusChange
+      ) {
         this.fetchCapabilities();
       } else if (
         msg.type === BackendMessageType.GitHubCopilotLoginStatusChange
@@ -178,20 +200,26 @@ export class NBIAPI {
   }
 
   static getChatEnabled() {
-    return this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
-      ? !this.getGHLoginRequired()
-      : this.config.llmProviders.find(
-          provider => provider.id === this.config.chatModel.provider
-        );
+    return (
+      this.config.isInClaudeCodeMode ||
+      (this.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
+        ? !this.getGHLoginRequired()
+        : this.config.llmProviders.find(
+            provider => provider.id === this.config.chatModel.provider
+          ))
+    );
   }
 
   static getInlineCompletionEnabled() {
-    return this.config.inlineCompletionModel.provider ===
-      GITHUB_COPILOT_PROVIDER_ID
-      ? !this.getGHLoginRequired()
-      : this.config.llmProviders.find(
-          provider => provider.id === this.config.inlineCompletionModel.provider
-        );
+    return (
+      this.config.isInClaudeCodeMode ||
+      (this.config.inlineCompletionModel.provider === GITHUB_COPILOT_PROVIDER_ID
+        ? !this.getGHLoginRequired()
+        : this.config.llmProviders.find(
+            provider =>
+              provider.id === this.config.inlineCompletionModel.provider
+          ))
+    );
   }
 
   static async loginToGitHub() {

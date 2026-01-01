@@ -29,7 +29,9 @@ dependencies = [
     "litellm>=1.62.1",
     "openai",
     "ollama",
-    "fastmcp"
+    "fastmcp",
+    "claude-agent-sdk",
+    "anthropic"
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 

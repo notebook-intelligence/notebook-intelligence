@@ -33,7 +33,8 @@ export enum BackendMessageType {
   StreamEnd = 'stream-end',
   RunUICommand = 'run-ui-command',
   GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change',
-  MCPServerStatusChange = 'mcp-server-status-change'
+  MCPServerStatusChange = 'mcp-server-status-change',
+  ClaudeCodeStatusChange = 'claude-code-status-change'
 }
 
 export enum ResponseStreamDataType {
@@ -45,7 +46,8 @@ export enum ResponseStreamDataType {
   Button = 'button',
   Anchor = 'anchor',
   Progress = 'progress',
-  Confirmation = 'confirmation'
+  Confirmation = 'confirmation',
+  AskUserQuestion = 'ask-user-question'
 }
 
 export enum ContextType {
@@ -108,6 +110,7 @@ export enum BuiltinToolsetType {
 }
 
 export const GITHUB_COPILOT_PROVIDER_ID = 'github-copilot';
+export const CLAUDE_CODE_CHAT_PARTICIPANT_ID = 'claude-code';
 
 export enum TelemetryEventType {
   InlineCompletionRequest = 'inline-completion-request',

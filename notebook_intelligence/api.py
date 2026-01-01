@@ -12,6 +12,7 @@ from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.ruleset import RuleContext
+from notebook_intelligence.util import ThreadSafeWebSocketConnector
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class BackendMessageType(str, Enum):
     RunUICommand = 'run-ui-command'
     GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
     MCPServerStatusChange = 'mcp-server-status-change'
+    ClaudeCodeStatusChange = 'claude-code-status-change'
 
 class ResponseStreamDataType(str, Enum):
     LLMRaw = 'llm-raw'
@@ -42,6 +44,7 @@ class ResponseStreamDataType(str, Enum):
     Anchor = 'anchor'
     Progress = 'progress'
     Confirmation = 'confirmation'
+    AskUserQuestion = 'ask-user-question'
 
     def __str__(self) -> str:
         return self.value
@@ -64,6 +67,10 @@ class MCPServerStatus(str, Enum):
     UpdatedToolList = 'updated-tool-list'
     UpdatingPromptList = 'updating-prompt-list'
     UpdatedPromptList = 'updated-prompt-list'
+
+class ClaudeToolType(str, Enum):
+  ClaudeCodeTools = 'claude-code:built-in-tools'
+  JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
 
 class Signal:
     def __init__(self):
@@ -193,6 +200,20 @@ class ConfirmationData(ResponseStreamData):
     @property
     def data_type(self) -> ResponseStreamDataType:
         return ResponseStreamDataType.Confirmation
+
+@dataclass
+class AskUserQuestionData(ResponseStreamData):
+    identifier: dict = None
+    title: str = ''
+    message: str = ''
+    questions: list[dict]= None
+    submitLabel: str = 'Submit'
+    cancelLabel: str = 'Cancel'
+
+    @property
+    def data_type(self) -> ResponseStreamDataType:
+        return ResponseStreamDataType.AskUserQuestion
+
 
 class ContextRequestType(Enum):
     InlineCompletion = 'inline-completion'
@@ -864,6 +885,11 @@ class Host:
     def get_rule_manager(self):
         """Get the rule manager instance if available."""
         return NotImplemented
+
+    @property
+    def websocket_connector(self) -> ThreadSafeWebSocketConnector:
+        return NotImplemented
+    
 
 class NotebookIntelligenceExtension:
     @property

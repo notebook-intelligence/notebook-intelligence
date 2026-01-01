@@ -4,6 +4,27 @@ Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framewor
 
 ## Feature Highlights
 
+### Claude Mode
+
+Notebook Intelligence provides a dedicated mode for [Claude Code](https://code.claude.com/) integration. In **Claude mode**, NBI uses Claude Code for AI Agent Chat UI and Claude models for inline chat (in editors) and auto-complete suggestions.
+
+This integration brings the AI tools and features supported by Claude Code such as built-in tools, skills, MCP servers, custom commands and many more to JupyterLab.
+
+<img src="media/claude-chat.png" alt="Claude mode" width=500 />
+
+#### Claude Configuration
+
+You can configure the Claude settings in the NBI Settings dialog. You can access this dialog by using the gear icon in the NBI Chat UI or from JupyterLab Settings menu -> Notebook Intelligence Settings. Toggle the `Enable Claude mode` option to enable Claude mode. The other options are as follows:
+
+- **Chat model**: Select the Claude model to use for Agent Chat UI and inline chat.
+- **Auto-complete model**: Select the Claude model to use for auto-complete suggestions.
+- **Chat Agent setting sources**: Select the setting sources to use for Claude Code. You can choose to use user settings, project settings or both. These settings are the standard Claude Code settings such as tools, skills, MCP servers, custom commands and many more that are saved in the user's home directory and project directory. See [Claude Code documentation](https://code.claude.com/docs/en/settings) for more details.
+- **Chat Agent tools**: Select the tools to activate in the Agent Chat UI. `Claude Code tools` are always activated. `Jupyter UI tools` are the tools that are provided by NBI to interact with JupyterLab UI (authoring notebooks, running cells, etc.).
+- **API key**: Enter your Claude API key.
+- **Base URL**: Enter your Claude base URL.
+
+<img src="media/claude-settings.png" alt="Claude settings" width=700 />
+
 ### Agent Mode
 
 In Agent Mode, built-in AI agent creates, edits and executes notebooks for you interactively. It can detect issues in the cells and fix for you.
