@@ -28,6 +28,9 @@ CLAUDE_DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 CLAUDE_DEFAULT_INLINE_COMPLETION_MODEL = "claude-sonnet-4-5"
 CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
 
+JUPYTER_UI_TOOLS_SYSTEM_PROMPT = """You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server. Tools in 'jui' MCP server, directly interact with the JupyterLab UI, accessing notebooks and files in the UI. When interacting with JupyterLab UI, use relative file paths for file paths. If you create a notebook or run it, save it after creating or running it.
+"""
+
 class ClaudeAgentEventType(str, Enum):
     GetServerInfo = 'get-server-info'
     Query = 'query'
@@ -863,7 +866,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
 Assume Python if the language is not specified.
 JupyterLab is launched from a working directory and it can only access files in this directory and its subdirectories. Follow the same rule for file system access. Working directory for current session is '{get_jupyter_root_dir()}'.
 If messages contain relative file paths, assume they are relative to the working directory.
-{"You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server. When interacting with JupyterLab UI, use relative file paths for file paths." if jupyter_ui_tools_enabled else ""}
+If you need to install a Python package within a notebook cell code, use %pip install <package_name> instead of !pip install <package_name>.
+{JUPYTER_UI_TOOLS_SYSTEM_PROMPT if jupyter_ui_tools_enabled else ""}
 """
 
     def clear_chat_history(self):
