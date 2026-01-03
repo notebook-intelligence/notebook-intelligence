@@ -47,6 +47,7 @@ CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_
 CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "3"))
 
 _current_response = None
+_current_claude_client = None
 
 def set_current_response(response: ChatResponse):
     global _current_response
@@ -55,6 +56,14 @@ def set_current_response(response: ChatResponse):
 def get_current_response() -> ChatResponse:
     global _current_response
     return _current_response
+
+def set_current_claude_client(client: ClaudeSDKClient):
+    global _current_claude_client
+    _current_claude_client = client
+
+def get_current_claude_client() -> ClaudeSDKClient:
+    global _current_claude_client
+    return _current_claude_client
 
 def tool_text_response(text: Any) -> dict[str, Any]:
     return {
@@ -277,6 +286,7 @@ class ClaudeCodeClient():
         try:
             async with await self._get_client() as client:
                 self._set_status(ClaudeAgentClientStatus.Connected)
+                set_current_claude_client(client)
 
                 while True:
                     event = self._client_queue.get(block=True)
@@ -299,7 +309,18 @@ class ClaudeCodeClient():
                                 query_lines = query_lines[-1:]
                             client_query = "\n".join([line.strip() for line in query_lines])
 
-                            if not request.cancel_token.is_cancel_requested:
+                            already_handled = False
+
+                            if client_query.startswith('/enter-plan-mode'):
+                                await client.set_permission_mode("plan")
+                                response.stream(MarkdownData("&#x2713; Entered plan mode..."))
+                                already_handled = True
+                            elif client_query.startswith('/exit-plan-mode'):
+                                await client.set_permission_mode("allowEdits")
+                                response.stream(MarkdownData("&#x2713; Exit plan mode..."))
+                                already_handled = True
+
+                            if not already_handled and not request.cancel_token.is_cancel_requested:
                                 await client.query(client_query)
                                 async for message in client.receive_response():
                                     if request.cancel_token.is_cancel_requested:
@@ -642,7 +663,41 @@ async def custom_permission_handler(
     response = get_current_response()
     callback_id = str(uuid.uuid4())
 
-    if tool_name == "AskUserQuestion":
+    if tool_name == "EnterPlanMode":
+        response.stream(ConfirmationData(
+            title="Enter Plan Mode",
+            message="Claude wants to enter plan mode to explore and design an implementation approach. In plan mode, Claude will explore the codebase thoroughly, identify existing patterns, design an implementation strategy, and present a plan for your approval. No code changes will be made until you approve the plan.",
+            confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
+            cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
+            confirmLabel="Yes, enter plan mode",
+            cancelLabel="No, start implementing now",
+        ))
+        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+        if user_input['confirmed'] == True:
+            response.stream(MarkdownData(f"&#x2713; Entered plan mode..."))
+            return PermissionResultAllow()
+        else:
+            return PermissionResultDeny(message="Skipping plan mode...")
+    elif tool_name == "ExitPlanMode":
+        plan = input_data.get('plan')
+        if plan is not None:
+            response.stream(MarkdownData(plan))
+        else:
+            log.error(f"No plan provided in ExitPlanMode tool call")
+        response.stream(ConfirmationData(
+            message="Do you want to confirm the plan above?",
+            confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
+            cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
+            confirmLabel="Yes, approve plan",
+            cancelLabel="No, cancel plan",
+        ))
+        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+        if user_input['confirmed'] == True:
+            await get_current_claude_client().set_permission_mode("acceptEdits")
+            return PermissionResultAllow(updated_input={"message": "Plan approved", "approved": True})
+        else:
+            return PermissionResultDeny(message="User did not confirm the plan", interrupt=True)
+    elif tool_name == "AskUserQuestion":
         response.stream(AskUserQuestionData(
             identifier={"id": response.message_id, "callback_id": callback_id},
             questions=input_data['questions']
@@ -672,7 +727,7 @@ async def custom_permission_handler(
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
         log.debug(f"Allowing tool {tool_name} with input {input_data}")
-        return PermissionResultAllow(input_data)
+        return PermissionResultAllow()
 
 class ClaudeCodeChatParticipant(BaseChatParticipant):
     def __init__(self, host: Host):

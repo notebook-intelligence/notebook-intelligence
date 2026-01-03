@@ -1222,6 +1222,8 @@ function SidebarComponent(props: any) {
           prefixes.push(`/${command}`);
         }
       }
+      prefixes.push('/enter-plan-mode');
+      prefixes.push('/exit-plan-mode');
     } else {
       if (chatMode === 'ask') {
         const chatParticipants = NBIAPI.config.chatParticipants;
