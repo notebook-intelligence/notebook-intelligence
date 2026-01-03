@@ -714,6 +714,20 @@ async def custom_permission_handler(
                 "questions": input_data['questions'],
                 "answers": answers
             })
+    elif tool_name == "Bash":
+        response.stream(MarkdownData(f"&#x2713; **{input_data.get('description', '')}**\n```shell\n{input_data.get('command', '')}\n```"))
+        response.stream(ConfirmationData(
+            message=f"Approve Bash tool to execute the command above?",
+            confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
+            cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
+        ))
+        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+        if user_input['confirmed'] == False:
+            response.finish()
+            return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
+
+        log.debug(f"Allowing tool {tool_name} with input {input_data}")
+        return PermissionResultAllow()
     else:
         response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
         response.stream(ConfirmationData(
