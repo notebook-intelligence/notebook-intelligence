@@ -316,11 +316,11 @@ class ClaudeCodeClient():
 
                             if client_query.startswith('/enter-plan-mode'):
                                 await client.set_permission_mode("plan")
-                                response.stream(MarkdownData("&#x2713; Entered plan mode..."))
+                                response.stream(MarkdownData("&#x2713; Entered plan mode"))
                                 already_handled = True
                             elif client_query.startswith('/exit-plan-mode'):
-                                await client.set_permission_mode("allowEdits")
-                                response.stream(MarkdownData("&#x2713; Exit plan mode..."))
+                                await client.set_permission_mode("default")
+                                response.stream(MarkdownData("&#x2713; Exit plan mode"))
                                 already_handled = True
 
                             if not already_handled and not request.cancel_token.is_cancel_requested:
@@ -677,7 +677,7 @@ async def custom_permission_handler(
         ))
         user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
         if user_input['confirmed'] == True:
-            response.stream(MarkdownData(f"&#x2713; Entered plan mode..."))
+            response.stream(MarkdownData(f"&#x2713; Entered plan mode"))
             return PermissionResultAllow()
         else:
             return PermissionResultDeny(message="Skipping plan mode...")
@@ -692,11 +692,11 @@ async def custom_permission_handler(
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Yes, approve plan",
-            cancelLabel="No, cancel plan",
+            cancelLabel="No, continue planning",
         ))
         user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
         if user_input['confirmed'] == True:
-            await get_current_claude_client().set_permission_mode("acceptEdits")
+            await get_current_claude_client().set_permission_mode("default")
             return PermissionResultAllow(updated_input={"message": "Plan approved", "approved": True})
         else:
             return PermissionResultDeny(message="User did not confirm the plan", interrupt=True)
