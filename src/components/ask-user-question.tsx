@@ -52,7 +52,7 @@ export function AskUserQuestion(props: any) {
             <div className="ask-user-question-options">
               {question.options.map((option: any) => (
                 <div className="ask-user-question-option" key={option.label}>
-                  <div>
+                  <div className="ask-user-question-option-input-container">
                     <input
                       id={option.label}
                       type="checkbox"
@@ -63,10 +63,17 @@ export function AskUserQuestion(props: any) {
                       }
                       onChange={() => onOptionSelected(question, option)}
                     />
-                    <label htmlFor={option.label}>{option.label}</label>
-                  </div>
-                  <div className="ask-user-question-option-description">
-                    {option.description}
+                    <label
+                      htmlFor={option.label}
+                      className="ask-user-question-option-label-container"
+                    >
+                      <div className="ask-user-question-option-label">
+                        {option.label}
+                      </div>
+                      <div className="ask-user-question-option-description">
+                        {option.description}
+                      </div>
+                    </label>
                   </div>
                 </div>
               ))}
