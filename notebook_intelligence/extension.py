@@ -619,8 +619,8 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             chat_history = self.chat_history.get_history(chatId)
             chat_history_initial_size = len(chat_history)
 
-            current_directory = data.get('currentDirectory', '')
-            if (is_claude_code_mode or chat_mode.id == 'agent') and current_directory != '':
+            current_directory = data.get('currentDirectory')
+            if (is_claude_code_mode or chat_mode.id == 'agent') and current_directory is not None:
                 current_directory_file_msg = f"Additional context: Current directory open in Jupyter is: '{current_directory}'"
                 if filename != '':
                     current_directory_file_msg += f" and current file is: '{filename}'"
@@ -661,7 +661,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             )
 
             # last prompt is added later
-            request_chat_history = chat_history[chat_history_initial_size:-1] if not is_claude_code_mode else chat_history[:-1]
+            request_chat_history = chat_history[chat_history_initial_size:-1] if is_claude_code_mode else chat_history[:-1]
             thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter),))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
