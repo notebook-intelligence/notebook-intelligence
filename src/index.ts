@@ -41,7 +41,7 @@ import { LabIcon } from '@jupyterlab/ui-components';
 import { Menu, Panel, Widget } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { IStatusBar } from '@jupyterlab/statusbar';
-
+import stripAnsi from 'strip-ansi';
 import {
   ChatSidebar,
   FormInputDialogBody,
@@ -66,6 +66,7 @@ import {
 import sparklesSvgstr from '../style/icons/sparkles.svg';
 import copilotSvgstr from '../style/icons/copilot.svg';
 import sparklesWarningSvgstr from '../style/icons/sparkles-warning.svg';
+import claudeSvgstr from '../style/icons/claude.svg';
 
 import {
   applyCodeToSelectionInEditor,
@@ -145,6 +146,11 @@ const githubCopilotIcon = new LabIcon({
 const sparkleIcon = new LabIcon({
   name: 'notebook-intelligence:sparkles-icon',
   svgstr: sparklesSvgstr
+});
+
+const claudeIcon = new LabIcon({
+  name: 'notebook-intelligence:claude-icon',
+  svgstr: claudeSvgstr
 });
 
 const sparkleWarningIcon = new LabIcon({
@@ -485,9 +491,11 @@ class NBIInlineCompletionProvider
   }
 
   get icon(): LabIcon.ILabIcon {
-    return NBIAPI.config.usingGitHubCopilotModel
-      ? githubCopilotIcon
-      : sparkleIcon;
+    return NBIAPI.config.isInClaudeCodeMode
+      ? claudeIcon
+      : NBIAPI.config.usingGitHubCopilotModel
+        ? githubCopilotIcon
+        : sparkleIcon;
   }
 
   private _lastRequestInfo: {
@@ -988,20 +996,38 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
         const session: ITerminalConnection = terminal?.content?.session;
 
-        session.messageReceived.connect((sender, message) => {
-          console.log('Message received in Jupyter terminal:', message);
-        });
+        if (!session) {
+          return 'Failed to execute command in Jupyter terminal';
+        }
 
-        if (session) {
+        return new Promise<string>((resolve, reject) => {
+          let lastMessageReceivedTime = Date.now();
+          let lastMessageCheckInterval: NodeJS.Timeout | null = null;
+          const messageCheckTimeout = 5000;
+          const messageCheckInterval = 1000;
+          let output = '';
+          session.messageReceived.connect((sender, message) => {
+            const content = stripAnsi(message.content.join(''));
+            output += content;
+            lastMessageReceivedTime = Date.now();
+          });
+
           session.send({
             type: 'stdin',
             content: [command + '\n'] // Add newline to execute the command
           });
 
-          return 'Command executed in Jupyter terminal';
-        } else {
-          return 'Failed to execute command in Jupyter terminal';
-        }
+          // wait for the messageCheckInterval and if no message received, return the output.
+          // otherwise wait for the next message.
+          lastMessageCheckInterval = setInterval(() => {
+            if (Date.now() - lastMessageReceivedTime > messageCheckTimeout) {
+              clearInterval(lastMessageCheckInterval);
+              resolve(
+                `Command executed in Jupyter terminal, output: ${output}`
+              );
+            }
+          }, messageCheckInterval);
+        });
       }
     });
 

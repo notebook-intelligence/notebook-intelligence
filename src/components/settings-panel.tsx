@@ -6,11 +6,11 @@ import { VscWarning } from 'react-icons/vsc';
 import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
+import claudeSvgStr from '../../style/icons/claude.svg';
 import { ClaudeModelType, ClaudeToolType, NBIAPI } from '../api';
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
 import { mcpServerSettingsToEnabledState } from './mcp-util';
-import claudeSvg from '../../style/claude.svg';
 
 const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
 const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
@@ -103,7 +103,7 @@ function SettingsPanelTabsComponent(props: any) {
       >
         <span
           className="claude-icon"
-          dangerouslySetInnerHTML={{ __html: claudeSvg }}
+          dangerouslySetInnerHTML={{ __html: claudeSvgStr }}
         ></span>
         Claude
       </div>
