@@ -15,7 +15,7 @@ from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, C
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 import base64
 import logging
-from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
+from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, ResultMessage, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 from anthropic.types.text_block import TextBlock as AnthropicTextBlock
 
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, extract_llm_generated_code, get_jupyter_root_dir
@@ -340,6 +340,10 @@ class ClaudeCodeClient():
                                         elif isinstance(message.content, TextBlock):
                                             content = message.content.text
                                             content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
+                                            response.stream(MarkdownData(content))
+                                    elif isinstance(message, ResultMessage):
+                                        if isinstance(message.result, str):
+                                            content = message.result
                                             response.stream(MarkdownData(content))
                                     else:
                                         pass

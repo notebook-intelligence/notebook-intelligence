@@ -55,7 +55,7 @@ import {
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
 import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
-import claudeSvg from '../style/claude.svg';
+import claudeSvgStr from '../style/icons/claude.svg';
 import { AskUserQuestion } from './components/ask-user-question';
 
 export enum RunChatCompletionType {
@@ -1745,6 +1745,7 @@ function SidebarComponent(props: any) {
       }
       const messageId = UUID.uuid4();
       request.messageId = messageId;
+      request.content = message;
       const newList = [
         ...chatMessages,
         {
@@ -1775,17 +1776,28 @@ function SidebarComponent(props: any) {
               return;
             }
 
-            const responseMessage =
-              response.data['choices']?.[0]?.['delta']?.['content'];
-            if (!responseMessage) {
-              return;
+            if (delta['nbiContent']) {
+              const nbiContent = delta['nbiContent'];
+              contents.push({
+                id: UUID.uuid4(),
+                type: nbiContent.type,
+                content: nbiContent.content,
+                contentDetail: nbiContent.detail,
+                created: new Date(response.created)
+              });
+            } else {
+              const responseMessage =
+                response.data['choices']?.[0]?.['delta']?.['content'];
+              if (!responseMessage) {
+                return;
+              }
+              contents.push({
+                id: response.id,
+                type: ResponseStreamDataType.MarkdownPart,
+                content: responseMessage,
+                created: new Date(response.created)
+              });
             }
-            contents.push({
-              id: response.id,
-              type: ResponseStreamDataType.MarkdownPart,
-              content: responseMessage,
-              created: new Date(response.created)
-            });
           } else if (response.type === BackendMessageType.StreamEnd) {
             setCopilotRequestInProgress(false);
           }
@@ -2063,7 +2075,7 @@ function SidebarComponent(props: any) {
                 <span
                   title="Claude mode"
                   className="claude-icon"
-                  dangerouslySetInnerHTML={{ __html: claudeSvg }}
+                  dangerouslySetInnerHTML={{ __html: claudeSvgStr }}
                 ></span>
               )}
             </div>

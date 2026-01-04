@@ -66,6 +66,7 @@ import {
 import sparklesSvgstr from '../style/icons/sparkles.svg';
 import copilotSvgstr from '../style/icons/copilot.svg';
 import sparklesWarningSvgstr from '../style/icons/sparkles-warning.svg';
+import claudeSvgstr from '../style/icons/claude.svg';
 
 import {
   applyCodeToSelectionInEditor,
@@ -145,6 +146,11 @@ const githubCopilotIcon = new LabIcon({
 const sparkleIcon = new LabIcon({
   name: 'notebook-intelligence:sparkles-icon',
   svgstr: sparklesSvgstr
+});
+
+const claudeIcon = new LabIcon({
+  name: 'notebook-intelligence:claude-icon',
+  svgstr: claudeSvgstr
 });
 
 const sparkleWarningIcon = new LabIcon({
@@ -485,9 +491,11 @@ class NBIInlineCompletionProvider
   }
 
   get icon(): LabIcon.ILabIcon {
-    return NBIAPI.config.usingGitHubCopilotModel
-      ? githubCopilotIcon
-      : sparkleIcon;
+    return NBIAPI.config.isInClaudeCodeMode
+      ? claudeIcon
+      : NBIAPI.config.usingGitHubCopilotModel
+        ? githubCopilotIcon
+        : sparkleIcon;
   }
 
   private _lastRequestInfo: {
