@@ -341,10 +341,6 @@ class ClaudeCodeClient():
                                             content = message.content.text
                                             content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
                                             response.stream(MarkdownData(content))
-                                    elif isinstance(message, ResultMessage):
-                                        if isinstance(message.result, str):
-                                            content = message.result
-                                            response.stream(MarkdownData(content))
                                     else:
                                         pass
                         except Exception as e:
@@ -626,7 +622,7 @@ async def save_notebook(args) -> str:
 
 @tool("run-command-in-jupyter-terminal", "Runs a shell command in a Jupyter terminal within working_directory.", {"command": str, "working_directory": str})
 async def run_command_in_jupyter_terminal(args) -> str:
-    """Run a shell command in a Jupyter terminal within working_directory. This can be used to run long running processes like web applications.
+    """Run a shell command in a Jupyter terminal within working_directory. This can be used to run long running processes like web applications. Returns the output of the command.
     
     Args:
         command: Shell command to execute in the terminal

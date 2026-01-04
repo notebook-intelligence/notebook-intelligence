@@ -41,7 +41,7 @@ import { LabIcon } from '@jupyterlab/ui-components';
 import { Menu, Panel, Widget } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { IStatusBar } from '@jupyterlab/statusbar';
-
+import stripAnsi from 'strip-ansi';
 import {
   ChatSidebar,
   FormInputDialogBody,
@@ -996,20 +996,38 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
         const session: ITerminalConnection = terminal?.content?.session;
 
-        session.messageReceived.connect((sender, message) => {
-          console.log('Message received in Jupyter terminal:', message);
-        });
+        if (!session) {
+          return 'Failed to execute command in Jupyter terminal';
+        }
 
-        if (session) {
+        return new Promise<string>((resolve, reject) => {
+          let lastMessageReceivedTime = Date.now();
+          let lastMessageCheckInterval: NodeJS.Timeout | null = null;
+          const messageCheckTimeout = 5000;
+          const messageCheckInterval = 1000;
+          let output = '';
+          session.messageReceived.connect((sender, message) => {
+            const content = stripAnsi(message.content.join(''));
+            output += content;
+            lastMessageReceivedTime = Date.now();
+          });
+
           session.send({
             type: 'stdin',
             content: [command + '\n'] // Add newline to execute the command
           });
 
-          return 'Command executed in Jupyter terminal';
-        } else {
-          return 'Failed to execute command in Jupyter terminal';
-        }
+          // wait for the messageCheckInterval and if no message received, return the output.
+          // otherwise wait for the next message.
+          lastMessageCheckInterval = setInterval(() => {
+            if (Date.now() - lastMessageReceivedTime > messageCheckTimeout) {
+              clearInterval(lastMessageCheckInterval);
+              resolve(
+                `Command executed in Jupyter terminal, output: ${output}`
+              );
+            }
+          }, messageCheckInterval);
+        });
       }
     });
 

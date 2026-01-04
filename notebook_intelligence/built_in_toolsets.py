@@ -557,7 +557,7 @@ async def execute_command(command: str, working_directory: str = ".", **args) ->
 
 @nbapi.tool
 async def run_command_in_jupyter_terminal(command: str, working_directory: str = ".", **args) -> str:
-    """Run a shell command in a Jupyter terminal within working_directory. This can be used to run long running processes like web applications.
+    """Run a shell command in a Jupyter terminal within working_directory. This can be used to run long running processes like web applications. Returns the output of the command.
     
     Args:
         command: Shell command to execute in the terminal
