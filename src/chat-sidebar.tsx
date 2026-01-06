@@ -1514,10 +1514,15 @@ function SidebarComponent(props: any) {
             });
           } else if (response.type === BackendMessageType.RunUICommand) {
             const messageId = response.id;
-            const result = await app.commands.execute(
-              response.data.commandId,
-              response.data.args
-            );
+            let result = 'void';
+            try {
+              result = await app.commands.execute(
+                response.data.commandId,
+                response.data.args
+              );
+            } catch (error) {
+              result = `Error executing command: ${error}`;
+            }
 
             const data = {
               callback_id: response.data.callback_id,
