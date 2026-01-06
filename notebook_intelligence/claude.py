@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Any
 import uuid
-
+from anyio.abc import Process
 from anthropic import Anthropic
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
@@ -27,6 +27,7 @@ CLAUDE_CODE_ICON_URL = f"data:image/svg+xml;base64,{base64.b64encode(CLAUDE_CODE
 CLAUDE_DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 CLAUDE_DEFAULT_INLINE_COMPLETION_MODEL = "claude-sonnet-4-5"
 CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
+CLAUDE_CODE_MAX_BUFFER_SIZE = 20 * 1024 * 1024 # 20MB
 
 JUPYTER_UI_TOOLS_SYSTEM_PROMPT = """You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server. Tools in 'jui' MCP server, directly interact with the JupyterLab UI, accessing notebooks and files in the UI. When interacting with JupyterLab UI, use relative file paths for file paths. If you create a notebook or run it, save it after creating or running it.
 """
@@ -46,11 +47,21 @@ class ClaudeAgentClientStatus(str, Enum):
     UpdatingServerInfo = 'updating-server-info'
     UpdatedServerInfo = 'updated-server-info'
 
+CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME", "0.5"))
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "1800"))
 CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "3"))
 
+_current_request = None
 _current_response = None
 _current_claude_client = None
+
+def set_current_request(request: ChatRequest):
+    global _current_request
+    _current_request = request
+
+def get_current_request() -> ChatRequest:
+    global _current_request
+    return _current_request
 
 def set_current_response(response: ChatResponse):
     global _current_response
@@ -201,6 +212,8 @@ class ClaudeCodeClient():
         self._status = ClaudeAgentClientStatus.NotConnected
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
+        self._client_queue_lock = threading.Lock()
+        self._reconnect_required = False
         self.connect()
 
     @property
@@ -231,7 +244,8 @@ class ClaudeCodeClient():
             return
 
         self._set_status(ClaudeAgentClientStatus.Connecting)
-        
+
+        self._reconnect_required = False
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
         try:
@@ -249,15 +263,20 @@ class ClaudeCodeClient():
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def disconnect(self):
-        if not self.is_connected():
-            return
+        with self._client_queue_lock:
+            if not self.is_connected():
+                return
 
-        self._set_status(ClaudeAgentClientStatus.Disconnecting)
+            self._set_status(ClaudeAgentClientStatus.Disconnecting)
 
-        response = self._send_claude_agent_request(ClaudeAgentEventType.StopClient)
-        if not response["success"]:
-            log.error(f"Claude agent client failed to stop: {response['error']}")
+            response = self._send_claude_agent_request(ClaudeAgentEventType.StopClient)
+            if not response["success"]:
+                log.error(f"Claude agent client failed to stop: {response['error']}")
 
+            self._mark_as_disconnected()
+            self._server_info = None
+
+    def _mark_as_disconnected(self):
         self._set_status(ClaudeAgentClientStatus.NotConnected)
 
         self._client_queue = None
@@ -300,6 +319,7 @@ class ClaudeCodeClient():
                             request: ChatRequest = event["args"]["request"]
                             response: ChatResponse = event["args"]["response"]
 
+                            set_current_request(request)
                             set_current_response(response)
 
                             messages = request.chat_history
@@ -344,12 +364,17 @@ class ClaudeCodeClient():
                                     else:
                                         pass
                         except Exception as e:
-                            log.error(f"Error occurred while querying Claude agent: {str(e)}")
+                            log.error(f"Error communicating with Claude agent: {str(e)}")
+                            if not self._reconnect_required:
+                                response.stream(MarkdownData(f"Error communicating with Claude agent: {str(e)}"))
                         finally:
-                            self._client_thread_signal.emit({
-                                "id": event_id,
-                                "data": "query completed"
-                            })
+                            if not self._reconnect_required:
+                                self._client_thread_signal.emit({
+                                    "id": event_id,
+                                    "data": "query completed"
+                                })
+                            set_current_request(None)
+                            set_current_response(None)
                     elif event_type == ClaudeAgentEventType.GetServerInfo:
                         try:
                             server_info = await client.get_server_info()
@@ -408,6 +433,7 @@ class ClaudeCodeClient():
             "type": event_type,
             "args": event_args,
         }
+        set_current_request(None)
         self._client_queue.put(event)
 
         resp = {"data": None}
@@ -420,6 +446,24 @@ class ClaudeCodeClient():
         start_time = time.time()
 
         while True:
+            self._reconnect_required = False
+            nbi_request_obj = get_current_request()
+            if nbi_request_obj is not None and nbi_request_obj.cancel_token.is_cancel_requested:
+                try:
+                    process: Process = self._client._transport._process
+                    process.kill()
+
+                    self._reconnect_required = True
+                except Exception as e:
+                    log.error(f"Error occurred while setting current request and response to None: {str(e)}")
+                self._client_thread_signal.disconnect(_on_client_response)
+                if self._reconnect_required:
+                    self._mark_as_disconnected()
+                return {
+                    "data": None,
+                    "success": False,
+                    "error": "Cancel requested by user"
+                }
             if resp["data"] is not None:
                 self._client_thread_signal.disconnect(_on_client_response)
                 return {
@@ -434,9 +478,11 @@ class ClaudeCodeClient():
                     "success": False,
                     "error": f"Claude agent client response timeout"
                 }
-            time.sleep(0.1)
+            time.sleep(CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME)
 
     def update_server_info(self):
+        if self._reconnect_required:
+            self.connect()
         if not self.is_connected():
             return
         self._set_status(ClaudeAgentClientStatus.UpdatingServerInfo)
@@ -452,6 +498,8 @@ class ClaudeCodeClient():
         return self._server_info
 
     def query(self, request: ChatRequest, response: ChatResponse):
+        if self._reconnect_required:
+            self.connect()
         if not self.is_connected():
             return f"Claude agent is not connected"
 
@@ -467,6 +515,8 @@ class ClaudeCodeClient():
             return response["error"]
 
     def clear_chat_history(self):
+        if self._reconnect_required:
+            self.connect()
         if not self.is_connected():
             return
         response = self._send_claude_agent_request(ClaudeAgentEventType.ClearChatHistory)
@@ -858,6 +908,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             setting_sources=setting_sources,
             can_use_tool=custom_permission_handler,
             env=env,
+            max_buffer_size=CLAUDE_CODE_MAX_BUFFER_SIZE,
         )
         return client_options
 
