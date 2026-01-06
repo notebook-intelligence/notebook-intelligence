@@ -212,7 +212,6 @@ class ClaudeCodeClient():
         self._status = ClaudeAgentClientStatus.NotConnected
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
-        self._client_queue_lock = threading.Lock()
         self._reconnect_required = False
         self.connect()
 
@@ -263,18 +262,17 @@ class ClaudeCodeClient():
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def disconnect(self):
-        with self._client_queue_lock:
-            if not self.is_connected():
-                return
+        if not self.is_connected():
+            return
 
-            self._set_status(ClaudeAgentClientStatus.Disconnecting)
+        self._set_status(ClaudeAgentClientStatus.Disconnecting)
 
-            response = self._send_claude_agent_request(ClaudeAgentEventType.StopClient)
-            if not response["success"]:
-                log.error(f"Claude agent client failed to stop: {response['error']}")
+        response = self._send_claude_agent_request(ClaudeAgentEventType.StopClient)
+        if not response["success"]:
+            log.error(f"Claude agent client failed to stop: {response['error']}")
 
-            self._mark_as_disconnected()
-            self._server_info = None
+        self._mark_as_disconnected()
+        self._server_info = None
 
     def _mark_as_disconnected(self):
         self._set_status(ClaudeAgentClientStatus.NotConnected)
