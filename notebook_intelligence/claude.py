@@ -55,6 +55,9 @@ _current_request = None
 _current_response = None
 _current_claude_client = None
 
+_approved_tools_response_id: str = None
+_approved_tools_for_response: set[str] = set()
+
 def set_current_request(request: ChatRequest):
     global _current_request
     _current_request = request
@@ -709,6 +712,9 @@ async def custom_permission_handler(
     context: dict
 ):
     """Custom logic for tool permissions."""
+    global _approved_tools_response_id
+    global _approved_tools_for_response
+
     log.debug(f"Custom permission handler called for tool {tool_name} with input {input_data} and context {context}")
 
     response = get_current_response()
@@ -780,16 +786,26 @@ async def custom_permission_handler(
         log.debug(f"Allowing tool {tool_name} with input {input_data}")
         return PermissionResultAllow()
     else:
+        if _approved_tools_response_id != response.message_id:
+            _approved_tools_for_response.clear()
+
+        if tool_name in _approved_tools_for_response:
+            return PermissionResultAllow()
         response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
         response.stream(ConfirmationData(
             message=f"Are you sure you want to call this tool?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
+            confirmSessionArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed_for_session": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
         ))
         user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
-        if user_input['confirmed'] == False:
+        if user_input.get('confirmed', None) == False:
             response.finish()
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
+
+        if user_input.get('confirmed_for_session', None) == True:
+            _approved_tools_for_response.add(tool_name)
+            _approved_tools_response_id = response.message_id
 
         log.debug(f"Allowing tool {tool_name} with input {input_data}")
         return PermissionResultAllow()
@@ -886,7 +902,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             mcp_servers["jui"] = self._jupyter_ui_tools_mcp_server
         allowed_tools = []
         if jupyter_ui_tools_enabled:
-            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__delete-cell", "mcp__jui__insert-cell", "mcp__jui__run-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__run-command-in-jupyter-terminal", "mcp__jui__open-file-in-jupyter-ui"])
+            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__insert-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__open-file-in-jupyter-ui"])
         setting_sources = claude_settings.get('setting_sources')
         chat_model_id = claude_settings.get('chat_model', '').strip()
         if chat_model_id == "":
