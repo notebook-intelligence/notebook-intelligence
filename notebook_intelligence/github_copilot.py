@@ -135,17 +135,14 @@ def write_github_access_token(access_token: str) -> bool:
     return False
 
 def delete_stored_github_access_token() -> bool:
-    try:
-        if os.path.exists(user_data_file):
-            with open(user_data_file, 'r') as file:
-                user_data = json.load(file)
-        else:
-            user_data = {}
+    if not os.path.exists(user_data_file):
+        return False
 
-        try:
-            del user_data['github_access_token']
-        except:
-            pass
+    try:
+        user_data = {}
+        with open(user_data_file, 'r') as file:
+            user_data = json.load(file)
+        user_data.pop('github_access_token', None)
 
         with open(user_data_file, 'w') as file:
             json.dump(user_data, file, indent=4)

@@ -178,5 +178,5 @@ class OllamaLLMProvider(LLMProvider):
                     )
                 except Exception as e:
                     log.error(f"Error getting Ollama model info {model}: {e}")
-        except Exception as e:          
-            log.error(f"Error updating supported Ollama models: {e}")
+        except Exception as e:
+            log.warning(f"Failed to update supported Ollama models: {e}")
