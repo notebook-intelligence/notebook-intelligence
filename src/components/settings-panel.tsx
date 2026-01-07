@@ -877,7 +877,7 @@ function SettingsPanelComponentClaude(props: any) {
   ]);
 
   return (
-    <div className="config-dialog">
+    <div className="config-dialog claude-mode-config-dialog">
       <div className="config-dialog-body">
         <div className="model-config-section">
           <div className="model-config-section-header">Enable Claude mode</div>
