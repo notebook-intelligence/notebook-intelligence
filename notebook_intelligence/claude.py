@@ -29,7 +29,7 @@ CLAUDE_DEFAULT_INLINE_COMPLETION_MODEL = "claude-sonnet-4-5"
 CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
 CLAUDE_CODE_MAX_BUFFER_SIZE = 20 * 1024 * 1024 # 20MB
 
-JUPYTER_UI_TOOLS_SYSTEM_PROMPT = """You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'jui' MCP server. Tools in 'jui' MCP server, directly interact with the JupyterLab UI, accessing notebooks and files in the UI. When interacting with JupyterLab UI, use relative file paths for file paths. If you create a notebook or run it, save it after creating or running it.
+JUPYTER_UI_TOOLS_SYSTEM_PROMPT = """You can interact with the JupyterLab UI (notebook / file editor, terminal, etc.) using the tools provided in 'nbi' MCP server. Tools in 'nbi' MCP server, directly interact with the JupyterLab UI, accessing notebooks and files in the UI. When interacting with JupyterLab UI, use relative file paths for file paths. If you create a notebook or run it, save it after creating or running it.
 """
 
 class ClaudeAgentEventType(str, Enum):
@@ -892,17 +892,17 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
     def _create_client_options(self) -> ClaudeAgentOptions:
         claude_settings = self._host.nbi_config.claude_settings
         self._jupyter_ui_tools_mcp_server = create_sdk_mcp_server(
-            name="jui",
+            name="nbi",
             version="1.0.0",
             tools=[create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal, open_file_in_jupyter_ui]
         )
         mcp_servers = {}
         jupyter_ui_tools_enabled = ClaudeToolType.JupyterUITools in claude_settings.get('tools', [])
         if jupyter_ui_tools_enabled:
-            mcp_servers["jui"] = self._jupyter_ui_tools_mcp_server
+            mcp_servers["nbi"] = self._jupyter_ui_tools_mcp_server
         allowed_tools = []
         if jupyter_ui_tools_enabled:
-            allowed_tools.extend(["mcp__jui__create-new-notebook", "mcp__jui__add-markdown-cell", "mcp__jui__add-code-cell", "mcp__jui__get-number-of-cells", "mcp__jui__get-cell-type-and-source", "mcp__jui__get-cell-output", "mcp__jui__set-cell-type-and-source", "mcp__jui__insert-cell", "mcp__jui__save-notebook", "mcp__jui__rename-notebook", "mcp__jui__open-file-in-jupyter-ui"])
+            allowed_tools.extend(["mcp__nbi__create-new-notebook", "mcp__nbi__add-markdown-cell", "mcp__nbi__add-code-cell", "mcp__nbi__get-number-of-cells", "mcp__nbi__get-cell-type-and-source", "mcp__nbi__get-cell-output", "mcp__nbi__set-cell-type-and-source", "mcp__nbi__insert-cell", "mcp__nbi__save-notebook", "mcp__nbi__rename-notebook", "mcp__nbi__open-file-in-jupyter-ui"])
         setting_sources = claude_settings.get('setting_sources')
         chat_model_id = claude_settings.get('chat_model', '').strip()
         if chat_model_id == "":
