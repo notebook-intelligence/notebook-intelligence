@@ -13,7 +13,8 @@ import {
   ITelemetryEvent,
   IToolSelections,
   RequestDataType,
-  BackendMessageType
+  BackendMessageType,
+  AssistantMode
 } from './tokens';
 
 export enum GitHubCopilotLoginStatus {
@@ -497,6 +498,15 @@ export class NBIAPI {
   }
 
   static async emitTelemetryEvent(event: ITelemetryEvent): Promise<void> {
+    const assistantMode = this.config.isInClaudeCodeMode
+      ? AssistantMode.Claude
+      : AssistantMode.Default;
+
+    event.data = {
+      ...(event.data || {}),
+      assistantMode
+    };
+
     return new Promise<void>((resolve, reject) => {
       requestAPI<any>('emit-telemetry-event', {
         method: 'POST',

@@ -112,6 +112,11 @@ export enum BuiltinToolsetType {
 export const GITHUB_COPILOT_PROVIDER_ID = 'github-copilot';
 export const CLAUDE_CODE_CHAT_PARTICIPANT_ID = 'claude-code';
 
+export enum AssistantMode {
+  Default = 'default',
+  Claude = 'claude'
+}
+
 export enum TelemetryEventType {
   InlineCompletionRequest = 'inline-completion-request',
   ExplainThisRequest = 'explain-this-request',
