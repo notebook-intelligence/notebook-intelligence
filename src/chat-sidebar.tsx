@@ -1937,7 +1937,7 @@ function SidebarComponent(props: any) {
           </button>
         </div>
       )}
-      {ghLoginRequired && (
+      {!NBIAPI.config.isInClaudeCodeMode && ghLoginRequired && (
         <div className="sidebar-login-info">
           <div>
             You are not logged in to GitHub Copilot. Please login now to
