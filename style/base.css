@@ -1044,3 +1044,7 @@ svg.access-token-warning {
 .ask-user-question-footer {
   padding: 0 0 5px 10px;
 }
+
+.claude-mode-config-dialog .form-field-description {
+  color: var(--jp-ui-font-color1);
+}
