@@ -193,8 +193,10 @@ class ConfirmationData(ResponseStreamData):
     title: str = ''
     message: str = ''
     confirmArgs: dict = None
+    confirmSessionArgs: dict = None
     cancelArgs: dict = None
     confirmLabel: str = None
+    confirmSessionLabel: str = None
     cancelLabel: str = None
 
     @property

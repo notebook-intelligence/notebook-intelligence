@@ -613,6 +613,22 @@ function ChatResponse(props: any) {
                       {item.content.confirmLabel}
                     </div>
                   </button>
+                  {item.content.confirmSessionArgs ? (
+                    <button
+                      className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+                      onClick={() => {
+                        markFormConfirmed(item.id);
+                        runCommand(
+                          'notebook-intelligence:chat-user-input',
+                          item.content.confirmSessionArgs
+                        );
+                      }}
+                    >
+                      <div className="jp-Dialog-buttonLabel">
+                        {item.content.confirmSessionLabel}
+                      </div>
+                    </button>
+                  ) : null}
                   <button
                     className="jp-Dialog-button jp-mod-reject jp-mod-styled"
                     onClick={() => {

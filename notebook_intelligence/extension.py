@@ -476,8 +476,10 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                                     "title": data.title,
                                     "message": data.message,
                                     "confirmArgs": data.confirmArgs if data.confirmArgs is not None else {},
+                                    "confirmSessionArgs": data.confirmSessionArgs,
                                     "cancelArgs": data.cancelArgs if data.cancelArgs is not None else {},
                                     "confirmLabel": data.confirmLabel if data.confirmLabel is not None else "Approve",
+                                    "confirmSessionLabel": data.confirmSessionLabel if data.confirmSessionLabel is not None else "Approve for this request",
                                     "cancelLabel": data.cancelLabel if data.cancelLabel is not None else "Cancel"
                                 }
                             },
