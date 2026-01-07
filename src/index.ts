@@ -1006,11 +1006,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           const messageCheckTimeout = 5000;
           const messageCheckInterval = 1000;
           let output = '';
-          session.messageReceived.connect((sender, message) => {
+          const messageReceivedHandler = (sender: any, message: any) => {
             const content = stripAnsi(message.content.join(''));
             output += content;
             lastMessageReceivedTime = Date.now();
-          });
+          };
+          session.messageReceived.connect(messageReceivedHandler);
 
           session.send({
             type: 'stdin',
@@ -1022,6 +1023,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           lastMessageCheckInterval = setInterval(() => {
             if (Date.now() - lastMessageReceivedTime > messageCheckTimeout) {
               clearInterval(lastMessageCheckInterval);
+              session.messageReceived.disconnect(messageReceivedHandler);
               resolve(
                 `Command executed in Jupyter terminal, output: ${output}`
               );
