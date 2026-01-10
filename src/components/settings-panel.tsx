@@ -974,6 +974,20 @@ function SettingsPanelComponentClaude(props: any) {
                     }
                   >
                     <option
+                      value={ClaudeModelType.None}
+                      selected={inlineCompletionModel === ClaudeModelType.None}
+                    >
+                      None
+                    </option>
+                    <option
+                      value={ClaudeModelType.Inherit}
+                      selected={
+                        inlineCompletionModel === ClaudeModelType.Inherit
+                      }
+                    >
+                      Inherit from general settings
+                    </option>
+                    <option
                       value={ClaudeModelType.Default}
                       selected={
                         inlineCompletionModel === ClaudeModelType.Default

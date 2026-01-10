@@ -30,6 +30,8 @@ export interface IDeviceVerificationInfo {
 }
 
 export enum ClaudeModelType {
+  None = 'none',
+  Inherit = 'inherit',
   Default = '',
   ClaudeOpus45 = 'claude-opus-4-5',
   ClaudeHaiku45 = 'claude-haiku-4-5'

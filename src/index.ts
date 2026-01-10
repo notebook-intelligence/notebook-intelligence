@@ -491,7 +491,11 @@ class NBIInlineCompletionProvider
   }
 
   get icon(): LabIcon.ILabIcon {
-    return NBIAPI.config.isInClaudeCodeMode
+    const isClaudeModel =
+      NBIAPI.config.isInClaudeCodeMode &&
+      NBIAPI.config.claudeSettings.inline_completion_model !== 'none' &&
+      NBIAPI.config.claudeSettings.inline_completion_model !== 'inherit';
+    return isClaudeModel
       ? claudeIcon
       : NBIAPI.config.usingGitHubCopilotModel
         ? githubCopilotIcon
