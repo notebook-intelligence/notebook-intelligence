@@ -150,7 +150,8 @@ function SettingsPanelComponentGeneral(props: any) {
         provider: inlineCompletionModelProvider,
         model: inlineCompletionModel,
         properties: inlineCompletionModelProperties
-      }
+      },
+      inline_completion_debouncer_delay: inlineCompletionDebouncerDelay
     };
 
     if (
@@ -188,6 +189,8 @@ function SettingsPanelComponentGeneral(props: any) {
   const [storeGitHubAccessToken, setStoreGitHubAccessToken] = useState(
     nbiConfig.storeGitHubAccessToken
   );
+  const [inlineCompletionDebouncerDelay, setInlineCompletionDebouncerDelay] =
+    useState(nbiConfig.inlineCompletionDebouncerDelay);
 
   const updateModelOptionsForProvider = (
     providerId: string,
@@ -278,7 +281,8 @@ function SettingsPanelComponentGeneral(props: any) {
     inlineCompletionModelProvider,
     inlineCompletionModel,
     inlineCompletionModelProperties,
-    storeGitHubAccessToken
+    storeGitHubAccessToken,
+    inlineCompletionDebouncerDelay
   ]);
 
   return (
@@ -534,6 +538,27 @@ function SettingsPanelComponentGeneral(props: any) {
                   )
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section-row" style={{ width: '50%' }}>
+          <div className="model-config-section-column">
+            <div className="form-field-row" style={{ paddingLeft: '10px' }}>
+              <div className="form-field-description">
+                Auto-complete debouncer delay (ms)
+              </div>
+              <input
+                name="inline-completion-debouncer-delay-input"
+                placeholder="Auto-complete debouncer delay (milliseconds)"
+                className="jp-mod-styled"
+                spellCheck={false}
+                value={inlineCompletionDebouncerDelay}
+                type="number"
+                onChange={event =>
+                  setInlineCompletionDebouncerDelay(Number(event.target.value))
+                }
+              />
             </div>
           </div>
         </div>

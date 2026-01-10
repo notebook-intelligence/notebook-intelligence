@@ -117,6 +117,10 @@ class NBIConfig:
         return self.get('store_github_access_token', False)
 
     @property
+    def inline_completion_debouncer_delay(self):
+        return self.get('inline_completion_debouncer_delay', 200)
+
+    @property
     def using_github_copilot_service(self) -> bool:
         return self.chat_model.get("provider") == 'github-copilot' or \
             self.inline_completion_model.get("provider") == 'github-copilot'

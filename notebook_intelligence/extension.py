@@ -95,6 +95,7 @@ class GetCapabilitiesHandler(APIHandler):
             "embedding_model": nbi_config.embedding_model,
             "chat_participants": [],
             "store_github_access_token": nbi_config.store_github_access_token,
+            "inline_completion_debouncer_delay": nbi_config.inline_completion_debouncer_delay,
             "tool_config": {
                 "builtinToolsets": allowed_builtin_toolsets,
                 "mcpServers": mcp_server_tools,
@@ -122,7 +123,7 @@ class ConfigHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "mcp_server_settings", "claude_settings"])
+        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "inline_completion_debouncer_delay", "mcp_server_settings", "claude_settings"])
         has_model_change = "chat_model" in data or "inline_completion_model" in data
         has_claude_settings_change = False
         for key in data:
