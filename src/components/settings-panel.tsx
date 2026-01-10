@@ -82,7 +82,15 @@ function SettingsPanelComponent(props: any) {
 
 function SettingsPanelTabsComponent(props: any) {
   const [activeTab, setActiveTab] = useState(props.activeTab);
-  const isInClaudeCodeMode = NBIAPI.config.isInClaudeCodeMode;
+  const [isInClaudeCodeMode, setIsInClaudeCodeMode] = useState(
+    NBIAPI.config.isInClaudeCodeMode
+  );
+
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      setIsInClaudeCodeMode(NBIAPI.config.isInClaudeCodeMode);
+    });
+  }, []);
 
   return (
     <div>
