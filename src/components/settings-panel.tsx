@@ -842,6 +842,9 @@ function SettingsPanelComponentClaude(props: any) {
       ClaudeToolType.JupyterUITools
     ]
   );
+  const [continueConversation, setContinueConversation] = useState(
+    nbiConfig.claudeSettings.continue_conversation ?? false
+  );
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
@@ -859,7 +862,8 @@ function SettingsPanelComponentClaude(props: any) {
         api_key: apiKey,
         base_url: baseUrl,
         setting_sources: settingSources,
-        tools: tools
+        tools: tools,
+        continue_conversation: continueConversation
       }
     });
   };
@@ -873,7 +877,8 @@ function SettingsPanelComponentClaude(props: any) {
     apiKey,
     baseUrl,
     settingSources,
-    tools
+    tools,
+    continueConversation
   ]);
 
   return (
@@ -1069,6 +1074,28 @@ function SettingsPanelComponentClaude(props: any) {
                             )
                           : [...tools, ClaudeToolType.JupyterUITools]
                       );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Conversation History
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Remember conversation history"
+                    checked={continueConversation}
+                    onClick={() => {
+                      setContinueConversation(!continueConversation);
                     }}
                   ></CheckBoxItem>
                 </div>

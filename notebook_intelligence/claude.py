@@ -205,9 +205,10 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
 
 
 class ClaudeCodeClient():
-    def __init__(self, websocket_connector: ThreadSafeWebSocketConnector, client_options: ClaudeAgentOptions):
+    def __init__(self, host: Host, client_options: ClaudeAgentOptions):
+        self._host = host
         self._client_options = client_options
-        self._websocket_connector = websocket_connector
+        self._websocket_connector = host.websocket_connector
         self._client = None
         self._client_queue = None
         self._client_thread_signal = None
@@ -216,6 +217,7 @@ class ClaudeCodeClient():
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
         self._reconnect_required = False
+        self._continue_conversation: bool | None = None
         self.connect()
 
     @property
@@ -369,11 +371,10 @@ class ClaudeCodeClient():
                             if not self._reconnect_required:
                                 response.stream(MarkdownData(f"Error communicating with Claude agent: {str(e)}"))
                         finally:
-                            if not self._reconnect_required:
-                                self._client_thread_signal.emit({
-                                    "id": event_id,
-                                    "data": "query completed"
-                                })
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": "query completed"
+                            })
                             set_current_request(None)
                             set_current_response(None)
                     elif event_type == ClaudeAgentEventType.GetServerInfo:
@@ -414,6 +415,10 @@ class ClaudeCodeClient():
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def _create_client(self) -> ClaudeSDKClient:
+        continue_conversation_cfg = self._host.nbi_config.claude_settings.get('continue_conversation', False)
+        self._client_options.continue_conversation = self._continue_conversation if self._continue_conversation is not None else continue_conversation_cfg
+        self._continue_conversation = None
+
         return ClaudeSDKClient(options=self._client_options)
 
     async def _get_client(self) -> ClaudeSDKClient:
@@ -455,6 +460,7 @@ class ClaudeCodeClient():
                     process.kill()
 
                     self._reconnect_required = True
+                    self._continue_conversation = True
                 except Exception as e:
                     log.error(f"Error occurred while setting current request and response to None: {str(e)}")
                 self._client_thread_signal.disconnect(_on_client_response)
@@ -521,6 +527,9 @@ class ClaudeCodeClient():
         if not self.is_connected():
             return
         response = self._send_claude_agent_request(ClaudeAgentEventType.ClearChatHistory)
+
+        self._continue_conversation = False
+
         if response["success"]:
             return response["data"]
         else:
@@ -816,7 +825,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         self._update_client_debounced_timer = None
         self._host = host
         self._client_options: ClaudeAgentOptions = self._create_client_options()
-        self._client = ClaudeCodeClient(host.websocket_connector, self._client_options)
+        self._client = ClaudeCodeClient(host, self._client_options)
 
     @property
     def id(self) -> str:
@@ -913,6 +922,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         if base_url != '':
             env['ANTHROPIC_BASE_URL'] = base_url
 
+        continue_conversation = claude_settings.get('continue_conversation', False)
+
         client_options = ClaudeAgentOptions(
             system_prompt=self._create_system_prompt(jupyter_ui_tools_enabled),
             cwd=get_jupyter_root_dir(),
@@ -923,6 +934,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             can_use_tool=custom_permission_handler,
             env=env,
             max_buffer_size=CLAUDE_CODE_MAX_BUFFER_SIZE,
+            continue_conversation=continue_conversation
         )
         return client_options
 
