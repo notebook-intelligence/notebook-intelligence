@@ -9,6 +9,7 @@ import threading
 import time
 from typing import Any
 import uuid
+import re
 from anyio.abc import Process
 from anthropic import Anthropic
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
@@ -18,7 +19,7 @@ import logging
 from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 from anthropic.types.text_block import TextBlock as AnthropicTextBlock
 
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, extract_llm_generated_code, get_jupyter_root_dir
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
 
@@ -184,30 +185,61 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
     def context_window(self) -> int:
         return self._context_window
 
+    def _extract_llm_generated_code(self, text: str) -> str:
+        tags = ["<CODE>", "</CODE>", "<PREFIX>", "</PREFIX>", "<SUFFIX>", "</SUFFIX>", "<CURSOR>", "</CURSOR>"]
+        for tag in tags:
+            text = text.replace(tag, "")
+        
+        # Find all code blocks (```...```)
+        # Pattern matches ```optional_language\n...content...```
+        pattern = r'```(?:\w+)?\n?(.*?)```'
+        matches = re.findall(pattern, text, re.DOTALL)
+        
+        if matches:
+            # Return the last code block
+            code = matches[-1]
+            return code
+        
+        # Fallback: try inline code with single backticks
+        inline_pattern = r'`([^`]+)`'
+        inline_matches = re.findall(inline_pattern, text)
+        if inline_matches:
+            return inline_matches[-1]
+        
+        # No code blocks found, return original with basic cleanup
+        return text
+
     def inline_completions(self, prefix, suffix, language, filename, context: CompletionContext, cancel_token: CancelToken) -> str:
+        if cancel_token.is_cancel_requested:
+            return ''
+
         message = self._client.messages.create(
             model=self._model_id,
             max_tokens=10000,
-            messages=[{"role": "user", "content": f"""Generate autocomplete suggestion for this code in {language}. Fill in the middle where <CURSOR> is. Keep it concise and return only the code that fits best in place of <CURSOR>. provide multiline code if needed. Don't return markdown formatting, just return the code in {language}. Don't return any other text, just the code. Don't return the prefix or suffix. The code is below in between <CODE> tags.
+            system=f"""You are a code completion assistant. Your task is to generate intelligent autocomplete suggestions for the code at the cursor position for given language and active file type. This is not an interactive session, don't ask for clarifying questions, always generate a suggestion. Don't include any explanations for your response, just generate the code. Don't return any thinking or reasoning, just generate the code. You are given a code snippet with a prefix and a suffix. You need to generate a suggestion for the code that fits best in place of <CURSOR/>. You should return only the code that fits best in place of <CURSOR/>. You should provide multiline code if needed. Enclose the code in triple backticks, just return the code in language. You should not return any other text, just the code. DO NOT INCLUDE THE PREFIX OR SUFFIX IN THE RESPONSE. .ipynb files are Jupyter notebook files and for notebook files, you generate suggestions for a cell within the notebook. A cell can be a code cell with code or a markdown cell with markdown text. If the language is markdown, only return markdown text. If you need to install a Python package within a notebook cell code (for .ipynb files), use %pip install <package_name> instead of !pip install <package_name>. Follow the tags very carefully for proper spacing and indentations.""",
+            messages=[
+                {"role": "user", "content": f"""Generate a single suggestion that fits best in place of cursor. The code is below in between <CODE> tags and <CURSOR/> is the placeholder for the code to be filled in. Current language is {language} and the active file is {filename}.
 
-<CODE>
-{prefix}
-<CURSOR>
-{suffix}
-</CODE>
+<CODE><PREFIX>{prefix}</PREFIX><CURSOR/><SUFFIX>{suffix}</SUFFIX></CODE>
 """}]
         )
         code = ''
         for block in message.content:
+            if cancel_token.is_cancel_requested:
+                return ''
             if isinstance(block, AnthropicTextBlock):
                 code += block.text
-        return extract_llm_generated_code(code)
+
+        if cancel_token.is_cancel_requested:
+            return ''
+        return self._extract_llm_generated_code(code)
 
 
 class ClaudeCodeClient():
-    def __init__(self, websocket_connector: ThreadSafeWebSocketConnector, client_options: ClaudeAgentOptions):
+    def __init__(self, host: Host, client_options: ClaudeAgentOptions):
+        self._host = host
         self._client_options = client_options
-        self._websocket_connector = websocket_connector
+        self._websocket_connector = host.websocket_connector
         self._client = None
         self._client_queue = None
         self._client_thread_signal = None
@@ -216,6 +248,7 @@ class ClaudeCodeClient():
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
         self._reconnect_required = False
+        self._continue_conversation: bool | None = None
         self.connect()
 
     @property
@@ -369,11 +402,10 @@ class ClaudeCodeClient():
                             if not self._reconnect_required:
                                 response.stream(MarkdownData(f"Error communicating with Claude agent: {str(e)}"))
                         finally:
-                            if not self._reconnect_required:
-                                self._client_thread_signal.emit({
-                                    "id": event_id,
-                                    "data": "query completed"
-                                })
+                            self._client_thread_signal.emit({
+                                "id": event_id,
+                                "data": "query completed"
+                            })
                             set_current_request(None)
                             set_current_response(None)
                     elif event_type == ClaudeAgentEventType.GetServerInfo:
@@ -414,6 +446,10 @@ class ClaudeCodeClient():
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def _create_client(self) -> ClaudeSDKClient:
+        continue_conversation_cfg = self._host.nbi_config.claude_settings.get('continue_conversation', False)
+        self._client_options.continue_conversation = self._continue_conversation if self._continue_conversation is not None else continue_conversation_cfg
+        self._continue_conversation = None
+
         return ClaudeSDKClient(options=self._client_options)
 
     async def _get_client(self) -> ClaudeSDKClient:
@@ -455,6 +491,7 @@ class ClaudeCodeClient():
                     process.kill()
 
                     self._reconnect_required = True
+                    self._continue_conversation = True
                 except Exception as e:
                     log.error(f"Error occurred while setting current request and response to None: {str(e)}")
                 self._client_thread_signal.disconnect(_on_client_response)
@@ -521,6 +558,9 @@ class ClaudeCodeClient():
         if not self.is_connected():
             return
         response = self._send_claude_agent_request(ClaudeAgentEventType.ClearChatHistory)
+
+        self._continue_conversation = False
+
         if response["success"]:
             return response["data"]
         else:
@@ -816,7 +856,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         self._update_client_debounced_timer = None
         self._host = host
         self._client_options: ClaudeAgentOptions = self._create_client_options()
-        self._client = ClaudeCodeClient(host.websocket_connector, self._client_options)
+        self._client = ClaudeCodeClient(host, self._client_options)
 
     @property
     def id(self) -> str:
@@ -913,6 +953,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         if base_url != '':
             env['ANTHROPIC_BASE_URL'] = base_url
 
+        continue_conversation = claude_settings.get('continue_conversation', False)
+
         client_options = ClaudeAgentOptions(
             system_prompt=self._create_system_prompt(jupyter_ui_tools_enabled),
             cwd=get_jupyter_root_dir(),
@@ -923,6 +965,7 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             can_use_tool=custom_permission_handler,
             env=env,
             max_buffer_size=CLAUDE_CODE_MAX_BUFFER_SIZE,
+            continue_conversation=continue_conversation
         )
         return client_options
 

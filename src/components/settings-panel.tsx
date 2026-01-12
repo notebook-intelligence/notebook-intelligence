@@ -82,6 +82,15 @@ function SettingsPanelComponent(props: any) {
 
 function SettingsPanelTabsComponent(props: any) {
   const [activeTab, setActiveTab] = useState(props.activeTab);
+  const [isInClaudeCodeMode, setIsInClaudeCodeMode] = useState(
+    NBIAPI.config.isInClaudeCodeMode
+  );
+
+  useEffect(() => {
+    NBIAPI.configChanged.connect(() => {
+      setIsInClaudeCodeMode(NBIAPI.config.isInClaudeCodeMode);
+    });
+  }, []);
 
   return (
     <div>
@@ -107,15 +116,17 @@ function SettingsPanelTabsComponent(props: any) {
         ></span>
         Claude
       </div>
-      <div
-        className={`nbi-settings-panel-tab ${activeTab === 'mcp-servers' ? 'active' : ''}`}
-        onClick={() => {
-          setActiveTab('mcp-servers');
-          props.onTabSelected('mcp-servers');
-        }}
-      >
-        MCP Servers
-      </div>
+      {!isInClaudeCodeMode && (
+        <div
+          className={`nbi-settings-panel-tab ${activeTab === 'mcp-servers' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('mcp-servers');
+            props.onTabSelected('mcp-servers');
+          }}
+        >
+          MCP Servers
+        </div>
+      )}
     </div>
   );
 }
@@ -125,6 +136,7 @@ function SettingsPanelComponentGeneral(props: any) {
   const llmProviders = nbiConfig.llmProviders;
   const [chatModels, setChatModels] = useState([]);
   const [inlineCompletionModels, setInlineCompletionModels] = useState([]);
+  const isInClaudeCodeMode = nbiConfig.isInClaudeCodeMode;
 
   const handleSaveSettings = async () => {
     const config: any = {
@@ -138,7 +150,8 @@ function SettingsPanelComponentGeneral(props: any) {
         provider: inlineCompletionModelProvider,
         model: inlineCompletionModel,
         properties: inlineCompletionModelProperties
-      }
+      },
+      inline_completion_debouncer_delay: inlineCompletionDebouncerDelay
     };
 
     if (
@@ -176,6 +189,8 @@ function SettingsPanelComponentGeneral(props: any) {
   const [storeGitHubAccessToken, setStoreGitHubAccessToken] = useState(
     nbiConfig.storeGitHubAccessToken
   );
+  const [inlineCompletionDebouncerDelay, setInlineCompletionDebouncerDelay] =
+    useState(nbiConfig.inlineCompletionDebouncerDelay);
 
   const updateModelOptionsForProvider = (
     providerId: string,
@@ -266,150 +281,161 @@ function SettingsPanelComponentGeneral(props: any) {
     inlineCompletionModelProvider,
     inlineCompletionModel,
     inlineCompletionModelProperties,
-    storeGitHubAccessToken
+    storeGitHubAccessToken,
+    inlineCompletionDebouncerDelay
   ]);
 
   return (
     <div className="config-dialog">
       <div className="config-dialog-body">
-        <div className="model-config-section">
-          <div className="model-config-section-header">Default chat mode</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    value={defaultChatMode}
-                    onChange={event => setDefaultChatMode(event.target.value)}
-                  >
-                    <option value="ask">Ask</option>
-                    <option value="agent">Agent</option>
-                  </select>
-                </div>
-              </div>
-              <div className="model-config-section-column"> </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">Chat model</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>Provider</div>
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    onChange={event =>
-                      updateModelOptionsForProvider(event.target.value, 'chat')
-                    }
-                  >
-                    {llmProviders.map((provider: any, index: number) => (
-                      <option
-                        key={index}
-                        value={provider.id}
-                        selected={provider.id === chatModelProvider}
-                      >
-                        {provider.name}
-                      </option>
-                    ))}
-                    <option
-                      key={-1}
-                      value="none"
-                      selected={
-                        chatModelProvider === 'none' ||
-                        !llmProviders.find(
-                          provider => provider.id === chatModelProvider
-                        )
-                      }
-                    >
-                      None
-                    </option>
-                  </select>
-                </div>
-              </div>
-              {!['openai-compatible', 'litellm-compatible', 'none'].includes(
-                chatModelProvider
-              ) &&
-                chatModels.length > 0 && (
-                  <div className="model-config-section-column">
-                    <div>Model</div>
-                    {![
-                      OPENAI_COMPATIBLE_CHAT_MODEL_ID,
-                      LITELLM_COMPATIBLE_CHAT_MODEL_ID
-                    ].includes(chatModel) &&
-                      chatModels.length > 0 && (
-                        <div>
-                          <select
-                            className="jp-mod-styled"
-                            onChange={event => setChatModel(event.target.value)}
-                          >
-                            {chatModels.map((model: any, index: number) => (
-                              <option
-                                key={index}
-                                value={model.id}
-                                selected={model.id === chatModel}
-                              >
-                                {model.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                  </div>
-                )}
-            </div>
-
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {chatModelProvider === 'ollama' && chatModels.length === 0 && (
-                  <div className="ollama-warning-message">
-                    No Ollama models found! Make sure{' '}
-                    <a href="https://ollama.com/" target="_blank">
-                      Ollama
-                    </a>{' '}
-                    is running and models are downloaded to your computer.{' '}
-                    <a
-                      href="javascript:void(0)"
-                      onClick={handleRefreshOllamaModelListClick}
-                    >
-                      Try again
-                    </a>{' '}
-                    once ready.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                {chatModelProperties.map((property: any, index: number) => (
-                  <div className="form-field-row" key={index}>
-                    <div className="form-field-description">
-                      {property.name} {property.optional ? '(optional)' : ''}
-                    </div>
-                    <input
-                      name="chat-model-id-input"
-                      placeholder={property.description}
+        {!isInClaudeCodeMode && (
+          <div className="model-config-section">
+            <div className="model-config-section-header">Default chat mode</div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>
+                    <select
                       className="jp-mod-styled"
-                      spellCheck={false}
-                      value={property.value}
-                      onChange={event =>
-                        onModelPropertyChange(
-                          'chat',
-                          property.id,
-                          event.target.value
-                        )
-                      }
-                    />
+                      value={defaultChatMode}
+                      onChange={event => setDefaultChatMode(event.target.value)}
+                    >
+                      <option value="ask">Ask</option>
+                      <option value="agent">Agent</option>
+                    </select>
                   </div>
-                ))}
+                </div>
+                <div className="model-config-section-column"> </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {!isInClaudeCodeMode && (
+          <div className="model-config-section">
+            <div className="model-config-section-header">Chat model</div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>Provider</div>
+                  <div>
+                    <select
+                      className="jp-mod-styled"
+                      onChange={event =>
+                        updateModelOptionsForProvider(
+                          event.target.value,
+                          'chat'
+                        )
+                      }
+                    >
+                      {llmProviders.map((provider: any, index: number) => (
+                        <option
+                          key={index}
+                          value={provider.id}
+                          selected={provider.id === chatModelProvider}
+                        >
+                          {provider.name}
+                        </option>
+                      ))}
+                      <option
+                        key={-1}
+                        value="none"
+                        selected={
+                          chatModelProvider === 'none' ||
+                          !llmProviders.find(
+                            provider => provider.id === chatModelProvider
+                          )
+                        }
+                      >
+                        None
+                      </option>
+                    </select>
+                  </div>
+                </div>
+                {!['openai-compatible', 'litellm-compatible', 'none'].includes(
+                  chatModelProvider
+                ) &&
+                  chatModels.length > 0 && (
+                    <div className="model-config-section-column">
+                      <div>Model</div>
+                      {![
+                        OPENAI_COMPATIBLE_CHAT_MODEL_ID,
+                        LITELLM_COMPATIBLE_CHAT_MODEL_ID
+                      ].includes(chatModel) &&
+                        chatModels.length > 0 && (
+                          <div>
+                            <select
+                              className="jp-mod-styled"
+                              onChange={event =>
+                                setChatModel(event.target.value)
+                              }
+                            >
+                              {chatModels.map((model: any, index: number) => (
+                                <option
+                                  key={index}
+                                  value={model.id}
+                                  selected={model.id === chatModel}
+                                >
+                                  {model.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                    </div>
+                  )}
+              </div>
+
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  {chatModelProvider === 'ollama' &&
+                    chatModels.length === 0 && (
+                      <div className="ollama-warning-message">
+                        No Ollama models found! Make sure{' '}
+                        <a href="https://ollama.com/" target="_blank">
+                          Ollama
+                        </a>{' '}
+                        is running and models are downloaded to your computer.{' '}
+                        <a
+                          href="javascript:void(0)"
+                          onClick={handleRefreshOllamaModelListClick}
+                        >
+                          Try again
+                        </a>{' '}
+                        once ready.
+                      </div>
+                    )}
+                </div>
+              </div>
+
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  {chatModelProperties.map((property: any, index: number) => (
+                    <div className="form-field-row" key={index}>
+                      <div className="form-field-description">
+                        {property.name} {property.optional ? '(optional)' : ''}
+                      </div>
+                      <input
+                        name="chat-model-id-input"
+                        placeholder={property.description}
+                        className="jp-mod-styled"
+                        spellCheck={false}
+                        value={property.value}
+                        onChange={event =>
+                          onModelPropertyChange(
+                            'chat',
+                            property.id,
+                            event.target.value
+                          )
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="model-config-section">
           <div className="model-config-section-header">Auto-complete model</div>
@@ -516,40 +542,62 @@ function SettingsPanelComponentGeneral(props: any) {
           </div>
         </div>
 
-        {(chatModelProvider === 'github-copilot' ||
-          inlineCompletionModelProvider === 'github-copilot') && (
-          <div className="model-config-section">
-            <div className="model-config-section-header access-token-config-header">
-              GitHub Copilot login{' '}
-              <a
-                href="https://github.com/notebook-intelligence/notebook-intelligence/blob/main/README.md#remembering-github-copilot-login"
-                target="_blank"
-              >
-                {' '}
-                <VscWarning
-                  className="access-token-warning"
-                  title="Click to learn more about security implications"
-                />
-              </a>
+        <div className="model-config-section-row" style={{ width: '50%' }}>
+          <div className="model-config-section-column">
+            <div className="form-field-row" style={{ paddingLeft: '10px' }}>
+              <div className="form-field-description">
+                Auto-complete debouncer delay (ms)
+              </div>
+              <input
+                name="inline-completion-debouncer-delay-input"
+                placeholder="Auto-complete debouncer delay (milliseconds)"
+                className="jp-mod-styled"
+                spellCheck={false}
+                value={inlineCompletionDebouncerDelay}
+                type="number"
+                onChange={event =>
+                  setInlineCompletionDebouncerDelay(Number(event.target.value))
+                }
+              />
             </div>
-            <div className="model-config-section-body">
-              <div className="model-config-section-row">
-                <div className="model-config-section-column">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={storeGitHubAccessToken}
-                      onChange={event => {
-                        setStoreGitHubAccessToken(event.target.checked);
-                      }}
-                    />
-                    Remember my GitHub Copilot access token
-                  </label>
+          </div>
+        </div>
+
+        {!isInClaudeCodeMode &&
+          (chatModelProvider === 'github-copilot' ||
+            inlineCompletionModelProvider === 'github-copilot') && (
+            <div className="model-config-section">
+              <div className="model-config-section-header access-token-config-header">
+                GitHub Copilot login{' '}
+                <a
+                  href="https://github.com/notebook-intelligence/notebook-intelligence/blob/main/README.md#remembering-github-copilot-login"
+                  target="_blank"
+                >
+                  {' '}
+                  <VscWarning
+                    className="access-token-warning"
+                    title="Click to learn more about security implications"
+                  />
+                </a>
+              </div>
+              <div className="model-config-section-body">
+                <div className="model-config-section-row">
+                  <div className="model-config-section-column">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={storeGitHubAccessToken}
+                        onChange={event => {
+                          setStoreGitHubAccessToken(event.target.checked);
+                        }}
+                      />
+                      Remember my GitHub Copilot access token
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         <div className="model-config-section">
           <div className="model-config-section-header">Config file path</div>
@@ -842,6 +890,9 @@ function SettingsPanelComponentClaude(props: any) {
       ClaudeToolType.JupyterUITools
     ]
   );
+  const [continueConversation, setContinueConversation] = useState(
+    nbiConfig.claudeSettings.continue_conversation ?? false
+  );
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
@@ -859,7 +910,8 @@ function SettingsPanelComponentClaude(props: any) {
         api_key: apiKey,
         base_url: baseUrl,
         setting_sources: settingSources,
-        tools: tools
+        tools: tools,
+        continue_conversation: continueConversation
       }
     });
   };
@@ -873,7 +925,8 @@ function SettingsPanelComponentClaude(props: any) {
     apiKey,
     baseUrl,
     settingSources,
-    tools
+    tools,
+    continueConversation
   ]);
 
   return (
@@ -953,6 +1006,20 @@ function SettingsPanelComponentClaude(props: any) {
                       setInlineCompletionModel(event.target.value)
                     }
                   >
+                    <option
+                      value={ClaudeModelType.None}
+                      selected={inlineCompletionModel === ClaudeModelType.None}
+                    >
+                      None
+                    </option>
+                    <option
+                      value={ClaudeModelType.Inherit}
+                      selected={
+                        inlineCompletionModel === ClaudeModelType.Inherit
+                      }
+                    >
+                      Inherit from general settings
+                    </option>
                     <option
                       value={ClaudeModelType.Default}
                       selected={
@@ -1069,6 +1136,28 @@ function SettingsPanelComponentClaude(props: any) {
                             )
                           : [...tools, ClaudeToolType.JupyterUITools]
                       );
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Conversation History
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Remember conversation history"
+                    checked={continueConversation}
+                    onClick={() => {
+                      setContinueConversation(!continueConversation);
                     }}
                   ></CheckBoxItem>
                 </div>

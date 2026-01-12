@@ -356,7 +356,7 @@ class NBIInlineCompletionProvider
   get schema(): ISettingRegistry.IProperty {
     return {
       default: {
-        debouncerDelay: 200,
+        debouncerDelay: NBIAPI.config.inlineCompletionDebouncerDelay,
         timeout: 15000
       }
     };
@@ -491,7 +491,11 @@ class NBIInlineCompletionProvider
   }
 
   get icon(): LabIcon.ILabIcon {
-    return NBIAPI.config.isInClaudeCodeMode
+    const isClaudeModel =
+      NBIAPI.config.isInClaudeCodeMode &&
+      NBIAPI.config.claudeSettings.inline_completion_model !== 'none' &&
+      NBIAPI.config.claudeSettings.inline_completion_model !== 'inherit';
+    return isClaudeModel
       ? claudeIcon
       : NBIAPI.config.usingGitHubCopilotModel
         ? githubCopilotIcon
@@ -769,7 +773,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
     panel.addWidget(sidebar);
-    app.shell.add(panel, 'right', { rank: 1000 });
+    app.shell.add(panel, 'left', { rank: 1000 });
     app.shell.activateById(panel.id);
 
     const updateSidebarIcon = () => {

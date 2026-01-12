@@ -137,7 +137,11 @@ class AIServiceManager(Host):
             if self._claude_code_chat_participant.id not in self.chat_participants:
                 self.register_chat_participant(self._claude_code_chat_participant)
             claude_settings = self.nbi_config.claude_settings
-            self._inline_completion_model = ClaudeCodeInlineCompletionModel(claude_settings.get('inline_completion_model', ''), claude_settings.get('api_key', None), claude_settings.get('base_url', None))
+            model_cfg = claude_settings.get('inline_completion_model', '')
+            if model_cfg == 'none':
+                self._inline_completion_model = None
+            elif model_cfg != 'inherit':
+                self._inline_completion_model = ClaudeCodeInlineCompletionModel(model_cfg, claude_settings.get('api_key', None), claude_settings.get('base_url', None))
         else:
             self.unregister_chat_participant(self._claude_code_chat_participant)
 

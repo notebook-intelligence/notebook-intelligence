@@ -30,6 +30,8 @@ export interface IDeviceVerificationInfo {
 }
 
 export enum ClaudeModelType {
+  None = 'none',
+  Inherit = 'inherit',
   Default = '',
   ClaudeOpus45 = 'claude-opus-4-5',
   ClaudeHaiku45 = 'claude-haiku-4-5'
@@ -82,6 +84,12 @@ export class NBIConfig {
 
   get storeGitHubAccessToken(): boolean {
     return this.capabilities.store_github_access_token === true;
+  }
+
+  get inlineCompletionDebouncerDelay(): number {
+    return Number.isInteger(this.capabilities.inline_completion_debouncer_delay)
+      ? this.capabilities.inline_completion_debouncer_delay
+      : 200;
   }
 
   get toolConfig(): any {
