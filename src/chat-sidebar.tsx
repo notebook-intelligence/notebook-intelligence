@@ -2007,6 +2007,7 @@ function SidebarComponent(props: any) {
         ))}
       {chatEnabled && (
         <div
+          id="sidebar-user-input"
           className={`sidebar-user-input ${copilotRequestInProgress ? 'generating' : ''}`}
         >
           <textarea
