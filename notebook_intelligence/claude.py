@@ -9,6 +9,7 @@ import threading
 import time
 from typing import Any
 import uuid
+import re
 from anyio.abc import Process
 from anthropic import Anthropic
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
@@ -18,7 +19,7 @@ import logging
 from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 from anthropic.types.text_block import TextBlock as AnthropicTextBlock
 
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, extract_llm_generated_code, get_jupyter_root_dir
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
 
@@ -184,24 +185,54 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
     def context_window(self) -> int:
         return self._context_window
 
+    def _extract_llm_generated_code(self, text: str) -> str:
+        tags = ["<CODE>", "</CODE>", "<PREFIX>", "</PREFIX>", "<SUFFIX>", "</SUFFIX>", "<CURSOR>", "</CURSOR>"]
+        for tag in tags:
+            text = text.replace(tag, "")
+        
+        # Find all code blocks (```...```)
+        # Pattern matches ```optional_language\n...content...```
+        pattern = r'```(?:\w+)?\n?(.*?)```'
+        matches = re.findall(pattern, text, re.DOTALL)
+        
+        if matches:
+            # Return the last code block
+            code = matches[-1]
+            return code
+        
+        # Fallback: try inline code with single backticks
+        inline_pattern = r'`([^`]+)`'
+        inline_matches = re.findall(inline_pattern, text)
+        if inline_matches:
+            return inline_matches[-1]
+        
+        # No code blocks found, return original with basic cleanup
+        return text
+
     def inline_completions(self, prefix, suffix, language, filename, context: CompletionContext, cancel_token: CancelToken) -> str:
+        if cancel_token.is_cancel_requested:
+            return ''
+
         message = self._client.messages.create(
             model=self._model_id,
             max_tokens=10000,
-            messages=[{"role": "user", "content": f"""Generate autocomplete suggestion for this code in {language}. Fill in the middle where <CURSOR> is. Keep it concise and return only the code that fits best in place of <CURSOR>. provide multiline code if needed. Don't return markdown formatting, just return the code in {language}. Don't return any other text, just the code. Don't return the prefix or suffix. The code is below in between <CODE> tags.
+            system=f"""You are a code completion assistant. Your task is to generate intelligent autocomplete suggestions for the code at the cursor position for given language and active file type. This is not an interactive session, don't ask for clarifying questions, always generate a suggestion. Don't include any explanations for your response, just generate the code. Don't return any thinking or reasoning, just generate the code. You are given a code snippet with a prefix and a suffix. You need to generate a suggestion for the code that fits best in place of <CURSOR/>. You should return only the code that fits best in place of <CURSOR/>. You should provide multiline code if needed. Enclose the code in triple backticks, just return the code in language. You should not return any other text, just the code. DO NOT INCLUDE THE PREFIX OR SUFFIX IN THE RESPONSE. .ipynb files are Jupyter notebook files and for notebook files, you generate suggestions for a cell within the notebook. A cell can be a code cell with code or a markdown cell with markdown text. If the language is markdown, only return markdown text. If you need to install a Python package within a notebook cell code (for .ipynb files), use %pip install <package_name> instead of !pip install <package_name>. Follow the tags very carefully for proper spacing and indentations.""",
+            messages=[
+                {"role": "user", "content": f"""Generate a single suggestion that fits best in place of cursor. The code is below in between <CODE> tags and <CURSOR/> is the placeholder for the code to be filled in. Current language is {language} and the active file is {filename}.
 
-<CODE>
-{prefix}
-<CURSOR>
-{suffix}
-</CODE>
+<CODE><PREFIX>{prefix}</PREFIX><CURSOR/><SUFFIX>{suffix}</SUFFIX></CODE>
 """}]
         )
         code = ''
         for block in message.content:
+            if cancel_token.is_cancel_requested:
+                return ''
             if isinstance(block, AnthropicTextBlock):
                 code += block.text
-        return extract_llm_generated_code(code)
+
+        if cancel_token.is_cancel_requested:
+            return ''
+        return self._extract_llm_generated_code(code)
 
 
 class ClaudeCodeClient():
