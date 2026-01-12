@@ -29,6 +29,12 @@
   padding: 5px;
 }
 
+#sidebar-user-input {
+  /* stylelint-disable */
+  anchor-name: --sidebaruserinput;
+  /* stylelint-enable */
+}
+
 .sidebar-user-input {
   height: auto;
   padding: 5px;
@@ -355,8 +361,11 @@ pre:has(.code-block-header) {
   border: 1px solid var(--jp-border-color1);
   flex-direction: column;
   position: absolute;
-  bottom: 80px;
-  left: 4px;
+  /* stylelint-disable */
+  position-anchor: --sidebaruserinput;
+  position-area: top;
+  /* stylelint-enable */
+  width: calc(100% - 16px);
   gap: 2px;
   /* stylelint-disable */
   max-height: min(calc(100% - 120px), 400px);
