@@ -349,6 +349,10 @@ class ActiveDocumentWatcher {
 class NBIInlineCompletionProvider
   implements IInlineCompletionProvider<IInlineCompletionItem>
 {
+  private PendingPromise:
+	  | Promise<IInlineCompletionList<IInlineCompletionItem>>
+          | null = null;
+
   constructor(telemetryEmitter: TelemetryEmitter) {
     this._telemetryEmitter = telemetryEmitter;
   }
@@ -373,6 +377,11 @@ class NBIInlineCompletionProvider
     let language = ActiveDocumentWatcher.activeDocumentInfo.language;
 
     let editorType = 'file-editor';
+
+    //Skip this fetch if previous Promise is still Pending
+    if (this.PendingPromise) {
+        return this.PendingPromise;
+    }
 
     if (context.widget instanceof NotebookPanel) {
       editorType = 'notebook';
@@ -420,7 +429,7 @@ class NBIInlineCompletionProvider
       }
     });
 
-    return new Promise((resolve, reject) => {
+    const p: Promise<IInlineCompletionList<IInlineCompletionItem>> = new Promise((resolve, reject) => {
       const items: IInlineCompletionItem[] = [];
 
       if (!inlineCompletionsEnabled) {
@@ -472,6 +481,20 @@ class NBIInlineCompletionProvider
                 }
               });
 
+	      //Analyze user's input during flight time between client and server. If response from server and user's input matches then continue from the user's current input.
+	      if (context.widget instanceof NotebookPanel) {
+
+		      const editor = context.widget.content.activeCell?.editor;
+		      const text_updated = editor.model.sharedModel.getSource();
+		      const offset_updated = editor.getOffsetAt(editor.getCursorPosition());
+		      const new_charcters = offset_updated - request.offset;
+		      if (items[0].insertText.substring(0, new_charcters) === text_updated.substring(request.offset,offset_updated)) {
+		      
+			items[0].insertText = items[0].insertText.substring(new_charcters);
+		      }
+
+	      } 
+
               resolve({ items });
             } else {
               reject();
@@ -480,6 +503,12 @@ class NBIInlineCompletionProvider
         }
       );
     });
+
+    this.PendingPromise = p.finally(() => {
+	    this.PendingPromise = null;
+    });
+
+    return this.PendingPromise;
   }
 
   get name(): string {
