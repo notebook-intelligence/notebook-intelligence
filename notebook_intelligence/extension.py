@@ -23,7 +23,7 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
 from notebook_intelligence.context_factory import RuleContextFactory
 
 ai_service_manager: AIServiceManager = None
@@ -34,18 +34,25 @@ thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 class GetCapabilitiesHandler(APIHandler):
     disabled_tools = []
     allow_enabling_tools_with_env = False
+    disabled_providers = []
+    allow_enabling_providers_with_env = False
 
     @tornado.web.authenticated
     def get(self):
         ai_service_manager.nbi_config.load()
         ai_service_manager.update_models_from_config()
         nbi_config = ai_service_manager.nbi_config
-        llm_providers = ai_service_manager.llm_providers.values()
         def is_tool_enabled(tool: str) -> bool:
             if self.disabled_tools is None:
                 return True
             return tool not in self.disabled_tools or (self.allow_enabling_tools_with_env and is_builtin_tool_enabled_in_env(tool))
+        def is_provider_enabled(provider_id: str) -> bool:
+            if self.disabled_providers is None:
+                return True
+            return provider_id not in self.disabled_providers or \
+                   (self.allow_enabling_providers_with_env and is_provider_enabled_in_env(provider_id))
         allowed_builtin_toolsets = [{"id": toolset.id, "name": toolset.name, "description": toolset.description} for toolset in built_in_toolsets.values() if is_tool_enabled(toolset.id)]
+        llm_providers = [p for p in ai_service_manager.llm_providers.values() if is_provider_enabled(p.id)]
         mcp_servers = ai_service_manager.get_mcp_servers()
         mcp_server_tools = [{
             "id": mcp_server.name,
@@ -773,6 +780,27 @@ class NotebookIntelligence(ExtensionApp):
     handlers = []
     root_dir = ''
 
+    disabled_providers = List(
+        trait=Unicode,
+        default_value=None,
+        help="""
+        List of LLM providers to disable. Valid provider IDs: github-copilot, openai-compatible, litellm-compatible, ollama.
+        
+        Example: ['ollama', 'litellm-compatible']
+        """,
+        allow_none=True,
+        config=True,
+    )
+
+    allow_enabling_providers_with_env = Bool(
+        default_value=False,
+        help="""
+        Allow enabling disabled providers with environment variable (NBI_ENABLED_PROVIDERS).
+        """,
+        allow_none=True,
+        config=True,
+    )
+
     disabled_tools = List(
         trait=Unicode,
         default_value=None,
@@ -836,6 +864,8 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_rules_reload = url_path_join(base_url, "notebook-intelligence", "rules", "reload")
         GetCapabilitiesHandler.disabled_tools = self.disabled_tools
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
+        GetCapabilitiesHandler.disabled_providers = self.disabled_providers
+        GetCapabilitiesHandler.allow_enabling_providers_with_env = self.allow_enabling_providers_with_env
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
