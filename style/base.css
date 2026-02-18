@@ -272,6 +272,52 @@ pre:has(.code-block-header) {
   background-color: rgb(159 153 208 / 15%);
 }
 
+.chat-message-feedback {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 4px 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.chat-message:hover .chat-message-feedback,
+.chat-message-feedback:focus-within {
+  opacity: 1;
+}
+
+.chat-message-feedback:has(.selected) {
+  opacity: 1;
+}
+
+.chat-feedback-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px;
+  cursor: pointer;
+  color: var(--jp-ui-font-color2);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-feedback-btn:hover {
+  color: var(--jp-ui-font-color0);
+  background-color: var(--jp-layout-color2);
+}
+
+.chat-feedback-btn.selected {
+  color: var(--jp-brand-color1);
+  background-color: var(--jp-layout-color2);
+}
+
+.chat-feedback-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
 .copilot-generated-notebook-link {
   text-decoration: underline;
   cursor: pointer;

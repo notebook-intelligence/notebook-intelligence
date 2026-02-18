@@ -202,6 +202,7 @@ class EmitTelemetryEventHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         event = json.loads(self.request.body)
+        log.info(f"Telemetry event received: type={event.get('type')}, data={json.dumps(event.get('data', {}))}")
         thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.emit_telemetry_event(event),))
         thread.start()
         self.finish(json.dumps({}))

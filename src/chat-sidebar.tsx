@@ -49,7 +49,9 @@ import {
   VscSettingsGear,
   VscPassFilled,
   VscTools,
-  VscTrash
+  VscTrash,
+  VscThumbsup,
+  VscThumbsdown
 } from 'react-icons/vsc';
 
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
@@ -282,6 +284,8 @@ interface IChatMessage {
   contents: IChatMessageContent[];
   notebookLink?: string;
   participant?: IChatParticipant;
+  feedback?: 'positive' | 'negative';
+  chatModel?: { provider: string; model: string };
 }
 
 const answeredForms = new Map<string, string>();
@@ -697,6 +701,58 @@ function ChatResponse(props: any) {
           </a>
         )}
       </div>
+      {msg.from === 'copilot' && !props.showGenerating && (
+        <div className="chat-message-feedback">
+          <button
+            className={`chat-feedback-btn ${msg.feedback === 'positive' ? 'selected' : ''}`}
+            onClick={() => {
+              props.onFeedback(msg.id, 'positive');
+              if (msg.feedback !== 'positive') {
+                props.telemetryEmitter.emitTelemetryEvent({
+                  type: TelemetryEventType.Feedback,
+                  data: {
+                    sentiment: 'positive',
+                    chatId: props.chatId,
+                    messageId: msg.id,
+                    model: msg.chatModel,
+                    participant: msg.participant?.id,
+                    timestamp: new Date().toISOString()
+                  }
+                });
+              }
+            }}
+            aria-label="Rate as helpful"
+            aria-pressed={msg.feedback === 'positive'}
+            title="Helpful"
+          >
+            <VscThumbsup />
+          </button>
+          <button
+            className={`chat-feedback-btn ${msg.feedback === 'negative' ? 'selected' : ''}`}
+            onClick={() => {
+              props.onFeedback(msg.id, 'negative');
+              if (msg.feedback !== 'negative') {
+                props.telemetryEmitter.emitTelemetryEvent({
+                  type: TelemetryEventType.Feedback,
+                  data: {
+                    sentiment: 'negative',
+                    chatId: props.chatId,
+                    messageId: msg.id,
+                    model: msg.chatModel,
+                    participant: msg.participant?.id,
+                    timestamp: new Date().toISOString()
+                  }
+                });
+              }
+            }}
+            aria-label="Rate as unhelpful"
+            aria-pressed={msg.feedback === 'negative'}
+            title="Not helpful"
+          >
+            <VscThumbsdown />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -749,6 +805,19 @@ async function submitCompletionRequest(
         responseEmitter
       );
   }
+}
+
+function getActiveChatModel(): { provider: string; model: string } {
+  if (NBIAPI.config.isInClaudeCodeMode) {
+    return {
+      provider: 'anthropic',
+      model: NBIAPI.config.claudeSettings?.chat_model?.trim() || 'default'
+    };
+  }
+  return {
+    provider: NBIAPI.config.chatModel.provider,
+    model: NBIAPI.config.chatModel.model
+  };
 }
 
 function SidebarComponent(props: any) {
@@ -1566,7 +1635,8 @@ function SidebarComponent(props: any) {
               contents: contents,
               participant: NBIAPI.config.chatParticipants.find(participant => {
                 return participant.id === response.participant;
-              })
+              }),
+              chatModel: getActiveChatModel()
             }
           ]);
         }
@@ -1601,6 +1671,19 @@ function SidebarComponent(props: any) {
     lastMessageId.current = '';
     setCopilotRequestInProgress(false);
   };
+
+  const handleFeedback = useCallback(
+    (messageId: string, sentiment: 'positive' | 'negative') => {
+      setChatMessages(prev =>
+        prev.map(m => {
+          if (m.id !== messageId) return m;
+          const newFeedback = m.feedback === sentiment ? undefined : sentiment;
+          return { ...m, feedback: newFeedback };
+        })
+      );
+    },
+    []
+  );
 
   const filterPrefixSuggestions = (prmpt: string) => {
     const userInput = prmpt.trimStart();
@@ -1832,7 +1915,8 @@ function SidebarComponent(props: any) {
               contents: contents,
               participant: NBIAPI.config.chatParticipants.find(participant => {
                 return participant.id === response.participant;
-              })
+              }),
+              chatModel: getActiveChatModel()
             }
           ]);
         }
@@ -2000,6 +2084,9 @@ function SidebarComponent(props: any) {
                   msg.from === 'copilot' &&
                   copilotRequestInProgress
                 }
+                onFeedback={handleFeedback}
+                chatId={chatId}
+                telemetryEmitter={telemetryEmitter}
               />
             ))}
             <div ref={messagesEndRef} />
