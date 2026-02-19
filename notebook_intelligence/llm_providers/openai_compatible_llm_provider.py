@@ -3,7 +3,7 @@
 import json
 from typing import Any
 from notebook_intelligence.api import ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, CancelToken, ChatResponse, CompletionContext, LLMProviderProperty
-from openai import OpenAI
+from openai import OpenAI, omit
 
 DEFAULT_CONTEXT_WINDOW = 4096
 
@@ -48,8 +48,8 @@ class OpenAICompatibleChatModel(ChatModel):
         resp = client.chat.completions.create(
             model=model_id,
             messages=messages.copy(),
-            tools=tools,
-            tool_choice=options.get("tool_choice", None),
+            tools=tools or omit,
+            tool_choice=options.get("tool_choice", omit),
             stream=stream,
         )
 
