@@ -32,9 +32,13 @@ export interface IDeviceVerificationInfo {
 export enum ClaudeModelType {
   None = 'none',
   Inherit = 'inherit',
-  Default = '',
-  ClaudeOpus45 = 'claude-opus-4-5',
-  ClaudeHaiku45 = 'claude-haiku-4-5'
+  Default = ''
+}
+
+export interface IClaudeModelInfo {
+  id: string;
+  name: string;
+  context_window: number;
 }
 
 export enum ClaudeToolType {
@@ -120,6 +124,10 @@ export class NBIConfig {
 
   get claudeSettings(): any {
     return this.capabilities.claude_settings;
+  }
+
+  get claudeModels(): IClaudeModelInfo[] {
+    return this.capabilities.claude_models ?? [];
   }
 
   get isInClaudeCodeMode(): boolean {
@@ -337,6 +345,23 @@ export class NBIAPI {
         })
         .catch(reason => {
           console.error(`Failed to update ollama model list.\n${reason}`);
+          reject(reason);
+        });
+    });
+  }
+
+  static async updateClaudeModelList(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      requestAPI<any>('update-provider-models', {
+        method: 'POST',
+        body: JSON.stringify({ provider: 'claude' })
+      })
+        .then(async data => {
+          await NBIAPI.fetchCapabilities();
+          resolve();
+        })
+        .catch(reason => {
+          console.error(`Failed to update Claude model list.\n${reason}`);
           reject(reason);
         });
     });

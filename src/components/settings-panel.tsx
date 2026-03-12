@@ -7,7 +7,12 @@ import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
 import claudeSvgStr from '../../style/icons/claude.svg';
-import { ClaudeModelType, ClaudeToolType, NBIAPI } from '../api';
+import {
+  ClaudeModelType,
+  ClaudeToolType,
+  IClaudeModelInfo,
+  NBIAPI
+} from '../api';
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
 import { mcpServerSettingsToEnabledState } from './mcp-util';
@@ -893,13 +898,30 @@ function SettingsPanelComponentClaude(props: any) {
   const [continueConversation, setContinueConversation] = useState(
     nbiConfig.claudeSettings.continue_conversation ?? false
   );
+  const [claudeModels, setClaudeModels] = useState<IClaudeModelInfo[]>(
+    nbiConfig.claudeModels
+  );
+  const [loadingModels, setLoadingModels] = useState(false);
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       claudeSettingsRef.current = nbiConfig.claudeSettings;
+      setClaudeModels(nbiConfig.claudeModels);
       setRenderCount(renderCount => renderCount + 1);
     });
   }, []);
+
+  const refreshClaudeModels = async () => {
+    setLoadingModels(true);
+    try {
+      await NBIAPI.updateClaudeModelList();
+      const models = nbiConfig.claudeModels;
+      console.log('claude_models after refresh:', models);
+      setClaudeModels(models);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
 
   const syncSettingsToServerState = () => {
     NBIAPI.setConfig({
@@ -966,7 +988,23 @@ function SettingsPanelComponentClaude(props: any) {
         </div>
 
         <div className="model-config-section">
-          <div className="model-config-section-header">Models</div>
+          <div
+            className="model-config-section-header"
+            style={{ display: 'flex' }}
+          >
+            <div style={{ flexGrow: 1 }}>Models</div>
+            <div>
+              <button
+                className="jp-toast-button jp-mod-small jp-Button"
+                onClick={refreshClaudeModels}
+                disabled={loadingModels}
+              >
+                <div className="jp-Dialog-buttonLabel">
+                  {loadingModels ? 'Loading...' : 'Refresh'}
+                </div>
+              </button>
+            </div>
+          </div>
           <div className="model-config-section-body">
             <div className="model-config-section-row">
               <div className="model-config-section-column">
@@ -982,18 +1020,15 @@ function SettingsPanelComponentClaude(props: any) {
                     >
                       Default (recommended)
                     </option>
-                    <option
-                      value={ClaudeModelType.ClaudeOpus45}
-                      selected={chatModel === ClaudeModelType.ClaudeOpus45}
-                    >
-                      Claude Opus 4.5
-                    </option>
-                    <option
-                      value={ClaudeModelType.ClaudeHaiku45}
-                      selected={chatModel === ClaudeModelType.ClaudeHaiku45}
-                    >
-                      Claude Haiku 4.5
-                    </option>
+                    {claudeModels.map(model => (
+                      <option
+                        key={model.id}
+                        value={model.id}
+                        selected={chatModel === model.id}
+                      >
+                        {model.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1028,22 +1063,15 @@ function SettingsPanelComponentClaude(props: any) {
                     >
                       Default (recommended)
                     </option>
-                    <option
-                      value={ClaudeModelType.ClaudeOpus45}
-                      selected={
-                        inlineCompletionModel === ClaudeModelType.ClaudeOpus45
-                      }
-                    >
-                      Claude Opus 4.5
-                    </option>
-                    <option
-                      value={ClaudeModelType.ClaudeHaiku45}
-                      selected={
-                        inlineCompletionModel === ClaudeModelType.ClaudeHaiku45
-                      }
-                    >
-                      Claude Haiku 4.5
-                    </option>
+                    {claudeModels.map(model => (
+                      <option
+                        key={model.id}
+                        value={model.id}
+                        selected={inlineCompletionModel === model.id}
+                      >
+                        {model.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

@@ -20,7 +20,7 @@ from tornado import websocket
 from traitlets import Bool, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
-from notebook_intelligence.claude import ClaudeCodeChatParticipant
+from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env
@@ -103,6 +103,7 @@ class GetCapabilitiesHandler(APIHandler):
             },
             "mcp_server_settings": nbi_config.mcp_server_settings,
             "claude_settings": nbi_config.claude_settings,
+            "claude_models": ai_service_manager.claude_models,
             "default_chat_mode": nbi_config.default_chat_mode
         }
         for participant_id in ai_service_manager.chat_participants:
@@ -165,6 +166,12 @@ class UpdateProviderModelsHandler(APIHandler):
         data = json.loads(self.request.body)
         if data.get("provider") == "ollama":
             ai_service_manager.ollama_llm_provider.update_chat_model_list()
+        elif data.get("provider") == "claude":
+            claude_settings = ai_service_manager.nbi_config.claude_settings
+            fetch_claude_models(
+                api_key=claude_settings.get('api_key', None),
+                base_url=claude_settings.get('base_url', None)
+            )
         self.finish(json.dumps({}))
 
 class MCPConfigFileHandler(APIHandler):
