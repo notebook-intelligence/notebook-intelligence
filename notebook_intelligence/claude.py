@@ -92,25 +92,56 @@ def tool_text_response(text: Any) -> dict[str, Any]:
     }
 
 def model_info_from_id(model_id: str) -> dict:
-    if model_id == "claude-sonnet-4-5":
-        return {
-            "name": "Claude Sonnet 4.5",
-            "context_window": 200000,
-        }
-    elif model_id == "claude-haiku-4-5":
-        return {
-            "name": "Claude Haiku 4.5",
-            "context_window": 200000,
-        }
-    elif model_id == "claude-opus-4-5":
-        return {
-            "name": "Claude Opus 4.5",
-            "context_window": 200000,
-        }
+    """Get model info, checking cached models first then falling back to defaults."""
+    for model in _claude_models_cache:
+        if model["id"] == model_id:
+            return model
     return {
+        "id": model_id,
         "name": model_id,
         "context_window": 200000,
     }
+
+# Cache of available Claude models fetched from API
+_claude_models_cache: list[dict] = []
+
+def get_claude_models() -> list[dict]:
+    """Return the cached list of available Claude models."""
+    return _claude_models_cache
+
+def _get_context_window(model_id: str) -> int:
+    """Get context window size for a model using litellm's model database."""
+    try:
+        import litellm
+        info = litellm.get_model_info(model_id)
+        return info.get("max_input_tokens", 200000)
+    except Exception:
+        return 200000
+
+def fetch_claude_models(api_key: str = None, base_url: str = None) -> list[dict]:
+    """Fetch available models from the Anthropic API and update cache."""
+    try:
+        # Pass None instead of empty string so SDK falls back to ANTHROPIC_API_KEY env var
+        if api_key is not None and api_key.strip() == '':
+            api_key = None
+        if base_url is not None and base_url.strip() == '':
+            base_url = None
+        client = Anthropic(api_key=api_key, base_url=base_url)
+        page = client.models.list(limit=100)
+        models = []
+        for model in page.data:
+            models.append({
+                "id": model.id,
+                "name": model.display_name,
+                "context_window": _get_context_window(model.id),
+            })
+        _claude_models_cache.clear()
+        _claude_models_cache.extend(models)
+        log.info(f"Fetched {len(models)} Claude models: {[m['id'] + ' (' + m['name'] + ')' for m in models]}")
+        return models
+    except Exception as e:
+        log.warning(f"Failed to fetch Claude models: {e}")
+        return _claude_models_cache
 
 class ClaudeChatModel(ChatModel):
     def __init__(self, model_id: str, api_key: str = None, base_url: str = None):
@@ -949,6 +980,9 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             chat_model_id = None
 
         env = {}
+        api_key = claude_settings.get('api_key', '')
+        if api_key != '':
+            env['ANTHROPIC_API_KEY'] = api_key
         base_url = claude_settings.get('base_url', '')
         if base_url != '':
             env['ANTHROPIC_BASE_URL'] = base_url
