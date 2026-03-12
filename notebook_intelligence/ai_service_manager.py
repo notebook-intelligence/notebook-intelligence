@@ -249,7 +249,7 @@ class AIServiceManager(Host):
 
     @property
     def is_claude_code_mode(self) -> bool:
-        return self.nbi_config.claude_settings.get('enabled', False)
+        return self.nbi_config.claude_settings.get('enabled', True)
 
     @property
     def claude_models(self) -> list[dict]:

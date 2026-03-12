@@ -414,6 +414,7 @@ class ClaudeCodeClient():
                                     if request.cancel_token.is_cancel_requested:
                                         continue
                                     if isinstance(message, AssistantMessage):
+                                        log.info(f"Response from model: {message.model}")
                                         for block in message.content:
                                             if isinstance(block, TextBlock):
                                                 response.stream(MarkdownData(block.text))
