@@ -105,6 +105,19 @@ def model_info_from_id(model_id: str) -> dict:
 # Cache of available Claude models fetched from API
 _claude_models_cache: list[dict] = []
 
+def get_claude_models() -> list[dict]:
+    """Return the cached list of available Claude models."""
+    return _claude_models_cache
+
+def _get_context_window(model_id: str) -> int:
+    """Get context window size for a model using litellm's model database."""
+    try:
+        import litellm
+        info = litellm.get_model_info(model_id)
+        return info.get("max_input_tokens", 200000)
+    except Exception:
+        return 200000
+
 def fetch_claude_models(api_key: str = None, base_url: str = None) -> list[dict]:
     """Fetch available models from the Anthropic API and update cache."""
     try:
@@ -120,7 +133,7 @@ def fetch_claude_models(api_key: str = None, base_url: str = None) -> list[dict]
             models.append({
                 "id": model.id,
                 "name": model.display_name,
-                "context_window": 200000,
+                "context_window": _get_context_window(model.id),
             })
         _claude_models_cache.clear()
         _claude_models_cache.extend(models)
@@ -967,6 +980,9 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             chat_model_id = None
 
         env = {}
+        api_key = claude_settings.get('api_key', '')
+        if api_key != '':
+            env['ANTHROPIC_API_KEY'] = api_key
         base_url = claude_settings.get('base_url', '')
         if base_url != '':
             env['ANTHROPIC_BASE_URL'] = base_url

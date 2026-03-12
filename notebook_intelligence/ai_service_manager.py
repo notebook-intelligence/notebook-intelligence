@@ -12,7 +12,7 @@ from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, Inl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
-from notebook_intelligence.claude import CLAUDE_CODE_CHAT_PARTICIPANT_ID, ClaudeCodeChatParticipant, ClaudeCodeInlineCompletionModel, _claude_models_cache
+from notebook_intelligence.claude import CLAUDE_CODE_CHAT_PARTICIPANT_ID, ClaudeCodeChatParticipant, ClaudeCodeInlineCompletionModel, get_claude_models
 from notebook_intelligence.llm_providers.github_copilot_llm_provider import GitHubCopilotLLMProvider
 from notebook_intelligence.llm_providers.litellm_compatible_llm_provider import LiteLLMCompatibleLLMProvider
 from notebook_intelligence.llm_providers.ollama_llm_provider import OllamaLLMProvider
@@ -253,7 +253,7 @@ class AIServiceManager(Host):
 
     @property
     def claude_models(self) -> list[dict]:
-        return _claude_models_cache
+        return get_claude_models()
 
     # prompt format: @participant /command input
     # or /mcp:server_name:prompt_name input
