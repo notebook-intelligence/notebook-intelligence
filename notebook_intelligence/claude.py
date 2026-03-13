@@ -999,7 +999,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             can_use_tool=custom_permission_handler,
             env=env,
             max_buffer_size=CLAUDE_CODE_MAX_BUFFER_SIZE,
-            continue_conversation=continue_conversation
+            continue_conversation=continue_conversation,
+            cli_path=os.getenv("NBI_CLAUDE_CLI_PATH", None)
         )
         return client_options
 
