@@ -7,6 +7,7 @@ import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
 from pathlib import Path
 import subprocess
+import shlex
 
 from notebook_intelligence.util import get_jupyter_root_dir
 
@@ -533,9 +534,9 @@ async def execute_command(command: str, working_directory: str = ".", **args) ->
             return f"'{working_directory}' is not a directory"
         
         # Execute command
+        cmd_list = shlex.split(command)
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_list,
             cwd=str(work_dir),
             capture_output=True,
             text=True,
@@ -584,7 +585,16 @@ async def run_command_in_embedded_terminal(command: str, working_directory: str 
     try:
         response = args["response"]
         # run the command in a bash process and stream the output to the response
-        process = subprocess.Popen(command, shell=True, cwd=working_directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        cmd_list = shlex.split(command)
+        process = subprocess.Popen(
+            cmd_list,
+            shell=False,
+            cwd=working_directory,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
         response.stream(MarkdownPartData("<terminal-output>"))
         for line in process.stdout:
             response.stream(MarkdownPartData(line + "\n"))
