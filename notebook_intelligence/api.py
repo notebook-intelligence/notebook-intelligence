@@ -806,6 +806,7 @@ class TelemetryEventType(str, Enum):
     ChatResponse = 'chat-response'
     InlineChatResponse = 'inline-chat-response'
     InlineCompletionResponse = 'inline-completion-response'
+    Feedback = 'feedback'
 
 class TelemetryEvent:
     @property
