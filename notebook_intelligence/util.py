@@ -92,6 +92,10 @@ def get_enabled_builtin_tools_in_env() -> Set[str]:
 def is_builtin_tool_enabled_in_env(tool: str) -> bool:
   return tool in get_enabled_builtin_tools_in_env()
 
+def is_provider_enabled_in_env(provider_id: str) -> bool:
+    enabled_providers = os.environ.get('NBI_ENABLED_PROVIDERS', '')
+    return provider_id in enabled_providers.split(',')
+
 class ThreadSafeWebSocketConnector():
   def __init__(self, websocket_handler):
     self.io_loop = ioloop.IOLoop.current()

@@ -78,6 +78,30 @@ This extension is composed of a Python package named `notebook_intelligence`
 for the server extension and a NPM package named `@notebook-intelligence/notebook-intelligence`
 for the frontend extension.
 
+### Disabling LLM Providers
+
+By default, all LLM providers can be selected by user dropdown. However, you can disable them and make them controlled by an environment variable.
+
+In order to disable any LLM provider use the `disabled_providers` config:
+
+```python
+c.NotebookIntelligence.disabled_providers = ["ollama","litellm-compatible","openai-compatible"]
+```
+
+Valid built-in provider values are `github-copilot`, `ollama`, `litellm-compatible`, `openai-compatible`.
+
+In order to disable a built-in provider by default but allow re-enabling using an environment variable use the `allow_enabling_providers_with_env` config:
+
+```python
+c.NotebookIntelligence.allow_enabling_providers_with_env = True
+```
+
+Then the environment variable `NBI_ENABLED_PROVIDERS` can be used to re-enable specific built-in tools.
+
+```bash
+export NBI_ENABLED_PROVIDERS=github-copilot,ollama
+```
+
 ### Remembering GitHub Copilot login
 
 Notebook Intelligence can remember your GitHub Copilot login so that you don't need to re-login after a JupyterLab or system restart. Please be aware of the security implications of using this feature.
