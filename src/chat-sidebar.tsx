@@ -1622,7 +1622,7 @@ function SidebarComponent(props: any) {
   };
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.stopPropagation();
       event.preventDefault();
       if (showPopover) {
@@ -2469,7 +2469,7 @@ function InlinePromptComponent(props: any) {
   };
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.stopPropagation();
       event.preventDefault();
       if (inputSubmitted && (event.metaKey || event.ctrlKey)) {
