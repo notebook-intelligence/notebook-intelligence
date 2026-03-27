@@ -44,6 +44,8 @@ import {
   VscStopCircle,
   VscEye,
   VscEyeClosed,
+  VscAdd,
+  VscClose,
   VscTriangleRight,
   VscTriangleDown,
   VscSettingsGear,
@@ -282,6 +284,56 @@ interface IChatMessage {
   contents: IChatMessageContent[];
   notebookLink?: string;
   participant?: IChatParticipant;
+}
+
+interface IWorkspaceFileOption {
+  name: string;
+  path: string;
+  type: string;
+}
+
+interface ISelectedContextFile {
+  content: string;
+  lineCount: number;
+  path: string;
+  type: string;
+}
+
+const MAX_VISIBLE_WORKSPACE_FILES = 50;
+const MAX_WORKSPACE_FILE_SCAN_COUNT = 1500;
+const SKIPPED_WORKSPACE_DIRECTORIES = new Set([
+  '.git',
+  '.ipynb_checkpoints',
+  '__pycache__',
+  'node_modules'
+]);
+
+function countContentLines(content: string): number {
+  if (content === '') {
+    return 1;
+  }
+
+  return content.split('\n').length;
+}
+
+function serializeWorkspaceFileContent(model: any): string {
+  if (model.type === 'directory') {
+    throw new Error('Directories cannot be attached as chat context.');
+  }
+
+  if (model.format === 'base64') {
+    throw new Error('Binary files cannot be attached as chat context.');
+  }
+
+  if (typeof model.content === 'string') {
+    return model.content;
+  }
+
+  if (model.content === null || model.content === undefined) {
+    return '';
+  }
+
+  return JSON.stringify(model.content, null, 2);
 }
 
 const answeredForms = new Map<string, string>();
@@ -778,6 +830,20 @@ function SidebarComponent(props: any) {
   const [activeDocumentInfo, setActiveDocumentInfo] =
     useState<IActiveDocumentInfo | null>(null);
   const [currentFileContextTitle, setCurrentFileContextTitle] = useState('');
+  const [selectedContextFiles, setSelectedContextFiles] = useState<
+    ISelectedContextFile[]
+  >([]);
+  const [showWorkspaceFilePicker, setShowWorkspaceFilePicker] = useState(false);
+  const [workspaceFiles, setWorkspaceFiles] = useState<IWorkspaceFileOption[]>(
+    []
+  );
+  const [workspaceFileSearch, setWorkspaceFileSearch] = useState('');
+  const [workspaceFilesLoaded, setWorkspaceFilesLoaded] = useState(false);
+  const [workspaceFilesLoading, setWorkspaceFilesLoading] = useState(false);
+  const [workspaceFilesError, setWorkspaceFilesError] = useState('');
+  const [workspaceScanLimitReached, setWorkspaceScanLimitReached] =
+    useState(false);
+  const [workspaceFileActionPath, setWorkspaceFileActionPath] = useState('');
   const telemetryEmitter: ITelemetryEmitter = props.getTelemetryEmitter();
   const [chatMode, setChatMode] = useState(NBIAPI.config.defaultChatMode);
 
@@ -822,6 +888,153 @@ function SidebarComponent(props: any) {
   const [hasExtensionTools, setHasExtensionTools] = useState(false);
   const [lastScrollTime, setLastScrollTime] = useState(0);
   const [scrollPending, setScrollPending] = useState(false);
+  const selectedContextFilePaths = useMemo(
+    () => new Set(selectedContextFiles.map(file => file.path)),
+    [selectedContextFiles]
+  );
+  const visibleWorkspaceFiles = useMemo(() => {
+    const search = workspaceFileSearch.trim().toLowerCase();
+    const filteredFiles =
+      search === ''
+        ? workspaceFiles
+        : workspaceFiles.filter(file =>
+            file.path.toLowerCase().includes(search)
+          );
+
+    return filteredFiles.slice(0, MAX_VISIBLE_WORKSPACE_FILES);
+  }, [workspaceFileSearch, workspaceFiles]);
+
+  const loadWorkspaceFiles = useCallback(async () => {
+    if (workspaceFilesLoading) {
+      return;
+    }
+
+    setWorkspaceFilesLoading(true);
+    setWorkspaceFilesError('');
+
+    const discoveredFiles: IWorkspaceFileOption[] = [];
+    const directoriesToScan = [''];
+    let limitReached = false;
+
+    try {
+      const contentsManager = props.getApp().serviceManager.contents;
+
+      while (
+        directoriesToScan.length > 0 &&
+        discoveredFiles.length < MAX_WORKSPACE_FILE_SCAN_COUNT
+      ) {
+        const currentDirectory = directoriesToScan.shift() || '';
+        const model: any = await contentsManager.get(currentDirectory, {
+          content: true
+        });
+
+        if (model.type !== 'directory' || !Array.isArray(model.content)) {
+          continue;
+        }
+
+        const entries = [...model.content].sort((lhs, rhs) =>
+          lhs.path.localeCompare(rhs.path)
+        );
+
+        for (const entry of entries) {
+          if (!entry?.path || !entry?.name) {
+            continue;
+          }
+
+          if (entry.type === 'directory') {
+            if (!SKIPPED_WORKSPACE_DIRECTORIES.has(entry.name)) {
+              directoriesToScan.push(entry.path);
+            }
+            continue;
+          }
+
+          if (entry.type === 'file' || entry.type === 'notebook') {
+            discoveredFiles.push({
+              name: entry.name,
+              path: entry.path,
+              type: entry.type
+            });
+          }
+
+          if (discoveredFiles.length >= MAX_WORKSPACE_FILE_SCAN_COUNT) {
+            limitReached = true;
+            break;
+          }
+        }
+      }
+
+      discoveredFiles.sort((lhs, rhs) => lhs.path.localeCompare(rhs.path));
+      setWorkspaceFiles(discoveredFiles);
+      setWorkspaceFilesLoaded(true);
+      setWorkspaceScanLimitReached(limitReached);
+    } catch (error: any) {
+      console.error('Failed to load workspace files.', error);
+      setWorkspaceFilesError(
+        error?.message || 'Failed to load workspace files.'
+      );
+    } finally {
+      setWorkspaceFilesLoading(false);
+    }
+  }, [props, workspaceFilesLoading]);
+
+  const handleWorkspaceFilePickerClick = async () => {
+    setShowPopover(false);
+    setShowModeTools(false);
+    const nextState = !showWorkspaceFilePicker;
+    setShowWorkspaceFilePicker(nextState);
+
+    if (nextState && !workspaceFilesLoaded) {
+      await loadWorkspaceFiles();
+    }
+  };
+
+  const handleWorkspaceFileSelection = async (file: IWorkspaceFileOption) => {
+    if (selectedContextFilePaths.has(file.path)) {
+      setSelectedContextFiles(previousFiles =>
+        previousFiles.filter(selectedFile => selectedFile.path !== file.path)
+      );
+      return;
+    }
+
+    setWorkspaceFilesError('');
+    setWorkspaceFileActionPath(file.path);
+
+    try {
+      const contentsManager = props.getApp().serviceManager.contents;
+      const model: any = await contentsManager.get(file.path, { content: true });
+      const content = serializeWorkspaceFileContent(model);
+
+      if (content.trim() === '') {
+        throw new Error('Empty files do not provide useful context.');
+      }
+
+      const nextSelectedFile: ISelectedContextFile = {
+        content,
+        lineCount: countContentLines(content),
+        path: file.path,
+        type: file.type
+      };
+
+      setSelectedContextFiles(previousFiles =>
+        [...previousFiles, nextSelectedFile].sort((lhs, rhs) =>
+          lhs.path.localeCompare(rhs.path)
+        )
+      );
+    } catch (error: any) {
+      console.error(`Failed to attach workspace file '${file.path}'.`, error);
+      setWorkspaceFilesError(
+        error?.message || `Failed to attach workspace file '${file.path}'.`
+      );
+    } finally {
+      setWorkspaceFileActionPath('');
+    }
+  };
+
+  const removeSelectedContextFile = (filePath: string) => {
+    setSelectedContextFiles(previousFiles =>
+      previousFiles.filter(file => file.path !== filePath)
+    );
+  };
 
   const cleanupRemovedToolsFromToolSelections = () => {
     const newToolSelections = { ...toolSelections };
@@ -1366,12 +1579,14 @@ function SidebarComponent(props: any) {
 
   const handleSettingsButtonClick = async () => {
     setShowModeTools(false);
+    setShowWorkspaceFilePicker(false);
     props
       .getApp()
       .commands.execute('notebook-intelligence:open-configuration-dialog');
   };
 
   const handleChatToolsButtonClick = async () => {
+    setShowWorkspaceFilePicker(false);
     if (!showModeTools) {
       NBIAPI.fetchCapabilities().then(() => {
         toolConfigRef.current = NBIAPI.config.toolConfig;
@@ -1427,6 +1642,8 @@ function SidebarComponent(props: any) {
     if (prompt.startsWith('/clear')) {
       setChatMessages([]);
       setPrompt('');
+      setSelectedContextFiles([]);
+      setShowWorkspaceFilePicker(false);
       resetChatId();
       resetPrefixSuggestions();
       setPromptHistory([]);
@@ -1446,6 +1663,7 @@ function SidebarComponent(props: any) {
     const contents: IChatMessageContent[] = [];
     const app = props.getApp();
     const additionalContext: IContextItem[] = [];
+    let currentFileUsesWholeDocument = false;
     if (contextOn && activeDocumentInfo?.filename) {
       const selection = activeDocumentInfo.selection;
       const textSelected =
@@ -1454,6 +1672,7 @@ function SidebarComponent(props: any) {
           selection.start.line === selection.end.line &&
           selection.start.column === selection.end.column
         );
+      currentFileUsesWholeDocument = !textSelected;
       additionalContext.push({
         type: ContextType.CurrentFile,
         content: props.getActiveSelectionContent(),
@@ -1466,6 +1685,26 @@ function SidebarComponent(props: any) {
         endLine: selection ? selection.end.line + 1 : 1
       });
     }
+
+    for (const file of selectedContextFiles) {
+      if (
+        currentFileUsesWholeDocument &&
+        activeDocumentInfo?.filePath === file.path
+      ) {
+        continue;
+      }
+
+      additionalContext.push({
+        type: ContextType.Custom,
+        content: file.content,
+        currentCellContents: null,
+        filePath: file.path,
+        startLine: 1,
+        endLine: file.lineCount
+      });
+    }
+
+    setShowWorkspaceFilePicker(false);
 
     submitCompletionRequest(
       {
@@ -1622,7 +1861,7 @@ function SidebarComponent(props: any) {
   };
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.stopPropagation();
       event.preventDefault();
       if (showPopover) {
@@ -1644,6 +1883,7 @@ function SidebarComponent(props: any) {
       event.preventDefault();
       setShowPopover(false);
       setShowModeTools(false);
+      setShowWorkspaceFilePicker(false);
       setSelectedPrefixSuggestionIndex(0);
     } else if (event.key === 'ArrowUp') {
       event.stopPropagation();
@@ -1728,6 +1968,7 @@ function SidebarComponent(props: any) {
   };
 
   const handleConfigurationClick = async () => {
+    setShowWorkspaceFilePicker(false);
     props
       .getApp()
       .commands.execute('notebook-intelligence:open-configuration-dialog');
@@ -1883,6 +2124,13 @@ function SidebarComponent(props: any) {
     };
   }, [activeDocumentInfo]);
 
+  useEffect(() => {
+    if (!showWorkspaceFilePicker) {
+      setWorkspaceFilesError('');
+      setWorkspaceFileSearch('');
+    }
+  }, [showWorkspaceFilePicker]);
+
   const getActiveDocumentContextTitle = (
     activeDocumentInfo: IActiveDocumentInfo
   ): string => {
@@ -2019,28 +2267,45 @@ function SidebarComponent(props: any) {
             spellCheck={false}
             value={prompt}
           />
-          {activeDocumentInfo?.filename && (
+          {(activeDocumentInfo?.filename || selectedContextFiles.length > 0) && (
             <div className="user-input-context-row">
-              <div
-                className={`user-input-context user-input-context-active-file ${contextOn ? 'on' : 'off'}`}
-              >
-                <div>{currentFileContextTitle}</div>
-                {contextOn ? (
+              {activeDocumentInfo?.filename && (
+                <div
+                  className={`user-input-context user-input-context-active-file ${contextOn ? 'on' : 'off'}`}
+                >
+                  <div>{currentFileContextTitle}</div>
+                  {contextOn ? (
+                    <div
+                      className="user-input-context-toggle"
+                      onClick={() => setContextOn(!contextOn)}
+                    >
+                      <VscEye title="Use as context" />
+                    </div>
+                  ) : (
+                    <div
+                      className="user-input-context-toggle"
+                      onClick={() => setContextOn(!contextOn)}
+                    >
+                      <VscEyeClosed title="Don't use as context" />
+                    </div>
+                  )}
+                </div>
+              )}
+              {selectedContextFiles.map(file => (
+                <div
+                  key={file.path}
+                  className="user-input-context user-input-context-selected-file on"
+                  title={file.path}
+                >
+                  <div>{file.path}</div>
                   <div
                     className="user-input-context-toggle"
-                    onClick={() => setContextOn(!contextOn)}
+                    onClick={() => removeSelectedContextFile(file.path)}
                   >
-                    <VscEye title="Use as context" />
+                    <VscClose title="Remove attached file" />
                   </div>
-                ) : (
-                  <div
-                    className="user-input-context-toggle"
-                    onClick={() => setContextOn(!contextOn)}
-                  >
-                    <VscEyeClosed title="Don't use as context" />
-                  </div>
-                )}
-              </div>
+                </div>
+              ))}
             </div>
           )}
           <div className="user-input-footer">
@@ -2058,6 +2323,14 @@ function SidebarComponent(props: any) {
                 </a>
               </div>
             )}
+            <div
+              className={`user-input-footer-button tools-button ${selectedContextFiles.length > 0 ? 'tools-button-active' : ''}`}
+              onClick={() => handleWorkspaceFilePickerClick()}
+              title="Attach workspace files as chat context"
+            >
+              <VscAdd />
+              {selectedContextFiles.length > 0 && <>{selectedContextFiles.length}</>}
+            </div>
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
               {!NBIAPI.config.isInClaudeCodeMode && (
@@ -2123,6 +2396,83 @@ function SidebarComponent(props: any) {
                   {prefix}
                 </div>
               ))}
+            </div>
+          )}
+          {showWorkspaceFilePicker && (
+            <div
+              className="workspace-file-popover"
+              tabIndex={1}
+              autoFocus={true}
+              onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation();
+                  event.preventDefault();
+                  setShowWorkspaceFilePicker(false);
+                }
+              }}
+            >
+              <div className="mode-tools-popover-header">
+                <div className="mode-tools-popover-header-icon">
+                  <VscAdd />
+                </div>
+                <div style={{ flexGrow: 1 }}></div>
+                <div
+                  className="mode-tools-popover-close-button"
+                  title="Close"
+                  onClick={() => setShowWorkspaceFilePicker(false)}
+                >
+                  <VscClose />
+                </div>
+              </div>
+              <div className="workspace-file-popover-body">
+                <input
+                  className="workspace-file-search-input"
+                  type="text"
+                  placeholder="Search files by path"
+                  value={workspaceFileSearch}
+                  onChange={event => setWorkspaceFileSearch(event.target.value)}
+                  onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+                    event.stopPropagation();
+                  }}
+                />
+                {workspaceFilesError && (
+                  <div className="workspace-file-popover-status error">
+                    {workspaceFilesError}
+                  </div>
+                )}
+                {workspaceScanLimitReached && (
+                  <div className="workspace-file-popover-status">
+                    Showing the first {MAX_WORKSPACE_FILE_SCAN_COUNT} files found
+                    in the workspace.
+                  </div>
+                )}
+                {workspaceFilesLoading ? (
+                  <div className="workspace-file-popover-status">
+                    Loading workspace files...
+                  </div>
+                ) : visibleWorkspaceFiles.length > 0 ? (
+                  <div className="mode-tools-popover-tool-list">
+                    {visibleWorkspaceFiles.map(file => (
+                      <CheckBoxItem
+                        key={file.path}
+                        checked={selectedContextFilePaths.has(file.path)}
+                        disabled={workspaceFileActionPath === file.path}
+                        label={file.path}
+                        onClick={() => handleWorkspaceFileSelection(file)}
+                        tooltip={
+                          file.type === 'notebook' ? 'Notebook file' : 'Text file'
+                        }
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="workspace-file-popover-status">
+                    {workspaceFilesLoaded
+                      ? 'No matching files found.'
+                      : 'No workspace files available.'}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {showModeTools && (
@@ -2469,7 +2819,7 @@ function InlinePromptComponent(props: any) {
   };
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.stopPropagation();
       event.preventDefault();
       if (inputSubmitted && (event.metaKey || event.ctrlKey)) {
