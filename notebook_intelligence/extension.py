@@ -31,6 +31,43 @@ log = logging.getLogger(__name__)
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
+
+def _truncate_context_content(content: str, token_budget: int) -> str:
+    if token_budget <= 0 or content == '':
+        return ''
+
+    encoded = tiktoken_encoding.encode(content)
+    if len(encoded) <= token_budget:
+        return content
+
+    truncated = tiktoken_encoding.decode(encoded[:token_budget]).rstrip()
+    if truncated == '':
+        return ''
+
+    return truncated + "\n...[truncated]"
+
+
+def _build_additional_context_message(
+    file_path: str,
+    context_filename: str,
+    start_line: int,
+    end_line: int,
+    context_content: str,
+    current_cell_context: str = ''
+) -> str:
+    message = (
+        f"This file was provided as additional context: '{context_filename}' "
+        f"at path '{file_path}', lines: {start_line} - {end_line}."
+    )
+
+    if current_cell_context:
+        message += f" {current_cell_context}"
+
+    if context_content != '':
+        message += f"\n\nFile contents:\n```\n{context_content}\n```"
+
+    return message
+
 class GetCapabilitiesHandler(APIHandler):
     disabled_tools = []
     allow_enabling_tools_with_env = False
@@ -637,7 +674,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 chat_history.append({"role": "user", "content": current_directory_file_msg})
 
             token_limit = 100 if ai_service_manager.chat_model is None else ai_service_manager.chat_model.context_window
-            token_budget =  0.8 * token_limit
+            remaining_token_budget = int(0.8 * token_limit)
 
             for context in additionalContext:
                 file_path = context["filePath"]
@@ -649,12 +686,29 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 current_cell_input = current_cell_contents["input"] if current_cell_contents is not None else ""
                 current_cell_output = current_cell_contents["output"] if current_cell_contents is not None else ""
                 current_cell_context = f"This is a Jupyter notebook and currently selected cell input is: ```{current_cell_input}``` and currently selected cell output is: ```{current_cell_output}```. If user asks a question about 'this' cell then assume that user is referring to currently selected cell." if current_cell_contents is not None else ""
-                context_content = context["content"]
-                token_count = len(tiktoken_encoding.encode(context_content))
-                if token_count > token_budget:
-                    context_content = context_content[:int(token_budget)] + "..."
+                context_content = context.get("content", "")
 
-                chat_history.append({"role": "user", "content": f"This file was provided as additional context: '{context_filename}' at path '{file_path}', lines: {start_line} - {end_line}. {current_cell_context}"})
+                if context_content:
+                    context_content = _truncate_context_content(
+                        context_content,
+                        remaining_token_budget
+                    )
+
+                if context_content == "" and remaining_token_budget <= 0:
+                    break
+
+                context_message = _build_additional_context_message(
+                    file_path=file_path,
+                    context_filename=context_filename,
+                    start_line=start_line,
+                    end_line=end_line,
+                    context_content=context_content,
+                    current_cell_context=current_cell_context
+                )
+                remaining_token_budget -= len(
+                    tiktoken_encoding.encode(context_message)
+                )
+                chat_history.append({"role": "user", "content": context_message})
 
             chat_history.append({"role": "user", "content": prompt})
 

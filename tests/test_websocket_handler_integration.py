@@ -209,3 +209,58 @@ class TestWebsocketHandlerIntegration:
         
         # Verify thread was started
         mock_thread.assert_called_once()
+
+    @patch('notebook_intelligence.extension.ai_service_manager')
+    @patch('notebook_intelligence.extension.NotebookIntelligence')
+    @patch('notebook_intelligence.extension.threading.Thread')
+    def test_on_message_additional_context_includes_file_contents(self, mock_thread, mock_nb_intel, mock_ai_manager):
+        """Test that additional context file contents are forwarded into chat history."""
+        mock_nb_intel.root_dir = "/workspace"
+        mock_ai_manager.handle_chat_request = Mock()
+        mock_ai_manager.is_claude_code_mode = False
+        mock_ai_manager.chat_model = Mock()
+        mock_ai_manager.chat_model.context_window = 4096
+
+        mock_factory = Mock(spec=RuleContextFactory)
+        mock_factory.create.return_value = Mock(spec=RuleContext)
+
+        with patch('notebook_intelligence.extension.ThreadSafeWebSocketConnector'):
+            handler = WebsocketCopilotHandler(
+                self._create_mock_application(),
+                self._create_mock_request(),
+                context_factory=mock_factory
+            )
+
+        message = {
+            'id': 'test-message-id',
+            'type': 'chat-request',
+            'data': {
+                'chatId': 'test-chat-id',
+                'prompt': 'Summarize the attached files',
+                'language': 'python',
+                'filename': 'notebook.ipynb',
+                'chatMode': 'ask',
+                'toolSelections': {},
+                'additionalContext': [
+                    {
+                        'filePath': 'src/example.py',
+                        'content': 'def greet():\n    return "hi"\n',
+                        'currentCellContents': None,
+                        'startLine': 1,
+                        'endLine': 2
+                    }
+                ]
+            }
+        }
+
+        handler.on_message(json.dumps(message))
+
+        mock_ai_manager.handle_chat_request.assert_called_once()
+        chat_request = mock_ai_manager.handle_chat_request.call_args[0][0]
+
+        assert len(chat_request.chat_history) == 1
+        context_message = chat_request.chat_history[0]["content"]
+        assert "src/example.py" in context_message
+        assert "File contents:" in context_message
+        assert 'def greet()' in context_message
+        assert 'return "hi"' in context_message
