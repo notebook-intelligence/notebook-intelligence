@@ -16,6 +16,7 @@ class LiteLLMCompatibleChatModel(ChatModel):
             LLMProviderProperty("base_url", "Base URL", "Base URL", "", False),
             LLMProviderProperty("api_key", "API key", "API key", "", True),
             LLMProviderProperty("context_window", "Context window", "Context window length", "", True),
+            LLMProviderProperty("verify_ssl", "Verify SSL", "Verify SSL certificates (disable for self-signed certificates)", "true", True),
         ]
 
     @property
@@ -42,6 +43,16 @@ class LiteLLMCompatibleChatModel(ChatModel):
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
         api_key = api_key_prop.value if api_key_prop is not None else None
+
+        # Read SSL verification setting (default to True for security)
+        verify_ssl_prop = self.get_property("verify_ssl")
+        verify_ssl = True
+        if verify_ssl_prop is not None and verify_ssl_prop.value:
+            verify_ssl = verify_ssl_prop.value.lower() not in ('false', '0', 'no', 'off')
+
+        # Set SSL verification on litellm module
+        litellm.ssl_verify = verify_ssl
+
         litellm_resp = litellm.completion(
             model=model_id,
             messages=messages.copy(),
@@ -77,6 +88,7 @@ class LiteLLMCompatibleInlineCompletionModel(InlineCompletionModel):
             LLMProviderProperty("base_url", "Base URL", "Base URL", "", False),
             LLMProviderProperty("api_key", "API key", "API key", "", True),
             LLMProviderProperty("context_window", "Context window", "Context window length", "", True),
+            LLMProviderProperty("verify_ssl", "Verify SSL", "Verify SSL certificates (disable for self-signed certificates)", "true", True),
         ]
 
     @property
@@ -102,16 +114,62 @@ class LiteLLMCompatibleInlineCompletionModel(InlineCompletionModel):
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
         api_key = api_key_prop.value if api_key_prop is not None else None
-        litellm_resp = litellm.completion(
-            model=model_id,
-            prompt=prefix,
-            suffix=suffix,
-            stream=False,
-            api_base=base_url,
-            api_key=api_key,
-        )
 
-        return litellm_resp.choices[0].message.content
+        # Read SSL verification setting (default to True for security)
+        verify_ssl_prop = self.get_property("verify_ssl")
+        verify_ssl = True
+        if verify_ssl_prop is not None and verify_ssl_prop.value:
+            verify_ssl = verify_ssl_prop.value.lower() not in ('false', '0', 'no', 'off')
+
+        # Set SSL verification on litellm module
+        litellm.ssl_verify = verify_ssl
+
+        # Try FIM format first (for models that support fill-in-the-middle)
+        try:
+            litellm_resp = litellm.completion(
+                model=model_id,
+                prompt=prefix,
+                suffix=suffix,
+                stream=False,
+                api_base=base_url,
+                api_key=api_key,
+            )
+            return litellm_resp.choices[0].message.content
+        except Exception as e:
+            # Fall back to chat format for models that don't support FIM
+            prompt_text = f"You are an autocomplete engine. Complete the {language} code at the cursor position. "
+            prompt_text += f"Return ONLY the raw code to insert at the cursor. No markdown, no code blocks, no explanations.\n\n"
+            prompt_text += f"Code before cursor:\n{prefix}\n\n"
+            if suffix:
+                prompt_text += f"Code after cursor:\n{suffix}\n\n"
+            prompt_text += "Complete the code at the cursor position with ONLY raw code:"
+
+            messages = [
+                {"role": "user", "content": prompt_text}
+            ]
+
+            litellm_resp = litellm.completion(
+                model=model_id,
+                messages=messages,
+                stream=False,
+                api_base=base_url,
+                api_key=api_key,
+            )
+
+            completion = litellm_resp.choices[0].message.content
+
+            # Strip markdown code blocks if present
+            if completion.startswith("```"):
+                # Remove opening code fence
+                lines = completion.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                # Remove closing code fence
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                completion = "\n".join(lines)
+
+            return completion
 
 class LiteLLMCompatibleLLMProvider(LLMProvider):
     def __init__(self):
