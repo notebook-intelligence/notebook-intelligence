@@ -23,7 +23,7 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env, is_feedback_enabled_in_env
 from notebook_intelligence.context_factory import RuleContextFactory
 
 ai_service_manager: AIServiceManager = None
@@ -36,6 +36,7 @@ class GetCapabilitiesHandler(APIHandler):
     allow_enabling_tools_with_env = False
     disabled_providers = []
     allow_enabling_providers_with_env = False
+    allow_enabling_feedback_with_env = False
 
     @tornado.web.authenticated
     def get(self):
@@ -89,6 +90,8 @@ class GetCapabilitiesHandler(APIHandler):
         # sort by extension id
         extensions.sort(key=lambda extension: extension["id"])
 
+        feedback_enabled = self.allow_enabling_feedback_with_env and is_feedback_enabled_in_env()
+
         response = {
             "user_home_dir": os.path.expanduser('~'),
             "nbi_user_config_dir": nbi_config.nbi_user_dir,
@@ -111,7 +114,8 @@ class GetCapabilitiesHandler(APIHandler):
             "mcp_server_settings": nbi_config.mcp_server_settings,
             "claude_settings": nbi_config.claude_settings,
             "claude_models": ai_service_manager.claude_models,
-            "default_chat_mode": nbi_config.default_chat_mode
+            "default_chat_mode": nbi_config.default_chat_mode,
+            "feedback_enabled": feedback_enabled
         }
         for participant_id in ai_service_manager.chat_participants:
             participant = ai_service_manager.chat_participants[participant_id]
@@ -216,6 +220,7 @@ class EmitTelemetryEventHandler(APIHandler):
     @tornado.web.authenticated
     def post(self):
         event = json.loads(self.request.body)
+        log.debug(f"Telemetry event received: type={event.get('type')}, data={json.dumps(event.get('data', {}))}")
         thread = threading.Thread(target=asyncio.run, args=(ai_service_manager.emit_telemetry_event(event),))
         thread.start()
         self.finish(json.dumps({}))
@@ -829,6 +834,15 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    allow_enabling_feedback_with_env = Bool(
+        default_value=False,
+        help="""
+        Allow enabling feedback feature with environment variable (NBI_ENABLED_FEEDBACK).
+        """,
+        allow_none=True,
+        config=True,
+    )
+
     def initialize_settings(self):
         pass
 
@@ -873,6 +887,7 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
         GetCapabilitiesHandler.disabled_providers = self.disabled_providers
         GetCapabilitiesHandler.allow_enabling_providers_with_env = self.allow_enabling_providers_with_env
+        GetCapabilitiesHandler.allow_enabling_feedback_with_env = self.allow_enabling_feedback_with_env
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),

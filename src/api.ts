@@ -134,6 +134,10 @@ export class NBIConfig {
     return this.claudeSettings.enabled === true;
   }
 
+  get feedbackEnabled(): boolean {
+    return this.capabilities.feedback_enabled === true;
+  }
+
   capabilities: any = {};
   chatParticipants: IChatParticipant[] = [];
 

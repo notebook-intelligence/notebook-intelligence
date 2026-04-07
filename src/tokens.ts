@@ -128,7 +128,8 @@ export enum TelemetryEventType {
   InlineChatRequest = 'inline-chat-request',
   ChatResponse = 'chat-response',
   InlineChatResponse = 'inline-chat-response',
-  InlineCompletionResponse = 'inline-completion-response'
+  InlineCompletionResponse = 'inline-completion-response',
+  Feedback = 'feedback'
 }
 
 export interface ITelemetryEvent {
