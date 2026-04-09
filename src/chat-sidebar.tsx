@@ -2506,7 +2506,7 @@ function SidebarComponent(props: any) {
                 </div>
                 <div style={{ flexGrow: 1 }}></div>
                 <div
-                  className="mode-tools-popover-close-button"
+                  className="mode-tools-popover-button mode-tools-popover-close-button"
                   title="Close"
                   onClick={() => setShowWorkspaceFilePicker(false)}
                 >
@@ -2603,7 +2603,7 @@ function SidebarComponent(props: any) {
                   </div>
                 </div>
                 <div
-                  className="mode-tools-popover-close-button"
+                  className="mode-tools-popover-button mode-tools-popover-done-button"
                   onClick={() => setShowModeTools(false)}
                 >
                   {/* <button

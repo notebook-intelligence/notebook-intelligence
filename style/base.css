@@ -111,11 +111,6 @@
   font-style: italic;
 }
 
-.user-input-context-selected-file {
-  background-color: rgb(42 114 181 / 8%);
-  border-color: var(--jp-brand-color1);
-}
-
 .user-input-context-toggle {
   cursor: pointer;
 }
@@ -484,22 +479,32 @@ pre:has(.code-block-header) {
   height: 16px;
 }
 
-.mode-tools-popover-close-button {
+.mode-tools-popover-button {
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  width: 24px;
+  width: auto;
   height: 24px;
   color: white;
   background-color: var(--jp-brand-color0);
-  padding: 0;
+  padding-right: 6px;
   border-radius: 2px;
 }
 
-.mode-tools-popover-close-button svg {
+.mode-tools-popover-button svg {
   width: 16px;
   height: 16px;
+  padding: 4px;
+  margin-top: 2px;
+}
+
+.mode-tools-popover-close-button {
+  width: 24px;
+  padding: 0;
+}
+
+.mode-tools-popover-close-button svg {
   padding: 0;
   margin: 0;
 }
