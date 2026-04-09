@@ -755,58 +755,68 @@ function ChatResponse(props: any) {
           </a>
         )}
       </div>
-      {msg.from === 'copilot' && !props.showGenerating && NBIAPI.config.feedbackEnabled && (
-        <div className="chat-message-feedback">
-          <button
-            className={`chat-feedback-btn ${msg.feedback === 'positive' ? 'selected' : ''}`}
-            onClick={() => {
-              props.onFeedback(msg.id, 'positive');
-              if (msg.feedback !== 'positive') {
-                props.telemetryEmitter.emitTelemetryEvent({
-                  type: TelemetryEventType.Feedback,
-                  data: {
-                    sentiment: 'positive',
-                    chatId: props.chatId,
-                    messageId: msg.id,
-                    model: msg.chatModel,
-                    participant: msg.participant?.id,
-                    timestamp: new Date().toISOString()
-                  }
-                });
-              }
-            }}
-            aria-label="Rate as helpful"
-            aria-pressed={msg.feedback === 'positive'}
-            title="Helpful"
-          >
-            {msg.feedback === 'positive' ? <VscThumbsupFilled /> : <VscThumbsup />}
-          </button>
-          <button
-            className={`chat-feedback-btn ${msg.feedback === 'negative' ? 'selected' : ''}`}
-            onClick={() => {
-              props.onFeedback(msg.id, 'negative');
-              if (msg.feedback !== 'negative') {
-                props.telemetryEmitter.emitTelemetryEvent({
-                  type: TelemetryEventType.Feedback,
-                  data: {
-                    sentiment: 'negative',
-                    chatId: props.chatId,
-                    messageId: msg.id,
-                    model: msg.chatModel,
-                    participant: msg.participant?.id,
-                    timestamp: new Date().toISOString()
-                  }
-                });
-              }
-            }}
-            aria-label="Rate as unhelpful"
-            aria-pressed={msg.feedback === 'negative'}
-            title="Not helpful"
-          >
-            {msg.feedback === 'negative' ? <VscThumbsdownFilled /> : <VscThumbsdown />}
-          </button>
-        </div>
-      )}
+      {msg.from === 'copilot' &&
+        !props.showGenerating &&
+        NBIAPI.config.feedbackEnabled && (
+          <div className="chat-message-feedback">
+            <button
+              className={`chat-feedback-btn ${msg.feedback === 'positive' ? 'selected' : ''}`}
+              onClick={() => {
+                props.onFeedback(msg.id, 'positive');
+                if (msg.feedback !== 'positive') {
+                  props.telemetryEmitter.emitTelemetryEvent({
+                    type: TelemetryEventType.Feedback,
+                    data: {
+                      sentiment: 'positive',
+                      chatId: props.chatId,
+                      messageId: msg.id,
+                      model: msg.chatModel,
+                      participant: msg.participant?.id,
+                      timestamp: new Date().toISOString()
+                    }
+                  });
+                }
+              }}
+              aria-label="Rate as helpful"
+              aria-pressed={msg.feedback === 'positive'}
+              title="Helpful"
+            >
+              {msg.feedback === 'positive' ? (
+                <VscThumbsupFilled />
+              ) : (
+                <VscThumbsup />
+              )}
+            </button>
+            <button
+              className={`chat-feedback-btn ${msg.feedback === 'negative' ? 'selected' : ''}`}
+              onClick={() => {
+                props.onFeedback(msg.id, 'negative');
+                if (msg.feedback !== 'negative') {
+                  props.telemetryEmitter.emitTelemetryEvent({
+                    type: TelemetryEventType.Feedback,
+                    data: {
+                      sentiment: 'negative',
+                      chatId: props.chatId,
+                      messageId: msg.id,
+                      model: msg.chatModel,
+                      participant: msg.participant?.id,
+                      timestamp: new Date().toISOString()
+                    }
+                  });
+                }
+              }}
+              aria-label="Rate as unhelpful"
+              aria-pressed={msg.feedback === 'negative'}
+              title="Not helpful"
+            >
+              {msg.feedback === 'negative' ? (
+                <VscThumbsdownFilled />
+              ) : (
+                <VscThumbsdown />
+              )}
+            </button>
+          </div>
+        )}
     </div>
   );
 }
@@ -1072,7 +1082,9 @@ function SidebarComponent(props: any) {
 
     try {
       const contentsManager = props.getApp().serviceManager.contents;
-      const model: any = await contentsManager.get(file.path, { content: true });
+      const model: any = await contentsManager.get(file.path, {
+        content: true
+      });
       const content = serializeWorkspaceFileContent(model);
 
       if (content.trim() === '') {
@@ -1917,7 +1929,9 @@ function SidebarComponent(props: any) {
     (messageId: string, sentiment: 'positive' | 'negative') => {
       setChatMessages(prev =>
         prev.map(m => {
-          if (m.id !== messageId) return m;
+          if (m.id !== messageId) {
+            return m;
+          }
           const newFeedback = m.feedback === sentiment ? undefined : sentiment;
           return { ...m, feedback: newFeedback };
         })
@@ -2356,7 +2370,8 @@ function SidebarComponent(props: any) {
             spellCheck={false}
             value={prompt}
           />
-          {(activeDocumentInfo?.filename || selectedContextFiles.length > 0) && (
+          {(activeDocumentInfo?.filename ||
+            selectedContextFiles.length > 0) && (
             <div className="user-input-context-row">
               {activeDocumentInfo?.filename && (
                 <div
@@ -2418,7 +2433,9 @@ function SidebarComponent(props: any) {
               title="Attach workspace files as context"
             >
               <VscAdd />
-              {selectedContextFiles.length > 0 && <>{selectedContextFiles.length}</>}
+              {selectedContextFiles.length > 0 && (
+                <>{selectedContextFiles.length}</>
+              )}
             </div>
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
@@ -2534,8 +2551,8 @@ function SidebarComponent(props: any) {
                 )}
                 {workspaceScanLimitReached && (
                   <div className="workspace-file-popover-status">
-                    Showing the first {MAX_WORKSPACE_FILE_SCAN_COUNT} files found
-                    in the workspace.
+                    Showing the first {MAX_WORKSPACE_FILE_SCAN_COUNT} files
+                    found in the workspace.
                   </div>
                 )}
                 {workspaceFilesLoading ? (
@@ -2552,7 +2569,9 @@ function SidebarComponent(props: any) {
                         label={file.path}
                         onClick={() => handleWorkspaceFileSelection(file)}
                         tooltip={
-                          file.type === 'notebook' ? 'Notebook file' : 'Text file'
+                          file.type === 'notebook'
+                            ? 'Notebook file'
+                            : 'Text file'
                         }
                       />
                     ))}

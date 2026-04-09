@@ -82,9 +82,8 @@
 
 .sidebar-user-input .user-input-context-row {
   display: flex;
-  flex-direction: row;
   align-items: center;
-  flex-wrap: wrap;
+  flex-flow: row wrap;
   gap: 4px;
   margin-bottom: 4px;
 }
@@ -286,17 +285,14 @@ pre:has(.code-block-header) {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 0 4px 0;
+  padding: 2px 0 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
 
-.chat-message:hover .chat-message-feedback,
-.chat-message-feedback:focus-within {
-  opacity: 1;
-}
-
-.chat-message-feedback:has(.selected) {
+.chat-message-feedback:focus-within,
+.chat-message-feedback:has(.selected),
+.chat-message:hover .chat-message-feedback {
   opacity: 1;
 }
 
@@ -310,7 +306,9 @@ pre:has(.code-block-header) {
   padding: 3px;
   cursor: pointer;
   color: var(--jp-ui-font-color2);
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .chat-feedback-btn:hover {
