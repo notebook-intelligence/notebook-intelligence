@@ -84,6 +84,9 @@
   display: flex;
   flex-direction: row;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
 }
 
 .user-input-context {
@@ -94,11 +97,23 @@
   padding: 2px;
   gap: 5px;
   font-size: 11px;
+  max-width: 100%;
+}
+
+.user-input-context > div:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-input-context.off {
   color: var(--jp-ui-font-color2);
   font-style: italic;
+}
+
+.user-input-context-selected-file {
+  background-color: rgb(42 114 181 / 8%);
+  border-color: var(--jp-brand-color1);
 }
 
 .user-input-context-toggle {
@@ -401,7 +416,8 @@ pre:has(.code-block-header) {
 }
 
 .user-input-autocomplete,
-.mode-tools-popover {
+.mode-tools-popover,
+.workspace-file-popover {
   display: flex;
   background-color: var(--jp-layout-color2);
   border: 1px solid var(--jp-border-color1);
@@ -428,6 +444,14 @@ pre:has(.code-block-header) {
   box-shadow: var(--jp-brand-color0) 0 0 1px 1px;
   display: flex;
   flex-direction: column;
+}
+
+.workspace-file-popover {
+  width: calc(100% - 10px);
+  /* stylelint-disable */
+  max-height: min(calc(100% - 220px), 420px);
+  /* stylelint-enable */
+  box-shadow: var(--jp-brand-color0) 0 0 1px 1px;
 }
 
 .mode-tools-popover-title {
@@ -463,25 +487,58 @@ pre:has(.code-block-header) {
 .mode-tools-popover-close-button {
   display: flex;
   align-items: center;
+  justify-content: center;
   cursor: pointer;
-  width: auto;
+  width: 24px;
   height: 24px;
   color: white;
   background-color: var(--jp-brand-color0);
-  padding-right: 6px;
+  padding: 0;
   border-radius: 2px;
 }
 
 .mode-tools-popover-close-button svg {
   width: 16px;
   height: 16px;
-  padding: 4px;
-  margin-top: 2px;
+  padding: 0;
+  margin: 0;
 }
 
 .mode-tools-popover-tool-list {
   flex-grow: 1;
   overflow-y: auto;
+}
+
+.workspace-file-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+
+.workspace-file-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--jp-layout-color1);
+  color: var(--jp-ui-font-color1);
+  border: 1px solid var(--jp-border-color1);
+  padding: 6px 8px;
+  outline: none;
+}
+
+.workspace-file-search-input:focus {
+  border-color: var(--jp-brand-color1);
+}
+
+.workspace-file-popover-status {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--jp-ui-font-color2);
+}
+
+.workspace-file-popover-status.error {
+  color: var(--jp-error-color1);
 }
 
 .mode-tools-group {
@@ -860,6 +917,7 @@ svg.access-token-warning {
 }
 
 .checkbox-icon {
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
   color: var(--jp-brand-color1);
@@ -873,6 +931,13 @@ svg.access-token-warning {
   margin: 0 2px;
   padding: 3px 2px;
   color: var(--jp-ui-font-color1);
+}
+
+.checkbox-item-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .checkbox-item-header .checkbox-item-toggle {
