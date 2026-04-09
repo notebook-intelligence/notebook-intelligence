@@ -2415,7 +2415,7 @@ function SidebarComponent(props: any) {
             <div
               className={`user-input-footer-button tools-button ${selectedContextFiles.length > 0 ? 'tools-button-active' : ''}`}
               onClick={() => handleWorkspaceFilePickerClick()}
-              title="Attach workspace files as chat context"
+              title="Attach workspace files as context"
             >
               <VscAdd />
               {selectedContextFiles.length > 0 && <>{selectedContextFiles.length}</>}
@@ -2503,6 +2503,9 @@ function SidebarComponent(props: any) {
               <div className="mode-tools-popover-header">
                 <div className="mode-tools-popover-header-icon">
                   <VscAdd />
+                </div>
+                <div className="mode-tools-popover-title">
+                  Add files as context
                 </div>
                 <div style={{ flexGrow: 1 }}></div>
                 <div
