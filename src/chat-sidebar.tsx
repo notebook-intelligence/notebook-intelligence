@@ -573,7 +573,8 @@ function ChatResponse(props: any) {
                     getApp={props.getApp}
                     getActiveDocumentInfo={props.getActiveDocumentInfo}
                   >
-                    {item.content}
+                    {/* fix for newlines in user input */}
+                    {item.content.replace(/\n/gi, '  \n')}
                   </MarkdownRenderer>
                   {item.contentDetail ? (
                     <div className="expandable-content expanded">
