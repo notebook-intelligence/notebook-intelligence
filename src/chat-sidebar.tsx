@@ -758,7 +758,7 @@ function ChatResponse(props: any) {
       </div>
       {msg.from === 'copilot' &&
         !props.showGenerating &&
-        NBIAPI.config.feedbackEnabled && (
+        NBIAPI.config.chatFeedbackEnabled && (
           <div className="chat-message-feedback">
             <button
               className={`chat-feedback-btn ${msg.feedback === 'positive' ? 'selected' : ''}`}

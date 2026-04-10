@@ -134,8 +134,8 @@ export class NBIConfig {
     return this.claudeSettings.enabled === true;
   }
 
-  get feedbackEnabled(): boolean {
-    return this.capabilities.feedback_enabled === true;
+  get chatFeedbackEnabled(): boolean {
+    return this.capabilities.chat_feedback_enabled === true;
   }
 
   capabilities: any = {};

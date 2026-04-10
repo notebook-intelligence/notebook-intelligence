@@ -102,6 +102,22 @@ Then the environment variable `NBI_ENABLED_PROVIDERS` can be used to re-enable s
 export NBI_ENABLED_PROVIDERS=github-copilot,ollama
 ```
 
+### Enabling Chat Feedback
+
+<img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
+
+You can enable chat feedback by setting the `enable_chat_feedback` config to `true`. You can handle feedback events in your Notebook Intelligence extension code by listening to the `telemetry` events.
+
+```python
+c.NotebookIntelligence.enable_chat_feedback = True
+```
+
+or by using the command line.
+
+```bash
+jupyter lab --NotebookIntelligence.enable_chat_feedback=true
+```
+
 ### Remembering GitHub Copilot login
 
 Notebook Intelligence can remember your GitHub Copilot login so that you don't need to re-login after a JupyterLab or system restart. Please be aware of the security implications of using this feature.
