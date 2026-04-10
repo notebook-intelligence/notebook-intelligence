@@ -96,9 +96,6 @@ def is_provider_enabled_in_env(provider_id: str) -> bool:
     enabled_providers = os.environ.get('NBI_ENABLED_PROVIDERS', '')
     return provider_id in enabled_providers.split(',')
 
-def is_feedback_enabled_in_env() -> bool:
-    return os.environ.get('NBI_ENABLED_FEEDBACK', '').strip().lower() in ('1', 'true', 'yes')
-
 class ThreadSafeWebSocketConnector():
   def __init__(self, websocket_handler):
     self.io_loop = ioloop.IOLoop.current()
