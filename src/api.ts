@@ -41,6 +41,14 @@ export interface IClaudeModelInfo {
   context_window: number;
 }
 
+export interface IClaudeSessionInfo {
+  session_id: string;
+  path: string;
+  modified_at: number;
+  created_at: number;
+  preview: string;
+}
+
 export enum ClaudeToolType {
   ClaudeCodeTools = 'claude-code:built-in-tools',
   JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
@@ -532,6 +540,35 @@ export class NBIAPI {
         }
       })
     );
+  }
+
+  static async listClaudeSessions(): Promise<IClaudeSessionInfo[]> {
+    return new Promise<IClaudeSessionInfo[]>((resolve, reject) => {
+      requestAPI<any>('claude-sessions', { method: 'GET' })
+        .then(data => {
+          resolve(data.sessions ?? []);
+        })
+        .catch(reason => {
+          console.error(`Failed to list Claude sessions.\n${reason}`);
+          reject(reason);
+        });
+    });
+  }
+
+  static async resumeClaudeSession(sessionId: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      requestAPI<any>('claude-sessions/resume', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId })
+      })
+        .then(() => {
+          resolve();
+        })
+        .catch(reason => {
+          console.error(`Failed to resume Claude session.\n${reason}`);
+          reject(reason);
+        });
+    });
   }
 
   static async emitTelemetryEvent(event: ITelemetryEvent): Promise<void> {
