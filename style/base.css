@@ -1171,3 +1171,47 @@ svg.access-token-warning {
 .claude-mode-config-dialog .form-field-description {
   color: var(--jp-ui-font-color1);
 }
+
+.claude-session-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.claude-session-picker-item {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--jp-border-color2);
+  cursor: pointer;
+}
+
+.claude-session-picker-item:hover {
+  background-color: var(--jp-layout-color1);
+}
+
+.claude-session-picker-item.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.claude-session-picker-item-preview {
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size1);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.claude-session-picker-item-meta {
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.claude-session-picker-item-id {
+  font-family: var(--jp-code-font-family);
+}
