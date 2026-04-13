@@ -366,7 +366,7 @@ def _get_upload_dir() -> str:
     global _upload_dir
     if _upload_dir is None:
         _upload_dir = tempfile.mkdtemp(prefix="nbi-uploads-")
-        atexit.register(lambda: shutil.rmtree(_upload_dir, ignore_errors=True))
+        atexit.register(lambda d=_upload_dir: shutil.rmtree(d, ignore_errors=True))
     return _upload_dir
 
 class FileUploadHandler(APIHandler):
