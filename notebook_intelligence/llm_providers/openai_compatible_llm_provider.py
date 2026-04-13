@@ -58,11 +58,18 @@ class OpenAICompatibleChatModel(ChatModel):
 
         if stream:
             for chunk in resp:
+                if len(chunk.choices) == 0:
+                    continue
+                delta = chunk.choices[0].delta
+                reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
+                if reasoning is not None:
+                    reasoning = str(reasoning)
                 response.stream({
                         "choices": [{
                             "delta": {
-                                "role": chunk.choices[0].delta.role,
-                                "content": chunk.choices[0].delta.content
+                                "role": delta.role,
+                                "content": delta.content,
+                                "reasoning_content": reasoning
                             }
                         }]
                     })
@@ -70,6 +77,12 @@ class OpenAICompatibleChatModel(ChatModel):
             return
         else:
             json_resp = json.loads(resp.model_dump_json())
+            # Capture reasoning fields if they exist as extra attributes
+            for i, choice in enumerate(resp.choices):
+                message = choice.message
+                reasoning = getattr(message, 'reasoning_content', None) or getattr(message, 'reasoning', None)
+                if reasoning:
+                    json_resp['choices'][i]['message']['reasoning_content'] = str(reasoning)
             return json_resp
     
 class OpenAICompatibleInlineCompletionModel(InlineCompletionModel):
