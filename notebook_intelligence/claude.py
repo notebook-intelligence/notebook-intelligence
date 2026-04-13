@@ -410,22 +410,52 @@ class ClaudeCodeClient():
 
                             if not already_handled and not request.cancel_token.is_cancel_requested:
                                 await client.query(client_query)
+                                
+                                streamed_lengths = {} # track length per block index or id
+                                
                                 async for message in client.receive_response():
                                     if request.cancel_token.is_cancel_requested:
                                         continue
                                     if isinstance(message, AssistantMessage):
-                                        for block in message.content:
+                                        for i, block in enumerate(message.content):
                                             if isinstance(block, TextBlock):
-                                                response.stream(MarkdownData(block.text))
+                                                full_text = block.text
+                                                last_len = streamed_lengths.get(i, 0)
+                                                delta = full_text[last_len:]
+                                                if delta:
+                                                    response.stream(MarkdownPartData(content=delta))
+                                                    streamed_lengths[i] = len(full_text)
+                                            elif hasattr(block, 'thinking') or hasattr(block, 'thought') or hasattr(block, 'reasoning'):
+                                                full_thinking = getattr(block, 'thinking', getattr(block, 'thought', getattr(block, 'reasoning', '')))
+                                                last_len = streamed_lengths.get(f"thinking_{i}", 0)
+                                                delta = full_thinking[last_len:]
+                                                if delta:
+                                                    response.stream(MarkdownPartData(reasoning_content=delta))
+                                                    streamed_lengths[f"thinking_{i}"] = len(full_thinking)
+                                            elif getattr(block, 'type', None) in ['thinking', 'thought', 'reasoning']:
+                                                full_thinking = getattr(block, 'thinking', getattr(block, 'thought', getattr(block, 'reasoning', '')))
+                                                last_len = streamed_lengths.get(f"thinking_{i}", 0)
+                                                delta = full_thinking[last_len:]
+                                                if delta:
+                                                    response.stream(MarkdownPartData(reasoning_content=delta))
+                                                    streamed_lengths[f"thinking_{i}"] = len(full_thinking)
                                     elif isinstance(message, UserMessage):
                                         if isinstance(message.content, str):
                                             content = message.content
                                             content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
-                                            response.stream(MarkdownData(content))
+                                            last_len = streamed_lengths.get("user_msg", 0)
+                                            delta = content[last_len:]
+                                            if delta:
+                                                response.stream(MarkdownPartData(content=delta))
+                                                streamed_lengths["user_msg"] = len(content)
                                         elif isinstance(message.content, TextBlock):
                                             content = message.content.text
                                             content = content.replace('<local-command-stdout>', '').replace('</local-command-stdout>', '')
-                                            response.stream(MarkdownData(content))
+                                            last_len = streamed_lengths.get("user_msg_textblock", 0)
+                                            delta = content[last_len:]
+                                            if delta:
+                                                response.stream(MarkdownPartData(content=delta))
+                                                streamed_lengths["user_msg_textblock"] = len(content)
                                     else:
                                         pass
                         except Exception as e:

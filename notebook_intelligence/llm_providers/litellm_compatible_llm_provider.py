@@ -54,19 +54,32 @@ class LiteLLMCompatibleChatModel(ChatModel):
 
         if stream:
             for chunk in litellm_resp:
+                if len(chunk.choices) == 0:
+                    continue
+                delta = chunk.choices[0].delta
+                reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
+                if reasoning is not None:
+                    reasoning = str(reasoning)
                 response.stream({
                         "choices": [{
                             "delta": {
-                                "role": chunk.choices[0].delta.role,
-                                "content": chunk.choices[0].delta.content
+                                "role": delta.role,
+                                "content": delta.content,
+                                "reasoning_content": reasoning
                             }
                         }]
                     })
             response.finish()
             return
         else:
-            json_resp = json.loads(litellm_resp.model_dump_json())
-            return json_resp
+            json_resp = json.loads(litellm_resp.model_dump_json()) 
+            # Capture reasoning fields if they exist as extra attributes
+            for i, choice in enumerate(litellm_resp.choices):
+                message = choice.message
+                reasoning = getattr(message, 'reasoning_content', None) or getattr(message, 'reasoning', None)
+                if reasoning:
+                    json_resp['choices'][i]['message']['reasoning_content'] = str(reasoning)
+            return json_resp 
     
 class LiteLLMCompatibleInlineCompletionModel(InlineCompletionModel):
     def __init__(self, provider: "LiteLLMCompatibleLLMProvider"):
