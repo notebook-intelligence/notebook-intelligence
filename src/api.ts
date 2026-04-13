@@ -534,6 +534,17 @@ export class NBIAPI {
     );
   }
 
+  static async uploadFile(
+    file: File
+  ): Promise<{ serverPath: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    return requestAPI<{ serverPath: string; filename: string }>('upload-file', {
+      method: 'POST',
+      body: formData
+    });
+  }
+
   static async emitTelemetryEvent(event: ITelemetryEvent): Promise<void> {
     const assistantMode = this.config.isInClaudeCodeMode
       ? AssistantMode.Claude
