@@ -1,11 +1,14 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
+import atexit
 from dataclasses import dataclass
 import json
 from os import path
 import datetime as dt
 import os
+import shutil
+import tempfile
 from typing import Union
 import uuid
 import threading
@@ -356,6 +359,51 @@ class RulesReloadHandler(APIHandler):
             self.set_status(500)
             self.finish(json.dumps({"error": str(e)}))
 
+_upload_dir: str | None = None
+
+def _get_upload_dir() -> str:
+    """Return a temp directory for uploaded files, creating it on first call."""
+    global _upload_dir
+    if _upload_dir is None:
+        _upload_dir = tempfile.mkdtemp(prefix="nbi-uploads-")
+        atexit.register(lambda: shutil.rmtree(_upload_dir, ignore_errors=True))
+    return _upload_dir
+
+class FileUploadHandler(APIHandler):
+    """Accepts a file upload and stores it in a temp directory.
+
+    Returns the absolute server-side path so the frontend can reference it
+    in chat context and Claude Code can read it natively.
+    """
+
+    @tornado.web.authenticated
+    def post(self):
+        fileinfo = self.request.files.get("file")
+        if not fileinfo or len(fileinfo) == 0:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "No file provided"}))
+            return
+
+        upload = fileinfo[0]
+        original_name = upload.get("filename", "upload")
+        # Sanitise filename: keep only the basename to prevent path traversal.
+        safe_name = path.basename(original_name)
+        if not safe_name:
+            safe_name = "upload"
+
+        upload_id = uuid.uuid4().hex[:12]
+        dest_dir = path.join(_get_upload_dir(), upload_id)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_path = path.join(dest_dir, safe_name)
+
+        with open(dest_path, "wb") as fh:
+            fh.write(upload["body"])
+
+        self.finish(json.dumps({
+            "serverPath": dest_path,
+            "filename": safe_name,
+        }))
+
 class ChatHistory:
     """
     History of chat messages, key is chat id, value is list of messages
@@ -687,8 +735,10 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             remaining_token_budget = int(0.8 * token_limit)
 
             for context in additionalContext:
+                is_upload = context.get("isUpload", False)
                 file_path = context["filePath"]
-                file_path = path.join(NotebookIntelligence.root_dir, file_path)
+                if not is_upload:
+                    file_path = path.join(NotebookIntelligence.root_dir, file_path)
                 context_filename = path.basename(file_path)
                 start_line = context["startLine"]
                 end_line = context["endLine"]
@@ -707,14 +757,23 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                 if context_content == "" and remaining_token_budget <= 0:
                     break
 
-                context_message = _build_additional_context_message(
-                    file_path=file_path,
-                    context_filename=context_filename,
-                    start_line=start_line,
-                    end_line=end_line,
-                    context_content=context_content,
-                    current_cell_context=current_cell_context
-                )
+                # For uploaded binary files (images, PDFs, etc.) where no
+                # text content was extracted, tell Claude to read the file
+                # from disk so it can handle it natively.
+                if is_upload and context_content == "":
+                    context_message = (
+                        f"The user attached a file '{context_filename}' "
+                        f"at path '{file_path}'. Read this file to see its contents."
+                    )
+                else:
+                    context_message = _build_additional_context_message(
+                        file_path=file_path,
+                        context_filename=context_filename,
+                        start_line=start_line,
+                        end_line=end_line,
+                        context_content=context_content,
+                        current_cell_context=current_cell_context
+                    )
                 remaining_token_budget -= len(
                     tiktoken_encoding.encode(context_message)
                 )
@@ -935,6 +994,7 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_rules = url_path_join(base_url, "notebook-intelligence", "rules")
         route_pattern_rules_toggle = url_path_join(base_url, "notebook-intelligence", "rules", r"([^/]+)", "toggle")
         route_pattern_rules_reload = url_path_join(base_url, "notebook-intelligence", "rules", "reload")
+        route_pattern_upload_file = url_path_join(base_url, "notebook-intelligence", "upload-file")
         GetCapabilitiesHandler.disabled_tools = self.disabled_tools
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
         GetCapabilitiesHandler.disabled_providers = self.disabled_providers
@@ -953,6 +1013,7 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_rules, RulesListHandler),
             (route_pattern_rules_toggle, RulesToggleHandler),
             (route_pattern_rules_reload, RulesReloadHandler),
+            (route_pattern_upload_file, FileUploadHandler),
             (route_pattern_copilot, WebsocketCopilotHandler),
         ]
         web_app.add_handlers(host_pattern, NotebookIntelligence.handlers)
