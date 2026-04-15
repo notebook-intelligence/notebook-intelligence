@@ -406,6 +406,7 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         self.websocket_handler = websocket_handler
         self.chat_history = chat_history
         self.streamed_contents = []
+        self.streamed_reasoning_contents = []
 
     @property
     def chat_id(self) -> str:
@@ -419,7 +420,7 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         data_type = ResponseStreamDataType.LLMRaw if type(data) is dict else data.data_type
 
         if data_type == ResponseStreamDataType.Markdown:
-            self.chat_history.add_message(self.chatId, {"role": "assistant", "content": data.content})
+            self.chat_history.add_message(self.chatId, {"role": "assistant", "content": data.content, "reasoning_content": data.reasoning_content})
             data = {
                 "choices": [
                     {
@@ -427,6 +428,7 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                             "nbiContent": {
                                 "type": data_type,
                                 "content": data.content,
+                                "reasoning_content": data.reasoning_content,
                                 "detail": data.detail
                             },
                             "content": "",
@@ -568,13 +570,15 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
             }
         elif data_type == ResponseStreamDataType.MarkdownPart:
             content = data.content
+            reasoning_content = data.reasoning_content
             data = {
                 "choices": [
                     {
                         "delta": {
                             "nbiContent": {
                                 "type": data_type,
-                                "content": data.content
+                                "content": data.content,
+                                "reasoning_content": data.reasoning_content
                             },
                             "content": "",
                             "role": "assistant"
@@ -582,14 +586,19 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                     }
                 ]
             }
-            part = content
-            if part is not None:
-                self.streamed_contents.append(part)
+            if content is not None:
+                self.streamed_contents.append(content)
+            if reasoning_content is not None:
+                self.streamed_reasoning_contents.append(reasoning_content)
         else: # ResponseStreamDataType.LLMRaw
             if len(data.get("choices", [])) > 0:
-                part = data["choices"][0].get("delta", {}).get("content", "")
-                if part is not None:
-                    self.streamed_contents.append(part)
+                delta = data["choices"][0].get("delta", {})
+                content = delta.get("content", "")
+                reasoning_content = delta.get("reasoning_content", "")
+                if content is not None:
+                    self.streamed_contents.append(content)
+                if reasoning_content is not None:
+                    self.streamed_reasoning_contents.append(reasoning_content)
 
         self.websocket_handler.write_message({
             "id": self.messageId,
@@ -600,8 +609,9 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         })
 
     def finish(self) -> None:
-        self.chat_history.add_message(self.chatId, {"role": "assistant", "content": "".join(self.streamed_contents)})
+        self.chat_history.add_message(self.chatId, {"role": "assistant", "content": "".join(self.streamed_contents), "reasoning_content": "".join(self.streamed_reasoning_contents)})
         self.streamed_contents = []
+        self.streamed_reasoning_contents = []
         self.websocket_handler.write_message({
             "id": self.messageId,
             "participant": self.participant_id,
