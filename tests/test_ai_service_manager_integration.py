@@ -4,6 +4,10 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.rule_manager import RuleManager
 
 
+# AIServiceManager.__init__ constructs a ClaudeCodeChatParticipant whose own __init__
+# reads nbi_config.claude_settings and does `ToolType in settings.get('tools', [])`.
+# A bare Mock() returns another Mock from .get(), which isn't iterable — so every
+# mock_config in this file sets `claude_settings = {}` to keep that check happy.
 class TestAIServiceManagerIntegration:
     def test_init_with_rules_enabled(self):
         """Test AIServiceManager initialization with rules enabled."""
@@ -12,6 +16,7 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -29,6 +34,7 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})
@@ -42,6 +48,7 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -59,6 +66,7 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})
@@ -73,6 +81,7 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -91,6 +100,7 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.claude_settings = {}
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})
