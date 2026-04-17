@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock
+import asyncio
+from unittest.mock import Mock, AsyncMock
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.api import ChatRequest, ChatResponse, ChatMode, CancelToken
 from notebook_intelligence.ruleset import RuleContext
@@ -35,31 +35,30 @@ class TestBaseChatParticipantIntegration:
         assert result == "Enhanced prompt with rules"
         mock_injector.inject_rules.assert_called_once_with(base_prompt, request)
     
-    @pytest.mark.asyncio
-    async def test_handle_ask_mode_chat_request_with_rules(self):
+    def test_handle_ask_mode_chat_request_with_rules(self):
         """Test ask mode chat request handling with rule injection."""
         mock_injector = Mock(spec=RuleInjector)
         mock_injector.inject_rules.return_value = "Enhanced system prompt"
-        
+
         participant = BaseChatParticipant(rule_injector=mock_injector)
-        
+
         # Mock the chat model and host
         mock_chat_model = Mock()
         mock_chat_model.provider.name = "test-provider"
         mock_chat_model.provider.id = "test-provider"
         mock_chat_model.name = "test-model"
         mock_chat_model.completions = Mock()
-        
+
         mock_host = Mock()
         mock_host.chat_model = mock_chat_model
-        
+
         # Create request with rule context
         rule_context = RuleContext(
             filename="test.ipynb",
             kernel="python3",
             mode="ask"
         )
-        
+
         request = ChatRequest(
             host=mock_host,
             chat_mode=ChatMode("ask", "Ask"),
@@ -68,28 +67,27 @@ class TestBaseChatParticipantIntegration:
             cancel_token=Mock(spec=CancelToken),
             rule_context=rule_context
         )
-        
+
         response = Mock(spec=ChatResponse)
         response.stream = Mock()
-        
+
         # Call the method
-        await participant.handle_ask_mode_chat_request(request, response)
-        
+        asyncio.run(participant.handle_ask_mode_chat_request(request, response))
+
         # Verify rule injection was called
         mock_injector.inject_rules.assert_called_once()
-        
+
         # Verify chat model was called with enhanced prompt
         mock_chat_model.completions.assert_called_once()
         call_args = mock_chat_model.completions.call_args[0]
         messages = call_args[0]
-        
+
         # Check that the system message contains the enhanced prompt
         assert len(messages) >= 1
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "Enhanced system prompt"
-    
-    @pytest.mark.asyncio
-    async def test_handle_chat_request_agent_mode_with_rules(self):
+
+    def test_handle_chat_request_agent_mode_with_rules(self):
         """Test agent mode chat request handling with rule injection."""
         mock_injector = Mock(spec=RuleInjector)
         mock_injector.inject_rules.return_value = "Enhanced agent prompt"
@@ -132,7 +130,7 @@ class TestBaseChatParticipantIntegration:
         participant.handle_chat_request_with_tools = AsyncMock()
         
         # Call the method
-        await participant.handle_chat_request(request, response)
+        asyncio.run(participant.handle_chat_request(request, response))
         
         # Verify rule injection was called
         mock_injector.inject_rules.assert_called_once()
