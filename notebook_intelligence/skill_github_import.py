@@ -6,11 +6,15 @@ URL formats supported:
   - https://github.com/{owner}/{repo}/tree/{ref}/{subpath}
   - https://github.com/{owner}/{repo}/tree/{ref}
 
-Uses the public GitHub tarball API; no auth, no git binary.
+Uses the GitHub tarball API over HTTPS; no git binary required. Auth is
+optional — a token is picked up from GITHUB_TOKEN / GH_TOKEN / `gh auth token`
+when available (needed for private repos, SSO, and higher rate limits).
 """
 import io
 import logging
+import os
 import re
+import subprocess
 import tarfile
 import tempfile
 import urllib.error
@@ -88,19 +92,71 @@ def _tarball_url(owner: str, repo: str, ref: Optional[str]) -> str:
     return f"https://api.github.com/repos/{owner}/{repo}/tarball/{ref_path}"
 
 
+def _get_github_token() -> Optional[str]:
+    """Look up a GitHub token for API auth.
+
+    Order matches the gh CLI's own precedence: GITHUB_TOKEN, then GH_TOKEN,
+    then whatever `gh auth token` returns. The gh-CLI fallback lets users in
+    corporate/SSO environments inherit their existing login without setting
+    an env var.
+    """
+    for var in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = os.environ.get(var)
+        if token and token.strip():
+            return token.strip()
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    stdout = result.stdout.strip()
+    if result.returncode == 0 and stdout:
+        return stdout
+    return None
+
+
 def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
     url = _tarball_url(owner, repo, ref)
-    req = urllib.request.Request(
-        url, headers={"User-Agent": "notebook-intelligence-skills-import"}
-    )
+    headers = {
+        "User-Agent": "notebook-intelligence-skills-import",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = _get_github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as response:
             data = response.read(MAX_ARCHIVE_BYTES + 1)
     except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            if token:
+                raise ValueError(
+                    f"GitHub rejected the token (HTTP {e.code}). Check that "
+                    "GITHUB_TOKEN / GH_TOKEN / `gh auth` has access to "
+                    f"github.com/{owner}/{repo}."
+                )
+            raise ValueError(
+                f"GitHub requires authentication (HTTP {e.code}). "
+                "Set GITHUB_TOKEN or run `gh auth login`, then retry."
+            )
         if e.code == 404:
+            # GitHub returns 404 (not 403) for private repos to unauth'd callers,
+            # so we can't distinguish "missing" from "private" — hint at both.
+            hint = (
+                ""
+                if token
+                else " (private repos require GITHUB_TOKEN or `gh auth login`)"
+            )
             raise ValueError(
                 f"Repo or ref not found: github.com/{owner}/{repo}"
                 + (f" @ {ref}" if ref else "")
+                + hint
             )
         raise ValueError(f"GitHub returned HTTP {e.code}: {e.reason}")
     except urllib.error.URLError as e:
