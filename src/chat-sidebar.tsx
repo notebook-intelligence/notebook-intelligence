@@ -2267,12 +2267,33 @@ function SidebarComponent(props: any) {
     NBIAPI.getGHLoginRequired()
   );
   const [chatEnabled, setChatEnabled] = useState(NBIAPI.getChatEnabled());
+  const [skillsReloadedVisible, setSkillsReloadedVisible] = useState(false);
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       setGHLoginRequired(NBIAPI.getGHLoginRequired());
       setChatEnabled(NBIAPI.getChatEnabled());
     });
+  }, []);
+
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const listener = () => {
+      setSkillsReloadedVisible(true);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      timeout = setTimeout(() => {
+        setSkillsReloadedVisible(false);
+      }, 4000);
+    };
+    NBIAPI.skillsReloaded.connect(listener);
+    return () => {
+      NBIAPI.skillsReloaded.disconnect(listener);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -2290,6 +2311,13 @@ function SidebarComponent(props: any) {
         >
           <VscSettingsGear />
         </div>
+      </div>
+      <div className="nbi-skills-reloaded-banner-live" aria-live="polite">
+        {skillsReloadedVisible && (
+          <div className="nbi-skills-reloaded-banner">
+            Skills reloaded — applied to the current session.
+          </div>
+        )}
       </div>
       {!chatEnabled && !ghLoginRequired && (
         <div className="sidebar-login-info">

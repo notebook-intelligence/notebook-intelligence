@@ -38,12 +38,68 @@ export enum ClaudeModelType {
 export interface IClaudeModelInfo {
   id: string;
   name: string;
-  context_window: number;
+  contextWindow: number;
 }
 
 export enum ClaudeToolType {
   ClaudeCodeTools = 'claude-code:built-in-tools',
   JupyterUITools = 'nbi:built-in-jupyter-ui-tools'
+}
+
+export type SkillScope = 'user' | 'project';
+
+export interface ISkillSummary {
+  scope: SkillScope;
+  name: string;
+  description: string;
+  allowedTools: string[];
+  rootPath: string;
+  files: string[];
+  source: string;
+}
+
+export interface ISkillDetail extends ISkillSummary {
+  body: string;
+}
+
+export interface ISkillsContext {
+  projectRoot: string;
+  projectName: string;
+  userSkillsDir: string;
+  projectSkillsDir: string;
+}
+
+export interface ISkillImportPreview {
+  name: string;
+  description: string;
+  allowedTools: string[];
+  body: string;
+  files: string[];
+  sourceUrl: string;
+  canonicalUrl: string;
+  existsInUserScope: boolean;
+  existsInProjectScope: boolean;
+}
+
+function skillFromWire(wire: any): ISkillDetail {
+  return {
+    scope: wire.scope,
+    name: wire.name,
+    description: wire.description,
+    allowedTools: wire.allowed_tools ?? [],
+    rootPath: wire.root_path,
+    files: wire.files ?? [],
+    source: wire.source ?? '',
+    body: wire.body ?? ''
+  };
+}
+
+function claudeModelFromWire(wire: any): IClaudeModelInfo {
+  return {
+    id: wire.id,
+    name: wire.name,
+    contextWindow: wire.context_window
+  };
 }
 
 export class NBIConfig {
@@ -127,7 +183,7 @@ export class NBIConfig {
   }
 
   get claudeModels(): IClaudeModelInfo[] {
-    return this.capabilities.claude_models ?? [];
+    return (this.capabilities.claude_models ?? []).map(claudeModelFromWire);
   }
 
   get isInClaudeCodeMode(): boolean {
@@ -155,6 +211,7 @@ export class NBIAPI {
   static config = new NBIConfig();
   static configChanged = this.config.changed;
   static githubLoginStatusChanged = new Signal<unknown, void>(this);
+  static skillsReloaded = new Signal<unknown, void>(this);
 
   static async initialize() {
     await this.fetchCapabilities();
@@ -175,6 +232,8 @@ export class NBIAPI {
         this.updateGitHubLoginStatus().then(() => {
           this.githubLoginStatusChanged.emit();
         });
+      } else if (msg.type === BackendMessageType.SkillsReloaded) {
+        this.skillsReloaded.emit();
       }
     });
   }
@@ -398,6 +457,184 @@ export class NBIAPI {
           reject(reason);
         });
     });
+  }
+
+  static async listSkills(): Promise<ISkillSummary[]> {
+    const data = await requestAPI<any>('skills', { method: 'GET' });
+    return (data.skills ?? []).map(skillFromWire);
+  }
+
+  static async getSkillsContext(): Promise<ISkillsContext> {
+    const data = await requestAPI<any>('skills/context', { method: 'GET' });
+    return {
+      projectRoot: data.project_root ?? '',
+      projectName: data.project_name ?? '',
+      userSkillsDir: data.user_skills_dir ?? '',
+      projectSkillsDir: data.project_skills_dir ?? ''
+    };
+  }
+
+  static async readSkill(
+    scope: SkillScope,
+    name: string
+  ): Promise<ISkillDetail> {
+    const data = await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}`,
+      { method: 'GET' }
+    );
+    return skillFromWire(data.skill);
+  }
+
+  static async createSkill(payload: {
+    scope: SkillScope;
+    name: string;
+    description: string;
+    allowedTools: string[];
+    body: string;
+  }): Promise<ISkillDetail> {
+    const data = await requestAPI<any>('skills', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: payload.scope,
+        name: payload.name,
+        description: payload.description,
+        allowed_tools: payload.allowedTools,
+        body: payload.body
+      })
+    });
+    return skillFromWire(data.skill);
+  }
+
+  static async updateSkill(
+    scope: SkillScope,
+    name: string,
+    payload: {
+      description?: string;
+      allowedTools?: string[];
+      body?: string;
+    }
+  ): Promise<ISkillDetail> {
+    const wire: any = {};
+    if (payload.description !== undefined) wire.description = payload.description;
+    if (payload.allowedTools !== undefined) wire.allowed_tools = payload.allowedTools;
+    if (payload.body !== undefined) wire.body = payload.body;
+    const data = await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(wire)
+      }
+    );
+    return skillFromWire(data.skill);
+  }
+
+  static async deleteSkill(scope: SkillScope, name: string): Promise<void> {
+    await requestAPI<any>(`skills/${scope}/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+  }
+
+  static async previewSkillImport(url: string): Promise<ISkillImportPreview> {
+    const data = await requestAPI<any>('skills/import/preview', {
+      method: 'POST',
+      body: JSON.stringify({ url })
+    });
+    const p = data.preview;
+    return {
+      name: p.name,
+      description: p.description ?? '',
+      allowedTools: p.allowed_tools ?? [],
+      body: p.body ?? '',
+      files: p.files ?? [],
+      sourceUrl: p.source_url ?? '',
+      canonicalUrl: p.canonical_url ?? '',
+      existsInUserScope: p.exists_in_user_scope === true,
+      existsInProjectScope: p.exists_in_project_scope === true
+    };
+  }
+
+  static async importSkill(payload: {
+    url: string;
+    scope: SkillScope;
+    name?: string;
+    overwrite?: boolean;
+  }): Promise<ISkillDetail> {
+    const wire: any = { url: payload.url, scope: payload.scope };
+    if (payload.name) wire.name = payload.name;
+    if (payload.overwrite) wire.overwrite = true;
+    const data = await requestAPI<any>('skills/import', {
+      method: 'POST',
+      body: JSON.stringify(wire)
+    });
+    return skillFromWire(data.skill);
+  }
+
+  static async renameSkill(
+    scope: SkillScope,
+    name: string,
+    newName: string
+  ): Promise<ISkillDetail> {
+    const data = await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}/rename`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ new_name: newName })
+      }
+    );
+    return skillFromWire(data.skill);
+  }
+
+  static async readBundleFile(
+    scope: SkillScope,
+    name: string,
+    path: string
+  ): Promise<string> {
+    const data = await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`,
+      { method: 'GET' }
+    );
+    return data.content;
+  }
+
+  static async writeBundleFile(
+    scope: SkillScope,
+    name: string,
+    path: string,
+    content: string
+  ): Promise<void> {
+    await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ content })
+      }
+    );
+  }
+
+  static async deleteBundleFile(
+    scope: SkillScope,
+    name: string,
+    path: string
+  ): Promise<void> {
+    await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  static async renameBundleFile(
+    scope: SkillScope,
+    name: string,
+    from: string,
+    to: string
+  ): Promise<void> {
+    await requestAPI<any>(
+      `skills/${scope}/${encodeURIComponent(name)}/files/rename`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ from, to })
+      }
+    );
   }
 
   static async chatRequest(

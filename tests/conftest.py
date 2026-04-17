@@ -1,10 +1,24 @@
+import io
 import pytest
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.config import NBIConfig
+
+
+def build_tarball(file_map: dict) -> bytes:
+    """Build a gzipped tarball with the given {path: content} mapping."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content in file_map.items():
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
 @pytest.fixture

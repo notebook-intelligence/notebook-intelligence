@@ -106,3 +106,7 @@ class ThreadSafeWebSocketConnector():
         self.websocket_handler.write_message(message)
     asyncio.set_event_loop(self.io_loop.asyncio_loop)
     self.io_loop.asyncio_loop.call_soon_threadsafe(_write_message)
+
+  def schedule(self, callback, *args):
+    """Schedule a callback on the Tornado asyncio loop from any thread."""
+    self.io_loop.asyncio_loop.call_soon_threadsafe(callback, *args)

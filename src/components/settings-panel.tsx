@@ -16,6 +16,7 @@ import {
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
 import { mcpServerSettingsToEnabledState } from './mcp-util';
+import { SettingsPanelComponentSkills } from './skills-panel';
 
 const OPENAI_COMPATIBLE_CHAT_MODEL_ID = 'openai-compatible-chat-model';
 const LITELLM_COMPATIBLE_CHAT_MODEL_ID = 'litellm-compatible-chat-model';
@@ -951,8 +952,36 @@ function SettingsPanelComponentClaude(props: any) {
     continueConversation
   ]);
 
+  const [claudeSubTab, setClaudeSubTab] = useState<'settings' | 'skills'>(
+    'settings'
+  );
+
+  useEffect(() => {
+    if (!nbiConfig.isInClaudeCodeMode && claudeSubTab !== 'settings') {
+      setClaudeSubTab('settings');
+    }
+  }, [nbiConfig.isInClaudeCodeMode, claudeSubTab]);
+
   return (
     <div className="config-dialog claude-mode-config-dialog">
+      {nbiConfig.isInClaudeCodeMode && (
+        <div className="nbi-subtab-bar">
+          <div
+            className={`nbi-subtab ${claudeSubTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setClaudeSubTab('settings')}
+          >
+            Settings
+          </div>
+          <div
+            className={`nbi-subtab ${claudeSubTab === 'skills' ? 'active' : ''}`}
+            onClick={() => setClaudeSubTab('skills')}
+          >
+            Skills
+          </div>
+        </div>
+      )}
+      {claudeSubTab === 'skills' && <SettingsPanelComponentSkills />}
+      {claudeSubTab === 'settings' && (
       <div className="config-dialog-body">
         <div className="model-config-section">
           <div className="model-config-section-header">Enable Claude mode</div>
@@ -1230,6 +1259,7 @@ function SettingsPanelComponentClaude(props: any) {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

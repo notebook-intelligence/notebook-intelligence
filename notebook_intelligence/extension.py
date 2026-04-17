@@ -23,8 +23,9 @@ from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, get_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
 from notebook_intelligence.context_factory import RuleContextFactory
+from notebook_intelligence.skillset import SKILL_NAME_REGEX
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -347,7 +348,7 @@ class RulesReloadHandler(APIHandler):
             self.set_status(404)
             self.finish(json.dumps({"error": "Rule system not enabled"}))
             return
-        
+
         try:
             rule_manager.load_rules(force_reload=True)
             summary = rule_manager.get_rules_summary()
@@ -355,6 +356,241 @@ class RulesReloadHandler(APIHandler):
         except Exception as e:
             self.set_status(500)
             self.finish(json.dumps({"error": str(e)}))
+
+
+class SkillsBaseHandler(APIHandler):
+    """Shared helpers for skills endpoints."""
+
+    @property
+    def skill_manager(self):
+        return ai_service_manager.get_skill_manager()
+
+    def _error(self, exc):
+        if isinstance(exc, FileExistsError):
+            self.set_status(409)
+        elif isinstance(exc, FileNotFoundError):
+            self.set_status(404)
+        else:
+            self.set_status(400)
+        self.finish(json.dumps({"error": str(exc)}))
+
+    def _bundle_rel_path(self):
+        rel_path = self.get_query_argument("path", default=None)
+        if not rel_path:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Missing required 'path' query parameter"}))
+            return None
+        return rel_path
+
+    def _parse_json_body(self):
+        try:
+            return json.loads(self.request.body)
+        except json.JSONDecodeError as e:
+            self.set_status(400)
+            self.finish(json.dumps({"error": f"Invalid JSON: {e}"}))
+            return None
+
+
+class SkillsListHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def get(self):
+        # Skip the per-bundle file walk — the list view only needs metadata.
+        skills = [s.to_dict(include_files=False) for s in self.skill_manager.list_skills()]
+        self.finish(json.dumps({"skills": skills}))
+
+    @tornado.web.authenticated
+    def post(self):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        try:
+            skill = self.skill_manager.create_skill(
+                scope=data["scope"],
+                name=data["name"],
+                description=data.get("description", ""),
+                allowed_tools=data.get("allowed_tools", []),
+                body=data.get("body", ""),
+            )
+            self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
+        except (FileExistsError, FileNotFoundError, ValueError, KeyError) as e:
+            self._error(e)
+
+
+class SkillsContextHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def get(self):
+        project_root = get_jupyter_root_dir() or ""
+        project_name = os.path.basename(os.path.normpath(project_root)) if project_root else ""
+        self.finish(json.dumps({
+            "project_root": project_root,
+            "project_name": project_name,
+            "user_skills_dir": str(self.skill_manager.scope_dir("user")),
+            "project_skills_dir": str(self.skill_manager.scope_dir("project")),
+        }))
+
+
+class SkillDetailHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def get(self, scope, name):
+        try:
+            skill = self.skill_manager.get_skill(scope, name)
+        except ValueError as e:
+            self._error(e)
+            return
+        if skill is None:
+            self.set_status(404)
+            self.finish(json.dumps({"error": f"Skill '{name}' not found in {scope} scope"}))
+            return
+        self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
+
+    @tornado.web.authenticated
+    def put(self, scope, name):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        try:
+            skill = self.skill_manager.update_skill(
+                scope=scope,
+                name=name,
+                description=data.get("description"),
+                allowed_tools=data.get("allowed_tools"),
+                body=data.get("body"),
+            )
+            self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+    @tornado.web.authenticated
+    def delete(self, scope, name):
+        try:
+            self.skill_manager.delete_skill(scope, name)
+            self.finish(json.dumps({"success": True}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+
+class SkillsImportPreviewHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def post(self):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        url = data.get("url")
+        if not url:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Missing required 'url'"}))
+            return
+        try:
+            preview = self.skill_manager.preview_github_import(url)
+            self.finish(json.dumps({"preview": preview}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+
+class SkillsImportHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def post(self):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        url = data.get("url")
+        scope = data.get("scope")
+        if not url or scope not in ("user", "project"):
+            self.set_status(400)
+            self.finish(json.dumps({
+                "error": "Missing 'url' or invalid 'scope' (must be 'user' or 'project')"
+            }))
+            return
+        try:
+            skill = self.skill_manager.import_from_github(
+                url=url,
+                scope=scope,
+                name_override=data.get("name"),
+                overwrite=bool(data.get("overwrite", False)),
+            )
+            self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
+        except (FileExistsError, FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+
+class SkillRenameHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def post(self, scope, name):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        new_name = data.get("new_name")
+        if not new_name:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Missing required 'new_name'"}))
+            return
+        try:
+            skill = self.skill_manager.rename_skill(scope, name, new_name)
+            self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
+        except (FileExistsError, FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+
+class SkillBundleFileHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def get(self, scope, name):
+        rel_path = self._bundle_rel_path()
+        if rel_path is None:
+            return
+        try:
+            content = self.skill_manager.read_bundle_file(scope, name, rel_path)
+            self.finish(json.dumps({"content": content}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+    @tornado.web.authenticated
+    def put(self, scope, name):
+        rel_path = self._bundle_rel_path()
+        if rel_path is None:
+            return
+        data = self._parse_json_body()
+        if data is None:
+            return
+        if "content" not in data:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Missing required 'content' field"}))
+            return
+        try:
+            self.skill_manager.write_bundle_file(scope, name, rel_path, data["content"])
+            self.finish(json.dumps({"success": True}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+    @tornado.web.authenticated
+    def delete(self, scope, name):
+        rel_path = self._bundle_rel_path()
+        if rel_path is None:
+            return
+        try:
+            self.skill_manager.delete_bundle_file(scope, name, rel_path)
+            self.finish(json.dumps({"success": True}))
+        except (FileNotFoundError, ValueError) as e:
+            self._error(e)
+
+
+class SkillBundleFileRenameHandler(SkillsBaseHandler):
+    @tornado.web.authenticated
+    def post(self, scope, name):
+        data = self._parse_json_body()
+        if data is None:
+            return
+        try:
+            old_path = data["from"]
+            new_path = data["to"]
+        except KeyError as e:
+            self.set_status(400)
+            self.finish(json.dumps({"error": f"Invalid request: missing {e}"}))
+            return
+        try:
+            self.skill_manager.rename_bundle_file(scope, name, old_path, new_path)
+            self.finish(json.dumps({"success": True}))
+        except (FileExistsError, FileNotFoundError, ValueError) as e:
+            self._error(e)
 
 class ChatHistory:
     """
@@ -935,6 +1171,15 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_rules = url_path_join(base_url, "notebook-intelligence", "rules")
         route_pattern_rules_toggle = url_path_join(base_url, "notebook-intelligence", "rules", r"([^/]+)", "toggle")
         route_pattern_rules_reload = url_path_join(base_url, "notebook-intelligence", "rules", "reload")
+        skill_name = f"({SKILL_NAME_REGEX})"
+        route_pattern_skills = url_path_join(base_url, "notebook-intelligence", "skills")
+        route_pattern_skills_context = url_path_join(base_url, "notebook-intelligence", "skills", "context")
+        route_pattern_skills_import_preview = url_path_join(base_url, "notebook-intelligence", "skills", "import", "preview")
+        route_pattern_skills_import = url_path_join(base_url, "notebook-intelligence", "skills", "import")
+        route_pattern_skill_detail = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name)
+        route_pattern_skill_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "rename")
+        route_pattern_skill_bundle_file = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files")
+        route_pattern_skill_bundle_file_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files", "rename")
         GetCapabilitiesHandler.disabled_tools = self.disabled_tools
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
         GetCapabilitiesHandler.disabled_providers = self.disabled_providers
@@ -953,6 +1198,17 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_rules, RulesListHandler),
             (route_pattern_rules_toggle, RulesToggleHandler),
             (route_pattern_rules_reload, RulesReloadHandler),
+            # Skill routes: order matters. Tornado matches in registration order, and the
+            # SKILL_NAME_REGEX in `skill_detail` would otherwise eat "import", "context", etc.
+            # Always register more specific routes before the {scope}/{name} catch-all.
+            (route_pattern_skills, SkillsListHandler),
+            (route_pattern_skills_context, SkillsContextHandler),
+            (route_pattern_skills_import_preview, SkillsImportPreviewHandler),
+            (route_pattern_skills_import, SkillsImportHandler),
+            (route_pattern_skill_bundle_file_rename, SkillBundleFileRenameHandler),
+            (route_pattern_skill_bundle_file, SkillBundleFileHandler),
+            (route_pattern_skill_rename, SkillRenameHandler),
+            (route_pattern_skill_detail, SkillDetailHandler),
             (route_pattern_copilot, WebsocketCopilotHandler),
         ]
         web_app.add_handlers(host_pattern, NotebookIntelligence.handlers)
