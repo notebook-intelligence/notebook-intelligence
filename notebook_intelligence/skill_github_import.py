@@ -1,0 +1,230 @@
+"""Fetch and validate Claude skill bundles from public GitHub repositories.
+
+URL formats supported:
+  - https://github.com/{owner}/{repo}
+  - https://github.com/{owner}/{repo}.git
+  - https://github.com/{owner}/{repo}/tree/{ref}/{subpath}
+  - https://github.com/{owner}/{repo}/tree/{ref}
+
+Uses the public GitHub tarball API; no auth, no git binary.
+"""
+import io
+import logging
+import re
+import tarfile
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from notebook_intelligence.skillset import (
+    SKILL_ENTRY_FILE,
+    SKILL_NAME_PATTERN,
+    _parse_frontmatter,
+    list_bundle_files,
+)
+
+log = logging.getLogger(__name__)
+
+MAX_ARCHIVE_BYTES = 10 * 1024 * 1024  # 10 MB on-wire
+MAX_EXTRACTED_BYTES = 20 * 1024 * 1024  # 20 MB after decompression
+FETCH_TIMEOUT_SECONDS = 30
+
+
+@dataclass
+class GitHubRef:
+    owner: str
+    repo: str
+    ref: Optional[str]  # branch/tag/sha; None → default branch
+    subpath: str        # "" if skill is at repo root
+
+
+@dataclass
+class StagedSkill:
+    """A validated skill extracted into a temporary directory."""
+    name: str
+    description: str
+    allowed_tools: list
+    body: str
+    files: list  # all file paths relative to skill_root, excluding SKILL.md
+    skill_root: Path
+    tmp_root: Path  # temp dir created for this import; caller cleans up
+    source_url: str
+    canonical_url: str  # URL with resolved ref, for storing as `source`
+
+
+def parse_github_url(url: str) -> GitHubRef:
+    """Parse a GitHub URL into (owner, repo, ref, subpath). Raises ValueError."""
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+    except ValueError as e:
+        raise ValueError(f"Invalid URL: {e}")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must use https://")
+    if parsed.netloc not in ("github.com", "www.github.com"):
+        raise ValueError("Only github.com URLs are supported")
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) < 2:
+        raise ValueError(
+            "URL must reference a repo: https://github.com/<owner>/<repo>"
+        )
+    owner = parts[0]
+    repo = parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    ref: Optional[str] = None
+    subpath = ""
+    if len(parts) >= 4 and parts[2] in ("tree", "blob"):
+        ref = parts[3]
+        subpath = "/".join(parts[4:])
+    return GitHubRef(owner=owner, repo=repo, ref=ref, subpath=subpath)
+
+
+def _tarball_url(owner: str, repo: str, ref: Optional[str]) -> str:
+    ref_path = ref if ref else "HEAD"
+    return f"https://api.github.com/repos/{owner}/{repo}/tarball/{ref_path}"
+
+
+def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
+    url = _tarball_url(owner, repo, ref)
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "notebook-intelligence-skills-import"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as response:
+            data = response.read(MAX_ARCHIVE_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(
+                f"Repo or ref not found: github.com/{owner}/{repo}"
+                + (f" @ {ref}" if ref else "")
+            )
+        raise ValueError(f"GitHub returned HTTP {e.code}: {e.reason}")
+    except urllib.error.URLError as e:
+        raise ValueError(f"Could not reach GitHub: {e.reason}")
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise ValueError(
+            f"Archive exceeds size limit ({MAX_ARCHIVE_BYTES // (1024 * 1024)} MB)"
+        )
+    return data
+
+
+def _extract_skill(
+    tarball_bytes: bytes, subpath: str, into: Path
+) -> Path:
+    """Extract into `into`, validate, return the skill root directory."""
+    total_bytes = 0
+    with tarfile.open(fileobj=io.BytesIO(tarball_bytes), mode="r:gz") as tar:
+        members = tar.getmembers()
+        if not members:
+            raise ValueError("Empty archive")
+        # GitHub tarballs wrap every entry in a single `{repo}-{sha}/` top-level directory.
+        # The first member is that directory itself, so its name is our wrapper prefix.
+        top_dir = members[0].name.split("/")[0]
+        safe_members = []
+        for m in members:
+            if m.issym() or m.islnk():
+                # Skip symlinks for safety — they can escape the extraction dir.
+                continue
+            name = m.name.lstrip("/")
+            parts = Path(name).parts
+            if any(p == ".." for p in parts):
+                raise ValueError(f"Unsafe path in archive: {m.name}")
+            if m.isfile():
+                total_bytes += m.size
+                if total_bytes > MAX_EXTRACTED_BYTES:
+                    raise ValueError(
+                        "Extracted archive exceeds size limit "
+                        f"({MAX_EXTRACTED_BYTES // (1024 * 1024)} MB)"
+                    )
+            safe_members.append(m)
+        tar.extractall(into, members=safe_members)
+
+    extracted = into / top_dir
+    if not extracted.is_dir():
+        raise ValueError("Unexpected archive layout")
+    skill_root = extracted / subpath if subpath else extracted
+    if not skill_root.is_dir():
+        raise ValueError(f"Path '{subpath}' not found in repo")
+    if not (skill_root / SKILL_ENTRY_FILE).exists():
+        location = subpath if subpath else "repo root"
+        raise ValueError(f"No {SKILL_ENTRY_FILE} found at {location}")
+    return skill_root
+
+
+def _slug(value: str) -> str:
+    """Normalize an arbitrary string into a valid skill-name candidate."""
+    s = value.lower()
+    s = re.sub(r"[^a-z0-9-]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s[:64] if s else ""
+
+
+def _derive_name(
+    frontmatter_name: Optional[str], ref: GitHubRef
+) -> str:
+    """Pick a default skill name: frontmatter > subpath basename > repo name."""
+    candidates = []
+    if frontmatter_name:
+        candidates.append(frontmatter_name)
+    if ref.subpath:
+        candidates.append(Path(ref.subpath).name)
+    candidates.append(ref.repo)
+    for c in candidates:
+        slug = _slug(c)
+        if SKILL_NAME_PATTERN.match(slug):
+            return slug
+    raise ValueError(
+        "Could not derive a valid skill name from the repo; "
+        "specify one explicitly."
+    )
+
+
+def stage_skill_from_github(url: str) -> StagedSkill:
+    """Fetch, extract, and validate a skill. Returns a StagedSkill.
+
+    Caller is responsible for cleaning up `staged.tmp_root` when done.
+    """
+    import shutil
+
+    ref = parse_github_url(url)
+    tarball = _fetch_tarball(ref.owner, ref.repo, ref.ref)
+    tmp_root = Path(tempfile.mkdtemp(prefix="nbi-skill-import-"))
+    try:
+        skill_root = _extract_skill(tarball, ref.subpath, tmp_root)
+        skill_md = skill_root / SKILL_ENTRY_FILE
+        try:
+            frontmatter, body = _parse_frontmatter(
+                skill_md.read_text(encoding="utf-8"), skill_md
+            )
+        except Exception as e:
+            raise ValueError(f"Invalid {SKILL_ENTRY_FILE}: {e}")
+
+        description = frontmatter.get("description") or ""
+        allowed_tools = list(frontmatter.get("allowed-tools", []) or [])
+        name = _derive_name(frontmatter.get("name"), ref)
+        files = [f for f in list_bundle_files(skill_root) if f != SKILL_ENTRY_FILE]
+    except Exception:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise
+
+    canonical = (
+        f"https://github.com/{ref.owner}/{ref.repo}"
+        + (f"/tree/{ref.ref}" if ref.ref else "")
+        + (f"/{ref.subpath}" if ref.subpath else "")
+    )
+
+    return StagedSkill(
+        name=name,
+        description=description,
+        allowed_tools=allowed_tools,
+        body=body,
+        files=files,
+        skill_root=skill_root,
+        tmp_root=tmp_root,
+        source_url=url,
+        canonical_url=canonical,
+    )

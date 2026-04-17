@@ -365,6 +365,27 @@ Rules are automatically discovered from:
 
 Rules are applied in priority order (lower numbers first) and can be toggled on/off without deleting the files.
 
+### Managing Claude Skills
+
+When Claude mode is enabled, the NBI settings panel shows a **Skills** tab for viewing, creating, editing, and deleting the skills that Claude can invoke. Skills are Claude Agent SDK artifacts stored on disk:
+
+- **User skills**: `~/.claude/skills/`
+- **Project skills**: `<project_root>/.claude/skills/`
+
+Skills live in a directory named `<name>/` containing a `SKILL.md` entry file (with YAML frontmatter for `name`, `description`, `allowed-tools`) plus any helper files the skill references.
+
+The Skills tab lets you:
+
+- Add new skills in either scope, editing `SKILL.md` and helper files inline
+- **Rename** a skill (updates the bundle directory and frontmatter)
+- **Duplicate** a skill into the same or opposite scope under a new name
+- **Delete** a skill, with an undo toast that restores the full bundle contents if clicked within 8 seconds
+- Open or delete additional files in the bundle (`SKILL.md` itself is protected from deletion)
+
+**Importing from GitHub.** Click **Import from GitHub** to install a skill from a public repo. Paste any `https://github.com/<owner>/<repo>` URL — or a deep link like `/tree/<ref>/<subpath>` pointing at the directory that contains `SKILL.md` — pick the target scope, and the bundle is fetched, validated, and installed. The canonical source URL is recorded in the skill's frontmatter as `source:` so you can trace where each imported skill came from.
+
+When a skill is saved, added, or removed — either through the UI or directly on disk — the Claude SDK session is transparently reloaded (preserving conversation history via the session's resume behavior), and a **"Skills reloaded"** banner briefly appears in the chat sidebar.
+
 ### Developer documentation
 
 For building locally and contributing see the [developer documentatation](CONTRIBUTING.md).

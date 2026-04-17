@@ -12,6 +12,8 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -29,6 +31,8 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})
@@ -42,6 +46,8 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -59,6 +65,8 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})
@@ -73,6 +81,8 @@ class TestAIServiceManagerIntegration:
             mock_config.rules_enabled = True
             mock_config.rules_directory = "/test/rules"
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             with patch('notebook_intelligence.ai_service_manager.RuleManager') as mock_rule_manager_class:
@@ -91,6 +101,8 @@ class TestAIServiceManagerIntegration:
             mock_config = Mock()
             mock_config.rules_enabled = False
             mock_config.mcp = {"mcpServers": {}, "participants": {}}
+            mock_config.user_skills_directory = "/test/user_skills"
+            mock_config.project_skills_directory = lambda _root: "/test/project_skills"
             mock_config_class.return_value = mock_config
             
             manager = AIServiceManager({"server_root_dir": "/test"})

@@ -34,7 +34,8 @@ export enum BackendMessageType {
   RunUICommand = 'run-ui-command',
   GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change',
   MCPServerStatusChange = 'mcp-server-status-change',
-  ClaudeCodeStatusChange = 'claude-code-status-change'
+  ClaudeCodeStatusChange = 'claude-code-status-change',
+  SkillsReloaded = 'skills-reloaded'
 }
 
 export enum ResponseStreamDataType {
