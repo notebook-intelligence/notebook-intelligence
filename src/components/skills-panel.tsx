@@ -105,6 +105,17 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
   }, []);
 
   const handleDelete = async (skill: ISkillSummary) => {
+    const result = await showDialog({
+      title: 'Delete skill?',
+      body: `"${skill.name}" will be deleted.`,
+      buttons: [
+        Dialog.cancelButton(),
+        Dialog.warnButton({ label: 'Delete' })
+      ]
+    });
+    if (!result.button.accept) {
+      return;
+    }
     // Snapshot the full bundle (SKILL.md + helper files) *before* deleting so the Undo
     // toast can recreate it byte-for-byte. The backend only exposes a shallow delete
     // API, so restoration is the client's job.
