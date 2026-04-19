@@ -11,6 +11,7 @@ optional — a token is picked up from GITHUB_TOKEN / GH_TOKEN / `gh auth token`
 when available (needed for private repos, SSO, and higher rate limits).
 """
 import io
+import json
 import logging
 import os
 import re
@@ -119,8 +120,8 @@ def _get_github_token() -> Optional[str]:
     return None
 
 
-def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
-    url = _tarball_url(owner, repo, ref)
+def _github_api_headers() -> dict:
+    """Standard headers for GitHub API requests, with Bearer auth when available."""
     headers = {
         "User-Agent": "notebook-intelligence-skills-import",
         "Accept": "application/vnd.github+json",
@@ -129,13 +130,20 @@ def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
     token = _get_github_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
+    url = _tarball_url(owner, repo, ref)
+    headers = _github_api_headers()
+    has_token = "Authorization" in headers
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as response:
             data = response.read(MAX_ARCHIVE_BYTES + 1)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            if token:
+            if has_token:
                 raise ValueError(
                     f"GitHub rejected the token (HTTP {e.code}). Check that "
                     "GITHUB_TOKEN / GH_TOKEN / `gh auth` has access to "
@@ -150,7 +158,7 @@ def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
             # so we can't distinguish "missing" from "private" — hint at both.
             hint = (
                 ""
-                if token
+                if has_token
                 else " (private repos require GITHUB_TOKEN or `gh auth login`)"
             )
             raise ValueError(
@@ -166,6 +174,40 @@ def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
             f"Archive exceeds size limit ({MAX_ARCHIVE_BYTES // (1024 * 1024)} MB)"
         )
     return data
+
+
+def get_latest_commit_sha(
+    owner: str, repo: str, ref: Optional[str], subpath: str
+) -> Optional[str]:
+    """Return the SHA of the most recent commit touching `subpath` on `ref`.
+
+    Used by the managed-skills reconciler to skip re-downloading tarballs when
+    nothing has changed. Returns None on any error (network, rate-limit, auth);
+    callers should fall back to fetching the tarball.
+    """
+    params = {"per_page": "1"}
+    if ref:
+        params["sha"] = ref
+    if subpath:
+        params["path"] = subpath
+    query = urllib.parse.urlencode(params)
+    url = f"https://api.github.com/repos/{owner}/{repo}/commits?{query}"
+    req = urllib.request.Request(url, headers=_github_api_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as response:
+            data = response.read(64 * 1024)  # commits list is small; hard cap prevents abuse
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        log.warning("GitHub commits API probe failed for %s/%s: %s", owner, repo, e)
+        return None
+    try:
+        parsed = json.loads(data)
+    except (ValueError, TypeError) as e:
+        log.warning("GitHub commits API returned invalid JSON: %s", e)
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    sha = parsed[0].get("sha") if isinstance(parsed[0], dict) else None
+    return sha if isinstance(sha, str) and sha else None
 
 
 def _extract_skill(

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -14,9 +15,12 @@ from notebook_intelligence.extension import (
     SkillsImportHandler,
     SkillsImportPreviewHandler,
     SkillsListHandler,
+    SkillsReconcileHandler,
 )
+from notebook_intelligence.skill_reconciler import ReconcileResult
 from notebook_intelligence.skill_manager import SkillManager
 from notebook_intelligence.skillset import SKILL_ENTRY_FILE
+from tests.conftest import build_tarball
 
 
 @pytest.fixture
@@ -212,21 +216,8 @@ class TestSkillsContextHandler:
 
 
 class TestSkillsImportHandlers:
-    @staticmethod
-    def _tar(files: dict) -> bytes:
-        import io
-        import tarfile
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for name, content in files.items():
-                data = content.encode("utf-8")
-                info = tarfile.TarInfo(name=name)
-                info.size = len(data)
-                tar.addfile(info, io.BytesIO(data))
-        return buf.getvalue()
-
     def test_preview_returns_metadata(self, skill_manager):
-        tar = self._tar({
+        tar = build_tarball({
             "repo-x/SKILL.md": "---\nname: imported\ndescription: d\n---\nbody",
         })
         handler = _make_handler(
@@ -258,7 +249,7 @@ class TestSkillsImportHandlers:
         handler.set_status.assert_called_with(400)
 
     def test_import_installs_skill(self, skill_manager):
-        tar = self._tar({
+        tar = build_tarball({
             "repo-x/SKILL.md": "---\nname: gh-skill\ndescription: d\n---\nhello",
         })
         handler = _make_handler(
@@ -290,7 +281,7 @@ class TestSkillsImportHandlers:
 
     def test_import_collision_returns_409(self, skill_manager):
         skill_manager.create_skill("user", "dup", "d", [], "")
-        tar = self._tar({
+        tar = build_tarball({
             "repo-x/SKILL.md": "---\nname: dup\ndescription: d\n---\nb",
         })
         handler = _make_handler(
@@ -410,3 +401,30 @@ class TestSkillBundleFileRenameHandler:
         )
         SkillBundleFileRenameHandler.post(handler, "user", "bun")
         handler.set_status.assert_called_with(404)
+
+
+class TestSkillsReconcileHandler:
+    def test_returns_409_when_reconciler_not_configured(self, skill_manager):
+        ext_module.ai_service_manager.get_skill_reconciler.return_value = None
+        handler = _make_handler(SkillsReconcileHandler)
+        asyncio.run(SkillsReconcileHandler.post(handler))
+        handler.set_status.assert_called_with(409)
+        body = _parse_response(handler)
+        assert "manifest" in body["error"].lower()
+
+    def test_returns_reconcile_result(self, skill_manager):
+        reconciler = MagicMock()
+        reconciler.reconcile.return_value = ReconcileResult(
+            added=2, updated=1, removed=0, unchanged=3, errors=["boom"]
+        )
+        ext_module.ai_service_manager.get_skill_reconciler.return_value = reconciler
+        handler = _make_handler(SkillsReconcileHandler)
+        asyncio.run(SkillsReconcileHandler.post(handler))
+        body = _parse_response(handler)
+        assert body == {
+            "added": 2,
+            "updated": 1,
+            "removed": 0,
+            "unchanged": 3,
+            "errors": ["boom"],
+        }

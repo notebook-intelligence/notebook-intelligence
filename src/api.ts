@@ -64,6 +64,17 @@ export interface ISkillSummary {
   rootPath: string;
   files: string[];
   source: string;
+  managed: boolean;
+  managedSource: string;
+  managedRef: string;
+}
+
+export interface IReconcileResult {
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  errors: string[];
 }
 
 export interface ISkillDetail extends ISkillSummary {
@@ -98,6 +109,9 @@ function skillFromWire(wire: any): ISkillDetail {
     rootPath: wire.root_path,
     files: wire.files ?? [],
     source: wire.source ?? '',
+    managed: Boolean(wire.managed),
+    managedSource: wire.managed_source ?? '',
+    managedRef: wire.managed_ref ?? '',
     body: wire.body ?? ''
   };
 }
@@ -585,6 +599,19 @@ export class NBIAPI {
       body: JSON.stringify(wire)
     });
     return skillFromWire(data.skill);
+  }
+
+  static async reconcileManagedSkills(): Promise<IReconcileResult> {
+    const data = await requestAPI<any>('skills/reconcile', {
+      method: 'POST'
+    });
+    return {
+      added: Number(data.added ?? 0),
+      updated: Number(data.updated ?? 0),
+      removed: Number(data.removed ?? 0),
+      unchanged: Number(data.unchanged ?? 0),
+      errors: Array.isArray(data.errors) ? data.errors.map(String) : []
+    };
   }
 
   static async renameSkill(

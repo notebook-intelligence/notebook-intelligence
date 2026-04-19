@@ -31,6 +31,8 @@ class Skill:
     allowed_tools: List[str] = field(default_factory=list)
     body: str = ""
     source: str = ""
+    managed_source: str = ""
+    managed_ref: str = ""
 
     @classmethod
     def from_path(cls, dir_path: Path, scope: SkillScope) -> 'Skill':
@@ -48,7 +50,13 @@ class Skill:
             allowed_tools=list(frontmatter.get("allowed-tools", []) or []),
             body=body,
             source=frontmatter.get("source", "") or "",
+            managed_source=frontmatter.get("managed_source", "") or "",
+            managed_ref=frontmatter.get("managed_ref", "") or "",
         )
+
+    @property
+    def managed(self) -> bool:
+        return bool(self.managed_source)
 
     def skill_md_path(self) -> Path:
         return self.root_path / SKILL_ENTRY_FILE
@@ -77,6 +85,9 @@ class Skill:
             "allowed_tools": self.allowed_tools,
             "root_path": str(self.root_path),
             "source": self.source,
+            "managed": self.managed,
+            "managed_source": self.managed_source,
+            "managed_ref": self.managed_ref,
         }
         if include_files:
             data["files"] = self.list_files()
@@ -132,6 +143,9 @@ def serialize_skill_md(
     allowed_tools: List[str],
     body: str,
     source: str = "",
+    *,
+    managed_source: str = "",
+    managed_ref: str = "",
 ) -> str:
     """Render a SKILL.md markdown string from its fields."""
     frontmatter: Dict[str, Any] = {"name": name, "description": description}
@@ -139,6 +153,10 @@ def serialize_skill_md(
         frontmatter["allowed-tools"] = list(allowed_tools)
     if source:
         frontmatter["source"] = source
+    if managed_source:
+        frontmatter["managed_source"] = managed_source
+    if managed_ref:
+        frontmatter["managed_ref"] = managed_ref
     yaml_text = yaml.safe_dump(frontmatter, sort_keys=False, default_flow_style=False).strip()
     body_text = body.rstrip() + "\n" if body.strip() else ""
     return f"---\n{yaml_text}\n---\n\n{body_text}"

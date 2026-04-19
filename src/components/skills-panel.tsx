@@ -60,6 +60,9 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
   const [prompt, setPrompt] = useState<PromptMode>(null);
   const [undo, setUndo] = useState<IUndoState | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const hasManagedSkills = skills.some(s => s.managed);
 
   const refresh = async () => {
     setLoading(true);
@@ -109,6 +112,27 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
       }
     };
   }, []);
+
+  const handleSyncManaged = async () => {
+    setSyncing(true);
+    setSyncMessage(null);
+    setError(null);
+    try {
+      const r = await NBIAPI.reconcileManagedSkills();
+      const summary = `Sync complete — ${r.added} added, ${r.updated} updated, ${r.removed} removed, ${r.unchanged} unchanged.`;
+      setSyncMessage(
+        r.errors.length ? `${summary} (${r.errors.length} error(s))` : summary
+      );
+      if (r.errors.length) {
+        setError(r.errors.join('\n'));
+      }
+      await refresh();
+    } catch (e: any) {
+      setError(`Sync failed: ${e?.message ?? e}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleDelete = async (skill: ISkillSummary) => {
     const result = await showDialog({
@@ -259,6 +283,18 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
       <div className="nbi-skills-header">
         <div className="nbi-skills-title">Claude Skills</div>
         <div className="nbi-skills-header-actions">
+          {hasManagedSkills && (
+            <button
+              className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+              onClick={handleSyncManaged}
+              disabled={syncing}
+              title="Reconcile managed skills against the org manifest"
+            >
+              <div className="jp-Dialog-buttonLabel">
+                {syncing ? 'Syncing…' : 'Sync managed skills'}
+              </div>
+            </button>
+          )}
           <button
             className="jp-Dialog-button jp-mod-reject jp-mod-styled"
             onClick={() => setImportOpen(true)}
@@ -275,6 +311,11 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
           </button>
         </div>
       </div>
+      {syncMessage && (
+        <div className="nbi-skills-sync-message" role="status">
+          {syncMessage}
+        </div>
+      )}
       {error && (
         <div className="nbi-skills-error" role="alert">
           {error}
@@ -628,6 +669,17 @@ function SkillScopeSection(props: {
   );
 }
 
+function ManagedBadge(props: { source?: string }): JSX.Element {
+  return (
+    <span
+      className="nbi-skill-managed-badge"
+      title={`Managed by org manifest (${props.source ?? ''})`}
+    >
+      Managed
+    </span>
+  );
+}
+
 function SkillRow(props: {
   skill: ISkillSummary;
   onEdit: () => void;
@@ -654,7 +706,10 @@ function SkillRow(props: {
       }}
     >
       <div className="nbi-skill-row-main">
-        <div className="nbi-skill-row-name">{skill.name}</div>
+        <div className="nbi-skill-row-name">
+          {skill.name}
+          {skill.managed && <ManagedBadge source={skill.managedSource} />}
+        </div>
         {skill.description && (
           <div className="nbi-skill-row-description">{skill.description}</div>
         )}
@@ -663,8 +718,8 @@ function SkillRow(props: {
         <button
           type="button"
           className="nbi-icon-button"
-          aria-label="Edit skill"
-          title="Edit"
+          aria-label={skill.managed ? 'View skill' : 'Edit skill'}
+          title={skill.managed ? 'View (managed, read-only)' : 'Edit'}
           onClick={stopAnd(props.onEdit)}
         >
           ✎
@@ -673,7 +728,8 @@ function SkillRow(props: {
           type="button"
           className="nbi-icon-button"
           aria-label="Rename skill"
-          title="Rename"
+          title={skill.managed ? 'Managed skills cannot be renamed' : 'Rename'}
+          disabled={skill.managed}
           onClick={stopAnd(props.onRename)}
         >
           Aa
@@ -691,7 +747,8 @@ function SkillRow(props: {
           type="button"
           className="nbi-icon-button danger"
           aria-label="Delete skill"
-          title="Delete"
+          title={skill.managed ? 'Managed skills cannot be deleted' : 'Delete'}
+          disabled={skill.managed}
           onClick={stopAnd(props.onDelete)}
         >
           🗑
@@ -909,6 +966,8 @@ function SkillEditor(props: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCreated, setHasCreated] = useState(false);
+  const [managed, setManaged] = useState(false);
+  const [managedSource, setManagedSource] = useState('');
   const errorRef = useRef<HTMLDivElement>(null);
 
   const effectiveName = isNew && !hasCreated ? name : (props.name ?? name);
@@ -918,6 +977,8 @@ function SkillEditor(props: {
     const skill: ISkillDetail = await NBIAPI.readSkill(s, n);
     setDescription(skill.description);
     setAllowedTools(skill.allowedTools ?? []);
+    setManaged(skill.managed);
+    setManagedSource(skill.managedSource ?? '');
     const skillMdBody = skill.body ?? '';
     setSavedMeta({
       description: skill.description,
@@ -999,7 +1060,8 @@ function SkillEditor(props: {
 
   const nameValid = SKILL_NAME_PATTERN.test(name);
   const descriptionValid = description.trim().length > 0;
-  const canSave = !saving && (!effectiveIsNew || nameValid) && descriptionValid;
+  const canSave =
+    !saving && !managed && (!effectiveIsNew || nameValid) && descriptionValid;
 
   const updateBuffer = (path: string, content: string) => {
     setBuffers(prev => {
@@ -1300,6 +1362,7 @@ function SkillEditor(props: {
           </span>
           <span className="nbi-breadcrumb-current">
             {effectiveIsNew ? 'New skill' : effectiveName}
+            {managed && <ManagedBadge source={managedSource} />}
           </span>
         </nav>
         <div className="nbi-skill-editor-actions">
@@ -1308,25 +1371,38 @@ function SkillEditor(props: {
             className="jp-Dialog-button jp-mod-reject jp-mod-styled"
             onClick={handleBack}
           >
-            <div className="jp-Dialog-buttonLabel">Cancel</div>
-          </button>
-          <button
-            type="submit"
-            className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-            disabled={!canSave || (!effectiveIsNew && !anyDirty)}
-          >
             <div className="jp-Dialog-buttonLabel">
-              {saving ? 'Saving…' : 'Save'}
-              {anyDirty && (
-                <span className="nbi-dirty-marker" aria-label="Unsaved changes">
-                  {' '}
-                  •
-                </span>
-              )}
+              {managed ? 'Close' : 'Cancel'}
             </div>
           </button>
+          {!managed && (
+            <button
+              type="submit"
+              className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+              disabled={!canSave || (!effectiveIsNew && !anyDirty)}
+            >
+              <div className="jp-Dialog-buttonLabel">
+                {saving ? 'Saving…' : 'Save'}
+                {anyDirty && (
+                  <span
+                    className="nbi-dirty-marker"
+                    aria-label="Unsaved changes"
+                  >
+                    {' '}
+                    •
+                  </span>
+                )}
+              </div>
+            </button>
+          )}
         </div>
       </div>
+      {managed && (
+        <div className="nbi-skills-managed-banner" role="note">
+          This skill is managed by the organization manifest and is read-only.
+          Changes will be overwritten on the next sync.
+        </div>
+      )}
 
       {loading ? (
         <div className="nbi-skill-editor-loading">Loading skill…</div>

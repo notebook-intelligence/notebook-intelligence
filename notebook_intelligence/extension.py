@@ -20,7 +20,7 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 import tornado
 from tornado import websocket
-from traitlets import Bool, List, Unicode
+from traitlets import Bool, Int, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
@@ -515,6 +515,24 @@ class SkillsImportHandler(SkillsBaseHandler):
             self.finish(json.dumps({"skill": skill.to_dict(include_body=True)}))
         except (FileExistsError, FileNotFoundError, ValueError) as e:
             self._error(e)
+
+
+class SkillsReconcileHandler(SkillsBaseHandler):
+    """Manual trigger for the managed-skills reconciler."""
+
+    @tornado.web.authenticated
+    async def post(self):
+        reconciler = ai_service_manager.get_skill_reconciler()
+        if reconciler is None:
+            self.set_status(409)
+            self.finish(json.dumps({
+                "error": "No managed-skills manifest configured (set NBI_SKILLS_MANIFEST)."
+            }))
+            return
+        # reconcile() does blocking HTTP + tarball extraction; run off the event loop.
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, reconciler.reconcile)
+        self.finish(json.dumps(result.to_dict()))
 
 
 class SkillRenameHandler(SkillsBaseHandler):
@@ -1252,6 +1270,34 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    skills_manifest = Unicode(
+        default_value="",
+        help="""
+        URL or filesystem path to a YAML/JSON manifest describing managed
+        Claude skills to install and keep in sync. Empty disables the feature.
+        Overridden by the NBI_SKILLS_MANIFEST environment variable.
+        """,
+        config=True,
+    )
+
+    skills_manifest_interval = Int(
+        default_value=86400,
+        help="""
+        Interval in seconds between managed-skills reconciles.
+        Overridden by the NBI_SKILLS_MANIFEST_INTERVAL environment variable.
+        """,
+        config=True,
+    )
+
+    skills_manifest_token = Unicode(
+        default_value="",
+        help="""
+        Optional bearer token used when fetching the manifest over HTTPS.
+        Overridden by the NBI_SKILLS_MANIFEST_TOKEN environment variable.
+        """,
+        config=True,
+    )
+
     def initialize_settings(self):
         pass
 
@@ -1262,10 +1308,29 @@ class NotebookIntelligence(ExtensionApp):
         self.initialize_ai_service(server_root_dir)
         self._setup_handlers(self.serverapp.web_app)
         self.serverapp.log.info(f"Registered {self.name} server extension")
-    
+
     def initialize_ai_service(self, server_root_dir: str):
         global ai_service_manager
-        ai_service_manager = AIServiceManager({"server_root_dir": server_root_dir})
+        manifest_source = os.environ.get("NBI_SKILLS_MANIFEST", "").strip() or self.skills_manifest.strip()
+        manifest_token = (
+            os.environ.get("NBI_SKILLS_MANIFEST_TOKEN", "").strip()
+            or self.skills_manifest_token.strip()
+        )
+        interval_env = os.environ.get("NBI_SKILLS_MANIFEST_INTERVAL", "").strip()
+        manifest_interval = self.skills_manifest_interval
+        if interval_env:
+            try:
+                manifest_interval = int(interval_env)
+            except ValueError:
+                log.warning(
+                    "Ignoring invalid NBI_SKILLS_MANIFEST_INTERVAL=%r", interval_env
+                )
+        ai_service_manager = AIServiceManager({
+            "server_root_dir": server_root_dir,
+            "skills_manifest": manifest_source,
+            "skills_manifest_interval": manifest_interval,
+            "skills_manifest_token": manifest_token,
+        })
 
     def initialize_templates(self):
         pass
@@ -1297,6 +1362,7 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_skills_context = url_path_join(base_url, "notebook-intelligence", "skills", "context")
         route_pattern_skills_import_preview = url_path_join(base_url, "notebook-intelligence", "skills", "import", "preview")
         route_pattern_skills_import = url_path_join(base_url, "notebook-intelligence", "skills", "import")
+        route_pattern_skills_reconcile = url_path_join(base_url, "notebook-intelligence", "skills", "reconcile")
         route_pattern_skill_detail = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name)
         route_pattern_skill_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "rename")
         route_pattern_skill_bundle_file = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files")
@@ -1329,6 +1395,7 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_skills_context, SkillsContextHandler),
             (route_pattern_skills_import_preview, SkillsImportPreviewHandler),
             (route_pattern_skills_import, SkillsImportHandler),
+            (route_pattern_skills_reconcile, SkillsReconcileHandler),
             (route_pattern_skill_bundle_file_rename, SkillBundleFileRenameHandler),
             (route_pattern_skill_bundle_file, SkillBundleFileHandler),
             (route_pattern_skill_rename, SkillRenameHandler),

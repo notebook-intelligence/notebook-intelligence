@@ -103,6 +103,76 @@ class TestDiscovery:
         assert skills[0].name == "good"
 
 
+class TestManagedFrontmatter:
+    def test_from_path_reads_managed_frontmatter(self, tmp_path):
+        bundle = tmp_path / "sk"
+        bundle.mkdir()
+        (bundle / SKILL_ENTRY_FILE).write_text(
+            serialize_skill_md(
+                "sk", "desc", [], "body",
+                source="https://github.com/org/repo/tree/main/sk",
+                managed_source="https://github.com/org/repo/tree/main/sk",
+                managed_ref="abc1234",
+            ),
+            encoding="utf-8",
+        )
+        skill = Skill.from_path(bundle, "user")
+        assert skill.managed is True
+        assert skill.managed_source == "https://github.com/org/repo/tree/main/sk"
+        assert skill.managed_ref == "abc1234"
+
+    def test_from_path_missing_managed_fields_defaults_to_unmanaged(self, tmp_path):
+        bundle = tmp_path / "sk"
+        bundle.mkdir()
+        (bundle / SKILL_ENTRY_FILE).write_text(
+            serialize_skill_md("sk", "d", [], "b"), encoding="utf-8"
+        )
+        skill = Skill.from_path(bundle, "user")
+        assert skill.managed is False
+        assert skill.managed_source == ""
+        assert skill.managed_ref == ""
+
+    def test_serialize_skill_md_omits_empty_managed_keys(self):
+        content = serialize_skill_md("sk", "d", [], "b")
+        assert "managed_source" not in content
+        assert "managed_ref" not in content
+
+    def test_update_skill_preserves_managed_fields(self, manager, skill_dirs):
+        user_dir, _ = skill_dirs
+        bundle = user_dir / "m"
+        bundle.mkdir()
+        (bundle / SKILL_ENTRY_FILE).write_text(
+            serialize_skill_md(
+                "m", "d", [], "b",
+                managed_source="https://github.com/org/repo/tree/main/m",
+                managed_ref="abc",
+            ),
+            encoding="utf-8",
+        )
+        updated = manager.update_skill("user", "m", description="new desc")
+        assert updated.managed_source == "https://github.com/org/repo/tree/main/m"
+        assert updated.managed_ref == "abc"
+        reloaded = Skill.from_path(bundle, "user")
+        assert reloaded.managed_source == "https://github.com/org/repo/tree/main/m"
+        assert reloaded.managed_ref == "abc"
+
+    def test_rename_skill_preserves_managed_fields(self, manager, skill_dirs):
+        user_dir, _ = skill_dirs
+        bundle = user_dir / "oldname"
+        bundle.mkdir()
+        (bundle / SKILL_ENTRY_FILE).write_text(
+            serialize_skill_md(
+                "oldname", "d", [], "b",
+                managed_source="https://github.com/org/repo/tree/main/oldname",
+                managed_ref="sha1",
+            ),
+            encoding="utf-8",
+        )
+        renamed = manager.rename_skill("user", "oldname", "newname")
+        assert renamed.managed_source == "https://github.com/org/repo/tree/main/oldname"
+        assert renamed.managed_ref == "sha1"
+
+
 class TestCreate:
     def test_create_skill(self, manager, skill_dirs):
         user_dir, _ = skill_dirs
@@ -462,3 +532,76 @@ class TestGitHubImport:
                 "https://github.com/owner/repo", scope="user"
             )
         assert calls == [1]
+
+
+class TestInstallManagedFromGithub:
+    def _patch(self, tar: bytes):
+        return patch(
+            "notebook_intelligence.skill_github_import._fetch_tarball",
+            return_value=tar,
+        )
+
+    def test_installs_and_stamps_managed_fields(self, manager, skill_dirs):
+        user_dir, _ = skill_dirs
+        tar = build_tarball({
+            "repo-xyz/SKILL.md": "---\nname: mgd\ndescription: d\n---\nbody",
+        })
+        with self._patch(tar):
+            skill = manager.install_managed_from_github(
+                "https://github.com/owner/repo",
+                scope="user",
+                managed_source="https://github.com/owner/repo/tree/main",
+                managed_ref="deadbeef",
+            )
+        assert skill.managed is True
+        assert skill.managed_source == "https://github.com/owner/repo/tree/main"
+        assert skill.managed_ref == "deadbeef"
+        md = (user_dir / "mgd" / SKILL_ENTRY_FILE).read_text()
+        assert "managed_source: https://github.com/owner/repo/tree/main" in md
+        assert "managed_ref: deadbeef" in md
+
+    def test_overwrites_existing_managed_bundle(self, manager, skill_dirs):
+        user_dir, _ = skill_dirs
+        tar1 = build_tarball({
+            "repo-xyz/SKILL.md": "---\nname: mgd\ndescription: v1\n---\nbody",
+        })
+        tar2 = build_tarball({
+            "repo-xyz/SKILL.md": "---\nname: mgd\ndescription: v2\n---\nbody",
+        })
+        with self._patch(tar1):
+            manager.install_managed_from_github(
+                "https://github.com/owner/repo", scope="user",
+                managed_source="src", managed_ref="sha1",
+            )
+        with self._patch(tar2):
+            skill = manager.install_managed_from_github(
+                "https://github.com/owner/repo", scope="user",
+                managed_source="src", managed_ref="sha2",
+            )
+        assert skill.description == "v2"
+        assert skill.managed_ref == "sha2"
+
+    def test_refuses_to_overwrite_user_authored(self, manager):
+        manager.create_skill("user", "mgd", "user bundle", [], "mine")
+        tar = build_tarball({
+            "repo-xyz/SKILL.md": "---\nname: mgd\ndescription: from gh\n---\nbody",
+        })
+        with self._patch(tar):
+            with pytest.raises(FileExistsError, match="user-authored"):
+                manager.install_managed_from_github(
+                    "https://github.com/owner/repo", scope="user",
+                    managed_source="src", managed_ref="sha",
+                )
+
+    def test_list_managed_skills_filters(self, manager, skill_dirs):
+        manager.create_skill("user", "plain", "d", [], "b")
+        tar = build_tarball({
+            "repo-xyz/SKILL.md": "---\nname: mgd\ndescription: d\n---\nb",
+        })
+        with self._patch(tar):
+            manager.install_managed_from_github(
+                "https://github.com/owner/repo", scope="user",
+                managed_source="src", managed_ref="sha",
+            )
+        managed = manager.list_managed_skills()
+        assert [s.name for s in managed] == ["mgd"]

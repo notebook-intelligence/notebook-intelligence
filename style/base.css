@@ -1211,6 +1211,38 @@ svg.access-token-warning {
   font-size: var(--jp-ui-font-size1);
 }
 
+.nbi-skills-sync-message {
+  padding: 6px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-skills-managed-banner {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  border: 1px solid var(--jp-border-color2);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-skill-managed-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background-color: var(--jp-brand-color3, var(--jp-layout-color3));
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 600;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .nbi-skills-section {
   display: flex;
   flex-direction: column;

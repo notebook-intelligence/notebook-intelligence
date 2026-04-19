@@ -190,7 +190,13 @@ class SkillManager:
         new_body = body if body is not None else skill.body
 
         md_content = serialize_skill_md(
-            name, new_description, new_allowed_tools, new_body, source=skill.source
+            name,
+            new_description,
+            new_allowed_tools,
+            new_body,
+            source=skill.source,
+            managed_source=skill.managed_source,
+            managed_ref=skill.managed_ref,
         )
         skill.skill_md_path().write_text(md_content, encoding="utf-8")
 
@@ -204,6 +210,8 @@ class SkillManager:
             allowed_tools=list(new_allowed_tools),
             body=new_body,
             source=skill.source,
+            managed_source=skill.managed_source,
+            managed_ref=skill.managed_ref,
         )
         self._notify_skills_changed()
         return updated
@@ -231,6 +239,8 @@ class SkillManager:
             skill.allowed_tools,
             skill.body,
             source=skill.source,
+            managed_source=skill.managed_source,
+            managed_ref=skill.managed_ref,
         )
         (new_bundle_dir / SKILL_ENTRY_FILE).write_text(md_content, encoding="utf-8")
 
@@ -362,6 +372,63 @@ class SkillManager:
             return skill
         finally:
             shutil.rmtree(staged.tmp_root, ignore_errors=True)
+
+    def install_managed_from_github(
+        self,
+        url: str,
+        scope: SkillScope,
+        managed_source: str,
+        managed_ref: str,
+        name_override: Optional[str] = None,
+    ) -> Skill:
+        """Install a skill from GitHub as a managed bundle.
+
+        Differs from `import_from_github`:
+        - Stamps `managed_source` and `managed_ref` frontmatter keys alongside `source`.
+        - Always overwrites existing managed bundles, but refuses to overwrite a
+          user-authored bundle of the same name (re-reads frontmatter to check).
+        """
+        staged = stage_skill_from_github(url)
+        try:
+            name = name_override.strip() if name_override else staged.name
+            _validate_name(name)
+
+            scope_dir = self.scope_dir(scope)
+            scope_dir.mkdir(parents=True, exist_ok=True)
+            target_dir = scope_dir / name
+            if target_dir.exists():
+                existing_md = target_dir / SKILL_ENTRY_FILE
+                if existing_md.exists():
+                    existing = Skill.from_path(target_dir, scope)
+                    if not existing.managed:
+                        raise FileExistsError(
+                            f"Skill '{name}' already exists in {scope} scope "
+                            "as a user-authored bundle; refusing to overwrite"
+                        )
+                shutil.rmtree(target_dir)
+
+            shutil.copytree(staged.skill_root, target_dir)
+
+            md_content = serialize_skill_md(
+                name,
+                staged.description,
+                staged.allowed_tools,
+                staged.body,
+                source=staged.canonical_url,
+                managed_source=managed_source,
+                managed_ref=managed_ref,
+            )
+            (target_dir / SKILL_ENTRY_FILE).write_text(md_content, encoding="utf-8")
+
+            skill = Skill.from_path(target_dir, scope)
+            self._notify_skills_changed()
+            return skill
+        finally:
+            shutil.rmtree(staged.tmp_root, ignore_errors=True)
+
+    def list_managed_skills(self) -> List[Skill]:
+        """Return only the installed skills that carry a `managed_source`."""
+        return [s for s in self.list_skills() if s.managed]
 
 
 def _validate_name(name: str) -> None:

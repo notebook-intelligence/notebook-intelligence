@@ -390,6 +390,33 @@ The Skills tab lets you:
 
 When a skill is saved, added, or removed — either through the UI or directly on disk — the Claude SDK session is transparently reloaded (preserving conversation history via the session's resume behavior), and a **"Skills reloaded"** banner briefly appears in the chat sidebar.
 
+#### Managed skills via an org manifest
+
+For organization-wide deployments (e.g., Kubeflow notebooks), NBI can install and keep a curated set of Claude skills in sync from a YAML/JSON manifest. Skills installed this way are marked **Managed** in the UI — they are read-only (edit/rename/delete disabled) and are refreshed on a schedule.
+
+Configure via environment variables (also available as traitlets on `NotebookIntelligence`):
+
+- `NBI_SKILLS_MANIFEST` — URL (`https://...`) or local filesystem path to the manifest. Empty/unset disables the feature.
+- `NBI_SKILLS_MANIFEST_INTERVAL` — seconds between reconciles. Default `86400` (24h). Reconciliation also runs once at startup.
+- `NBI_SKILLS_MANIFEST_TOKEN` — optional bearer token for fetching the manifest itself over HTTPS. When the manifest URL is hosted on github.com / `raw.githubusercontent.com` / `*.githubusercontent.com` and this var is unset, NBI falls back to the same `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` chain used for skill-tarball fetches, so users with an existing GitHub login get private-manifest access automatically.
+
+Manifest schema:
+
+```yaml
+skills:
+  - url: https://github.com/org/repo/tree/main/skills/data-eda
+    name: data-eda        # optional: override the installed skill name
+    scope: user           # optional: "user" (default) or "project"
+  - url: https://github.com/org/repo/tree/main/skills/ml-recipes
+```
+
+Behavior:
+
+- The reconciler probes GitHub's commits API for each entry's `subpath`/`ref` and skips fetching the tarball when the installed `managed_ref` already matches the latest SHA. Full-SHA URLs skip the probe.
+- Managed skills present in the install but missing from the manifest are **removed**. User-authored skills are never touched; if a user-authored skill has the same name as a manifest entry, the reconciler leaves it alone and reports a per-entry error.
+- A manual **Sync managed skills** button appears in the Skills panel when any managed skill is installed, and a `POST /notebook-intelligence/skills/reconcile` endpoint is available for scripted triggers.
+- If the manifest cannot be loaded (network, bad YAML, missing `skills:` list), the reconciler logs the error and leaves all managed skills in place rather than mass-deleting on a transient failure.
+
 ### Developer documentation
 
 For building locally and contributing see the [developer documentatation](CONTRIBUTING.md).
