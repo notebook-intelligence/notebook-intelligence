@@ -280,10 +280,6 @@ class ClaudeCodeClient():
         self._server_info_lock = threading.Lock()
         self._reconnect_required = False
         self._continue_conversation: bool | None = None
-        # One-shot session id to resume on the next connect(). Cleared after
-        # it is applied so subsequent reconnects don't unexpectedly resume
-        # the same session.
-        self._resume_session_id: str | None = None
         self.connect()
 
     @property
@@ -485,17 +481,6 @@ class ClaudeCodeClient():
         self._client_options.continue_conversation = self._continue_conversation if self._continue_conversation is not None else continue_conversation_cfg
         self._continue_conversation = None
 
-        # Apply a one-shot resume request if the user picked a prior
-        # session. resume is mutually exclusive with continue_conversation:
-        # when resuming, we always start from the chosen transcript rather
-        # than the most recent one.
-        if self._resume_session_id is not None:
-            self._client_options.resume = self._resume_session_id
-            self._client_options.continue_conversation = False
-            self._resume_session_id = None
-        else:
-            self._client_options.resume = None
-
         return ClaudeSDKClient(options=self._client_options)
 
     async def _get_client(self) -> ClaudeSDKClient:
@@ -616,16 +601,6 @@ class ClaudeCodeClient():
     def reconnect(self):
         self.disconnect()
         self.connect()
-
-    def resume_session(self, session_id: str) -> None:
-        """Reconnect the Claude client so the next query resumes ``session_id``.
-
-        Raises ``ValueError`` if ``session_id`` is empty.
-        """
-        if not session_id:
-            raise ValueError("session_id must be a non-empty string")
-        self._resume_session_id = session_id
-        self.reconnect()
 
 
 @tool("create-new-notebook", "Creates a new empty notebook.", {})
@@ -1041,14 +1016,6 @@ If you need to install a Python package within a notebook cell code, use %pip in
     def clear_chat_history(self):
         self._client.clear_chat_history()
         self._client.reconnect()
-
-    def resume_session(self, session_id: str) -> None:
-        """Reconnect the underlying Claude client to resume ``session_id``.
-
-        The next query sent to Claude Code will continue the transcript at
-        that id instead of starting a fresh conversation.
-        """
-        self._client.resume_session(session_id)
 
     def update_client(self):
         self._client_options = self._create_client_options()
