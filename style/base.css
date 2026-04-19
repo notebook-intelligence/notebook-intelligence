@@ -51,15 +51,6 @@
   padding: 3px 5px;
 }
 
-.chat-message-notice .chat-message-from-title {
-  font-weight: normal;
-  font-style: italic;
-}
-
-.chat-message-notice .chat-message-content p {
-  margin-block: 2px;
-}
-
 .sidebar-header {
   height: 25px;
   padding: 5px 10px;
@@ -278,6 +269,11 @@ pre:has(.code-block-header) {
   font-weight: bold;
 }
 
+.chat-message-notice .chat-message-from-title {
+  font-weight: normal;
+  font-style: italic;
+}
+
 .chat-message-from-progress {
   padding-left: 10px;
   flex-grow: 1;
@@ -320,6 +316,10 @@ pre:has(.code-block-header) {
 .chat-message-content p {
   margin-block: 5px 5px;
   line-height: 18px;
+}
+
+.chat-message-notice .chat-message-content p {
+  margin-block: 2px;
 }
 
 .chat-message-content a {

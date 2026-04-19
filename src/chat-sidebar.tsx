@@ -323,11 +323,46 @@ const TEXT_MIME_PREFIXES = [
 ];
 
 const TEXT_EXTENSIONS = new Set([
-  '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml', '.md',
-  '.txt', '.csv', '.html', '.css', '.sql', '.sh', '.r', '.ipynb', '.xml',
-  '.toml', '.cfg', '.ini', '.env', '.gitignore', '.dockerfile', '.svg',
-  '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.swift',
-  '.kt', '.scala', '.lua', '.pl', '.m', '.mm'
+  '.py',
+  '.js',
+  '.ts',
+  '.tsx',
+  '.jsx',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.md',
+  '.txt',
+  '.csv',
+  '.html',
+  '.css',
+  '.sql',
+  '.sh',
+  '.r',
+  '.ipynb',
+  '.xml',
+  '.toml',
+  '.cfg',
+  '.ini',
+  '.env',
+  '.gitignore',
+  '.dockerfile',
+  '.svg',
+  '.rb',
+  '.go',
+  '.rs',
+  '.java',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.swift',
+  '.kt',
+  '.scala',
+  '.lua',
+  '.pl',
+  '.m',
+  '.mm'
 ]);
 
 function isLikelyTextFile(file: File): boolean {
@@ -1172,7 +1207,11 @@ function SidebarComponent(props: any) {
   const handleDragOver = (event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!isDragOver && chatEnabled && event.dataTransfer.types.includes('Files')) {
+    if (
+      !isDragOver &&
+      chatEnabled &&
+      event.dataTransfer.types.includes('Files')
+    ) {
       setIsDragOver(true);
     }
   };
@@ -1988,9 +2027,8 @@ function SidebarComponent(props: any) {
         type: ContextType.Custom,
         content: file.content,
         currentCellContents: null,
-        filePath: file.source === 'upload'
-          ? (file.serverPath ?? file.path)
-          : file.path,
+        filePath:
+          file.source === 'upload' ? (file.serverPath ?? file.path) : file.path,
         startLine: 1,
         endLine: file.lineCount
       };
@@ -2663,12 +2701,26 @@ function SidebarComponent(props: any) {
                 <div
                   key={file.serverPath ?? file.path}
                   className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}`}
-                  title={file.source === 'upload' ? `Uploaded: ${file.path}` : file.path}
+                  title={
+                    file.source === 'upload'
+                      ? `Uploaded: ${file.path}`
+                      : file.path
+                  }
                 >
-                  <div>{file.source === 'upload' ? <><VscCloudUpload /> {file.path}</> : file.path}</div>
+                  <div>
+                    {file.source === 'upload' ? (
+                      <>
+                        <VscCloudUpload /> {file.path}
+                      </>
+                    ) : (
+                      file.path
+                    )}
+                  </div>
                   <div
                     className="user-input-context-toggle"
-                    onClick={() => removeSelectedContextFile(file.serverPath ?? file.path)}
+                    onClick={() =>
+                      removeSelectedContextFile(file.serverPath ?? file.path)
+                    }
                   >
                     <VscClose title="Remove attached file" />
                   </div>
