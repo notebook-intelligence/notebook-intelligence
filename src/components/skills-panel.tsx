@@ -1,6 +1,12 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { Dialog, showDialog } from '@jupyterlab/apputils';
 import {
   ISkillDetail,
@@ -108,10 +114,7 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
     const result = await showDialog({
       title: 'Delete skill?',
       body: `"${skill.name}" will be deleted.`,
-      buttons: [
-        Dialog.cancelButton(),
-        Dialog.warnButton({ label: 'Delete' })
-      ]
+      buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: 'Delete' })]
     });
     if (!result.button.accept) {
       return;
@@ -162,7 +165,9 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
   };
 
   const handleUndoDelete = async () => {
-    if (!undo) return;
+    if (!undo) {
+      return;
+    }
     const { detail, bundleFiles } = undo;
     dismissUndo();
     try {
@@ -262,7 +267,9 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
           </button>
           <button
             className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-            onClick={() => setView({ kind: 'editor', scope: 'user', name: null })}
+            onClick={() =>
+              setView({ kind: 'editor', scope: 'user', name: null })
+            }
           >
             <div className="jp-Dialog-buttonLabel">New Skill</div>
           </button>
@@ -288,19 +295,13 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
       <SkillScopeSection
         scope="project"
         label={
-          context?.projectName
-            ? `PROJECT · ${context.projectName}`
-            : 'PROJECT'
+          context?.projectName ? `PROJECT · ${context.projectName}` : 'PROJECT'
         }
-        pathHint={
-          context?.projectSkillsDir || '<project>/.claude/skills/'
-        }
+        pathHint={context?.projectSkillsDir || '<project>/.claude/skills/'}
         skills={projectSkills}
         loading={loading}
         onEdit={s => setView({ kind: 'editor', scope: s.scope, name: s.name })}
-        onNew={() =>
-          setView({ kind: 'editor', scope: 'project', name: null })
-        }
+        onNew={() => setView({ kind: 'editor', scope: 'project', name: null })}
         onRename={handleRename}
         onDuplicate={handleDuplicate}
         onDelete={handleDelete}
@@ -362,7 +363,9 @@ function GitHubImportDialog(props: {
 
   const handleFetchPreview = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canFetchPreview) return;
+    if (!canFetchPreview) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -380,7 +383,9 @@ function GitHubImportDialog(props: {
 
   const handleInstall = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canInstall || !preview) return;
+    if (!canInstall || !preview) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -487,7 +492,9 @@ function GitHubImportDialog(props: {
                 </div>
               </div>
               <div className="nbi-form-field">
-                <label htmlFor="nbi-import-name">Name (optional override)</label>
+                <label htmlFor="nbi-import-name">
+                  Name (optional override)
+                </label>
                 <input
                   id="nbi-import-name"
                   type="text"
@@ -586,10 +593,7 @@ function SkillScopeSection(props: {
 }): JSX.Element {
   return (
     <div className="nbi-skills-section">
-      <div
-        className="nbi-skills-section-caption"
-        title={props.pathHint}
-      >
+      <div className="nbi-skills-section-caption" title={props.pathHint}>
         {props.label} · {props.skills.length}
       </div>
       {props.loading && props.skills.length === 0 && (
@@ -598,8 +602,7 @@ function SkillScopeSection(props: {
       {!props.loading && props.skills.length === 0 && (
         <div className="nbi-skills-empty">
           <span>
-            No {props.scope} skills. They live in{' '}
-            <code>{props.pathHint}</code>.
+            No {props.scope} skills. They live in <code>{props.pathHint}</code>.
           </span>
           <button
             className="jp-toast-button jp-mod-small jp-Button"
@@ -730,15 +733,16 @@ function SkillPromptDialog(props: {
   const conflict = props.existingNames.some(
     s => s.scope === scope && s.name === trimmed && !isUnchangedRename
   );
-  const canSubmit =
-    !busy && nameValid && !conflict && !isUnchangedRename;
+  const canSubmit = !busy && nameValid && !conflict && !isUnchangedRename;
 
   const title = isRename ? 'Rename skill' : 'Duplicate skill';
   const submitLabel = isRename ? 'Rename' : 'Duplicate';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -995,8 +999,7 @@ function SkillEditor(props: {
 
   const nameValid = SKILL_NAME_PATTERN.test(name);
   const descriptionValid = description.trim().length > 0;
-  const canSave =
-    !saving && (!effectiveIsNew || nameValid) && descriptionValid;
+  const canSave = !saving && (!effectiveIsNew || nameValid) && descriptionValid;
 
   const updateBuffer = (path: string, content: string) => {
     setBuffers(prev => {
@@ -1085,7 +1088,11 @@ function SkillEditor(props: {
           for (const path of savedPaths) {
             const b = next.get(path);
             if (b) {
-              next.set(path, { content: b.content, saved: b.content, loaded: true });
+              next.set(path, {
+                content: b.content,
+                saved: b.content,
+                loaded: true
+              });
             }
           }
           return next;
@@ -1159,10 +1166,7 @@ function SkillEditor(props: {
     const result = await showDialog({
       title: 'Delete file?',
       body: `"${path}" will be permanently deleted.`,
-      buttons: [
-        Dialog.cancelButton(),
-        Dialog.warnButton({ label: 'Delete' })
-      ]
+      buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: 'Delete' })]
     });
     if (!result.button.accept) {
       return;
@@ -1291,7 +1295,9 @@ function SkillEditor(props: {
           >
             Skills
           </button>
-          <span className="nbi-breadcrumb-separator" aria-hidden="true">/</span>
+          <span className="nbi-breadcrumb-separator" aria-hidden="true">
+            /
+          </span>
           <span className="nbi-breadcrumb-current">
             {effectiveIsNew ? 'New skill' : effectiveName}
           </span>
@@ -1313,7 +1319,8 @@ function SkillEditor(props: {
               {saving ? 'Saving…' : 'Save'}
               {anyDirty && (
                 <span className="nbi-dirty-marker" aria-label="Unsaved changes">
-                  {' '}•
+                  {' '}
+                  •
                 </span>
               )}
             </div>
@@ -1453,7 +1460,9 @@ function BundleFileTabs(props: {
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
-    if (!openMenu) return;
+    if (!openMenu) {
+      return;
+    }
     const onDocClick = () => setOpenMenu(null);
     document.addEventListener('click', onDocClick);
     return () => document.removeEventListener('click', onDocClick);
@@ -1656,9 +1665,7 @@ function AllowedToolsPicker(props: {
           onChange={e => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={() => draft.trim() && commit(draft)}
-          placeholder={
-            props.value.length === 0 ? 'e.g. Bash(git:*)' : ''
-          }
+          placeholder={props.value.length === 0 ? 'e.g. Bash(git:*)' : ''}
         />
       </div>
       <div className="nbi-tools-picker-suggestions">
@@ -1699,7 +1706,10 @@ function AutoGrowTextarea(props: {
         : parsed;
     }
     ta.style.height = 'auto';
-    const next = Math.max(ta.scrollHeight, props.minRows * lineHeightRef.current);
+    const next = Math.max(
+      ta.scrollHeight,
+      props.minRows * lineHeightRef.current
+    );
     ta.style.height = `${next}px`;
   }, [props.value, props.minRows]);
 
@@ -1714,4 +1724,3 @@ function AutoGrowTextarea(props: {
     />
   );
 }
-

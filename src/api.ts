@@ -523,9 +523,15 @@ export class NBIAPI {
     }
   ): Promise<ISkillDetail> {
     const wire: any = {};
-    if (payload.description !== undefined) wire.description = payload.description;
-    if (payload.allowedTools !== undefined) wire.allowed_tools = payload.allowedTools;
-    if (payload.body !== undefined) wire.body = payload.body;
+    if (payload.description !== undefined) {
+      wire.description = payload.description;
+    }
+    if (payload.allowedTools !== undefined) {
+      wire.allowed_tools = payload.allowedTools;
+    }
+    if (payload.body !== undefined) {
+      wire.body = payload.body;
+    }
     const data = await requestAPI<any>(
       `skills/${scope}/${encodeURIComponent(name)}`,
       {
@@ -568,8 +574,12 @@ export class NBIAPI {
     overwrite?: boolean;
   }): Promise<ISkillDetail> {
     const wire: any = { url: payload.url, scope: payload.scope };
-    if (payload.name) wire.name = payload.name;
-    if (payload.overwrite) wire.overwrite = true;
+    if (payload.name) {
+      wire.name = payload.name;
+    }
+    if (payload.overwrite) {
+      wire.overwrite = true;
+    }
     const data = await requestAPI<any>('skills/import', {
       method: 'POST',
       body: JSON.stringify(wire)

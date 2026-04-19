@@ -1048,7 +1048,7 @@ svg.access-token-warning {
 }
 
 .pill-item.checked {
-  background-color: var(--jp-brand-color3, rgba(68, 138, 255, 0.12));
+  background-color: var(--jp-brand-color3, rgb(68 138 255 / 12%));
   border-color: var(--jp-brand-color1);
   color: var(--jp-brand-color0, var(--jp-ui-font-color1));
 }
@@ -1156,7 +1156,7 @@ svg.access-token-warning {
 .nbi-skills-error {
   padding: 8px 12px;
   border-radius: 4px;
-  background-color: var(--jp-error-color3, rgba(230, 100, 100, 0.15));
+  background-color: var(--jp-error-color3, rgb(230 100 100 / 15%));
   color: var(--jp-ui-font-color1);
   border: 1px solid var(--jp-error-color1, #d32f2f);
   font-size: var(--jp-ui-font-size1);
@@ -1252,21 +1252,11 @@ svg.access-token-warning {
   opacity: 1;
 }
 
-.nbi-breadcrumb-link:focus-visible,
-.nbi-skill-editor-tab:focus-visible,
-.nbi-skill-editor-tab-add:focus-visible,
-.nbi-pill-remove:focus-visible,
-.pill-item:focus-visible,
-.nbi-icon-button:focus-visible {
-  outline: 2px solid var(--jp-brand-color1);
-  outline-offset: 1px;
-}
-
 /* Modal dialog used for rename/duplicate */
 .nbi-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgb(0 0 0 / 35%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1277,7 +1267,7 @@ svg.access-token-warning {
   background-color: var(--jp-layout-color1);
   border: 1px solid var(--jp-border-color1);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
   padding: 16px;
   min-width: 320px;
   max-width: 420px;
@@ -1362,7 +1352,7 @@ svg.access-token-warning {
   background-color: var(--jp-inverse-layout-color1, #323232);
   color: var(--jp-inverse-ui-font-color1, #fff);
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
   font-size: var(--jp-ui-font-size1);
 }
 
@@ -1561,8 +1551,7 @@ svg.access-token-warning {
 
 .nbi-form-field input:focus,
 .nbi-form-field select:focus,
-.nbi-form-field textarea:focus,
-.nbi-tools-picker-input:focus-within {
+.nbi-form-field textarea:focus {
   outline: none;
   border-color: var(--jp-brand-color1);
   box-shadow: 0 0 0 1px var(--jp-brand-color1);
@@ -1598,6 +1587,13 @@ svg.access-token-warning {
   align-items: center;
 }
 
+.nbi-tools-picker-input:focus-within {
+  outline: none;
+  border-color: var(--jp-brand-color1);
+  box-shadow: 0 0 0 1px var(--jp-brand-color1);
+}
+
+/* stylelint-disable-next-line no-descending-specificity */
 .nbi-tools-picker-input input {
   flex: 1 1 100px;
   min-width: 100px;
@@ -1681,7 +1677,7 @@ svg.access-token-warning {
 }
 
 .nbi-skill-editor-tab.active {
-  background-color: var(--jp-brand-color3, rgba(68, 138, 255, 0.12));
+  background-color: var(--jp-brand-color3, rgb(68 138 255 / 12%));
   border-color: var(--jp-brand-color1);
   color: var(--jp-brand-color0, var(--jp-ui-font-color1));
   font-weight: 600;
@@ -1709,7 +1705,7 @@ svg.access-token-warning {
   background-color: var(--jp-layout-color1);
   border: 1px solid var(--jp-border-color1);
   border-radius: 3px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 15%);
   padding: 4px 0;
 }
 
@@ -1729,7 +1725,7 @@ svg.access-token-warning {
 }
 
 .nbi-skill-editor-tab-menu button.danger:hover {
-  background-color: var(--jp-error-color3, rgba(230, 100, 100, 0.2));
+  background-color: var(--jp-error-color3, rgb(230 100 100 / 20%));
   color: var(--jp-error-color1, #d32f2f);
 }
 
@@ -1793,8 +1789,18 @@ svg.access-token-warning {
 }
 
 .nbi-icon-button.danger:hover {
-  background-color: var(--jp-error-color3, rgba(230, 100, 100, 0.2));
+  background-color: var(--jp-error-color3, rgb(230 100 100 / 20%));
   color: var(--jp-error-color1, #d32f2f);
+}
+
+.nbi-breadcrumb-link:focus-visible,
+.nbi-skill-editor-tab:focus-visible,
+.nbi-skill-editor-tab-add:focus-visible,
+.nbi-pill-remove:focus-visible,
+.pill-item:focus-visible,
+.nbi-icon-button:focus-visible {
+  outline: 2px solid var(--jp-brand-color1);
+  outline-offset: 1px;
 }
 
 .config-dialog-body a {
@@ -1855,6 +1861,7 @@ svg.access-token-warning {
   gap: 5px;
 }
 
+/* stylelint-disable-next-line no-descending-specificity */
 .ask-user-question-option-input-container input {
   transform: scale(1.25);
 }

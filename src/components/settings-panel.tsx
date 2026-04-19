@@ -982,283 +982,287 @@ function SettingsPanelComponentClaude(props: any) {
       )}
       {claudeSubTab === 'skills' && <SettingsPanelComponentSkills />}
       {claudeSubTab === 'settings' && (
-      <div className="config-dialog-body">
-        <div className="model-config-section">
-          <div className="model-config-section-header">Enable Claude mode</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <span>
-                This requires a{' '}
-                <a href="https://claude.ai" target="_blank">
-                  Claude
-                </a>{' '}
-                account and{' '}
-                <a href="https://code.claude.com/" target="_blank">
-                  Claude Code
-                </a>{' '}
-                installed in your system.
-              </span>
+        <div className="config-dialog-body">
+          <div className="model-config-section">
+            <div className="model-config-section-header">
+              Enable Claude mode
             </div>
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="Enable Claude mode"
-                    checked={claudeEnabled}
-                    onClick={() => {
-                      setClaudeEnabled(!claudeEnabled);
-                    }}
-                  ></CheckBoxItem>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <span>
+                  This requires a{' '}
+                  <a href="https://claude.ai" target="_blank">
+                    Claude
+                  </a>{' '}
+                  account and{' '}
+                  <a href="https://code.claude.com/" target="_blank">
+                    Claude Code
+                  </a>{' '}
+                  installed in your system.
+                </span>
+              </div>
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="Enable Claude mode"
+                      checked={claudeEnabled}
+                      onClick={() => {
+                        setClaudeEnabled(!claudeEnabled);
+                      }}
+                    ></CheckBoxItem>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div className="model-config-section">
-          <div
-            className="model-config-section-header"
-            style={{ display: 'flex' }}
-          >
-            <div style={{ flexGrow: 1 }}>Models</div>
-            <div>
-              <button
-                className="jp-toast-button jp-mod-small jp-Button"
-                onClick={refreshClaudeModels}
-                disabled={loadingModels}
-              >
-                <div className="jp-Dialog-buttonLabel">
-                  {loadingModels ? 'Loading...' : 'Refresh'}
-                </div>
-              </button>
-            </div>
-          </div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>Chat model</div>
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    onChange={event => setChatModel(event.target.value)}
-                  >
-                    <option
-                      value={ClaudeModelType.Default}
-                      selected={chatModel === ClaudeModelType.Default}
-                    >
-                      Default (recommended)
-                    </option>
-                    {claudeModels.map(model => (
-                      <option
-                        key={model.id}
-                        value={model.id}
-                        selected={chatModel === model.id}
-                      >
-                        {model.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+          <div className="model-config-section">
+            <div
+              className="model-config-section-header"
+              style={{ display: 'flex' }}
+            >
+              <div style={{ flexGrow: 1 }}>Models</div>
+              <div>
+                <button
+                  className="jp-toast-button jp-mod-small jp-Button"
+                  onClick={refreshClaudeModels}
+                  disabled={loadingModels}
+                >
+                  <div className="jp-Dialog-buttonLabel">
+                    {loadingModels ? 'Loading...' : 'Refresh'}
+                  </div>
+                </button>
               </div>
-              <div className="model-config-section-column">
-                <div>Auto-complete model</div>
-                <div>
-                  <select
-                    className="jp-mod-styled"
-                    onChange={event =>
-                      setInlineCompletionModel(event.target.value)
-                    }
-                  >
-                    <option
-                      value={ClaudeModelType.None}
-                      selected={inlineCompletionModel === ClaudeModelType.None}
+            </div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>Chat model</div>
+                  <div>
+                    <select
+                      className="jp-mod-styled"
+                      onChange={event => setChatModel(event.target.value)}
                     >
-                      None
-                    </option>
-                    <option
-                      value={ClaudeModelType.Inherit}
-                      selected={
-                        inlineCompletionModel === ClaudeModelType.Inherit
+                      <option
+                        value={ClaudeModelType.Default}
+                        selected={chatModel === ClaudeModelType.Default}
+                      >
+                        Default (recommended)
+                      </option>
+                      {claudeModels.map(model => (
+                        <option
+                          key={model.id}
+                          value={model.id}
+                          selected={chatModel === model.id}
+                        >
+                          {model.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="model-config-section-column">
+                  <div>Auto-complete model</div>
+                  <div>
+                    <select
+                      className="jp-mod-styled"
+                      onChange={event =>
+                        setInlineCompletionModel(event.target.value)
                       }
                     >
-                      Inherit from general settings
-                    </option>
-                    <option
-                      value={ClaudeModelType.Default}
-                      selected={
-                        inlineCompletionModel === ClaudeModelType.Default
-                      }
-                    >
-                      Default (recommended)
-                    </option>
-                    {claudeModels.map(model => (
                       <option
-                        key={model.id}
-                        value={model.id}
-                        selected={inlineCompletionModel === model.id}
+                        value={ClaudeModelType.None}
+                        selected={
+                          inlineCompletionModel === ClaudeModelType.None
+                        }
                       >
-                        {model.name}
+                        None
                       </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">
-            Chat Agent setting sources
-          </div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="User"
-                    checked={settingSources.includes('user')}
-                    onClick={() => {
-                      setSettingSources(
-                        settingSources.includes('user')
-                          ? settingSources.filter(
-                              (source: string) => source !== 'user'
-                            )
-                          : [...settingSources, 'user']
-                      );
-                    }}
-                  ></CheckBoxItem>
-                </div>
-              </div>
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="Project (Jupyter root directory)"
-                    checked={settingSources.includes('project')}
-                    onClick={() => {
-                      setSettingSources(
-                        settingSources.includes('project')
-                          ? settingSources.filter(
-                              (source: string) => source !== 'project'
-                            )
-                          : [...settingSources, 'project']
-                      );
-                    }}
-                  ></CheckBoxItem>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">Chat Agent tools</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="Claude Code tools"
-                    checked={tools.includes(ClaudeToolType.ClaudeCodeTools)}
-                    disabled={true}
-                    onClick={() => {
-                      setTools(
-                        tools.includes(ClaudeToolType.ClaudeCodeTools)
-                          ? tools.filter(
-                              (tool: string) =>
-                                tool !== ClaudeToolType.ClaudeCodeTools
-                            )
-                          : [...tools, ClaudeToolType.ClaudeCodeTools]
-                      );
-                    }}
-                  ></CheckBoxItem>
-                </div>
-              </div>
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="Jupyter UI tools"
-                    checked={tools.includes(ClaudeToolType.JupyterUITools)}
-                    onClick={() => {
-                      setTools(
-                        tools.includes(ClaudeToolType.JupyterUITools)
-                          ? tools.filter(
-                              (tool: string) =>
-                                tool !== ClaudeToolType.JupyterUITools
-                            )
-                          : [...tools, ClaudeToolType.JupyterUITools]
-                      );
-                    }}
-                  ></CheckBoxItem>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">
-            Conversation History
-          </div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div>
-                  <CheckBoxItem
-                    header={true}
-                    label="Remember conversation history"
-                    checked={continueConversation}
-                    onClick={() => {
-                      setContinueConversation(!continueConversation);
-                    }}
-                  ></CheckBoxItem>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">Claude account</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div className="form-field-row">
-                  <div className="form-field-description">
-                    API Key (optional)
+                      <option
+                        value={ClaudeModelType.Inherit}
+                        selected={
+                          inlineCompletionModel === ClaudeModelType.Inherit
+                        }
+                      >
+                        Inherit from general settings
+                      </option>
+                      <option
+                        value={ClaudeModelType.Default}
+                        selected={
+                          inlineCompletionModel === ClaudeModelType.Default
+                        }
+                      >
+                        Default (recommended)
+                      </option>
+                      {claudeModels.map(model => (
+                        <option
+                          key={model.id}
+                          value={model.id}
+                          selected={inlineCompletionModel === model.id}
+                        >
+                          {model.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <input
-                    name="chat-model-id-input"
-                    placeholder="API Key"
-                    className="jp-mod-styled"
-                    spellCheck={false}
-                    value={apiKey}
-                    onChange={event => setApiKey(event.target.value)}
-                  />
                 </div>
-                <div className="form-field-row">
-                  <div className="form-field-description">
-                    Base URL (optional)
+              </div>
+            </div>
+          </div>
+
+          <div className="model-config-section">
+            <div className="model-config-section-header">
+              Chat Agent setting sources
+            </div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="User"
+                      checked={settingSources.includes('user')}
+                      onClick={() => {
+                        setSettingSources(
+                          settingSources.includes('user')
+                            ? settingSources.filter(
+                                (source: string) => source !== 'user'
+                              )
+                            : [...settingSources, 'user']
+                        );
+                      }}
+                    ></CheckBoxItem>
                   </div>
-                  <input
-                    name="chat-model-id-input"
-                    placeholder="https://api.anthropic.com"
-                    className="jp-mod-styled"
-                    spellCheck={false}
-                    value={baseUrl}
-                    onChange={event => setBaseUrl(event.target.value)}
-                  />
+                </div>
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="Project (Jupyter root directory)"
+                      checked={settingSources.includes('project')}
+                      onClick={() => {
+                        setSettingSources(
+                          settingSources.includes('project')
+                            ? settingSources.filter(
+                                (source: string) => source !== 'project'
+                              )
+                            : [...settingSources, 'project']
+                        );
+                      }}
+                    ></CheckBoxItem>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="model-config-section">
+            <div className="model-config-section-header">Chat Agent tools</div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="Claude Code tools"
+                      checked={tools.includes(ClaudeToolType.ClaudeCodeTools)}
+                      disabled={true}
+                      onClick={() => {
+                        setTools(
+                          tools.includes(ClaudeToolType.ClaudeCodeTools)
+                            ? tools.filter(
+                                (tool: string) =>
+                                  tool !== ClaudeToolType.ClaudeCodeTools
+                              )
+                            : [...tools, ClaudeToolType.ClaudeCodeTools]
+                        );
+                      }}
+                    ></CheckBoxItem>
+                  </div>
+                </div>
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="Jupyter UI tools"
+                      checked={tools.includes(ClaudeToolType.JupyterUITools)}
+                      onClick={() => {
+                        setTools(
+                          tools.includes(ClaudeToolType.JupyterUITools)
+                            ? tools.filter(
+                                (tool: string) =>
+                                  tool !== ClaudeToolType.JupyterUITools
+                              )
+                            : [...tools, ClaudeToolType.JupyterUITools]
+                        );
+                      }}
+                    ></CheckBoxItem>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="model-config-section">
+            <div className="model-config-section-header">
+              Conversation History
+            </div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div>
+                    <CheckBoxItem
+                      header={true}
+                      label="Remember conversation history"
+                      checked={continueConversation}
+                      onClick={() => {
+                        setContinueConversation(!continueConversation);
+                      }}
+                    ></CheckBoxItem>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="model-config-section">
+            <div className="model-config-section-header">Claude account</div>
+            <div className="model-config-section-body">
+              <div className="model-config-section-row">
+                <div className="model-config-section-column">
+                  <div className="form-field-row">
+                    <div className="form-field-description">
+                      API Key (optional)
+                    </div>
+                    <input
+                      name="chat-model-id-input"
+                      placeholder="API Key"
+                      className="jp-mod-styled"
+                      spellCheck={false}
+                      value={apiKey}
+                      onChange={event => setApiKey(event.target.value)}
+                    />
+                  </div>
+                  <div className="form-field-row">
+                    <div className="form-field-description">
+                      Base URL (optional)
+                    </div>
+                    <input
+                      name="chat-model-id-input"
+                      placeholder="https://api.anthropic.com"
+                      className="jp-mod-styled"
+                      spellCheck={false}
+                      value={baseUrl}
+                      onChange={event => setBaseUrl(event.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
       )}
     </div>
   );
