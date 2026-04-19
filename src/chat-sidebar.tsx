@@ -56,7 +56,9 @@ import {
   VscThumbsup,
   VscThumbsdown,
   VscThumbsupFilled,
-  VscThumbsdownFilled
+  VscThumbsdownFilled,
+  VscCloudUpload,
+  VscAttach
 } from 'react-icons/vsc';
 
 import { extractLLMGeneratedCode, isDarkTheme } from './utils';
@@ -306,6 +308,78 @@ interface ISelectedContextFile {
   lineCount: number;
   path: string;
   type: string;
+  source?: 'workspace' | 'upload';
+  serverPath?: string;
+}
+
+const MAX_ATTACHED_FILES = 10;
+
+const TEXT_MIME_PREFIXES = [
+  'text/',
+  'application/json',
+  'application/xml',
+  'application/x-yaml',
+  'application/yaml'
+];
+
+const TEXT_EXTENSIONS = new Set([
+  '.py',
+  '.js',
+  '.ts',
+  '.tsx',
+  '.jsx',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.md',
+  '.txt',
+  '.csv',
+  '.html',
+  '.css',
+  '.sql',
+  '.sh',
+  '.r',
+  '.ipynb',
+  '.xml',
+  '.toml',
+  '.cfg',
+  '.ini',
+  '.env',
+  '.gitignore',
+  '.dockerfile',
+  '.svg',
+  '.rb',
+  '.go',
+  '.rs',
+  '.java',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.swift',
+  '.kt',
+  '.scala',
+  '.lua',
+  '.pl',
+  '.m',
+  '.mm'
+]);
+
+function isLikelyTextFile(file: File): boolean {
+  if (TEXT_MIME_PREFIXES.some(prefix => file.type.startsWith(prefix))) {
+    return true;
+  }
+  const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+  return TEXT_EXTENSIONS.has(ext);
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
 }
 
 const MAX_VISIBLE_WORKSPACE_FILES = 50;
@@ -930,6 +1004,9 @@ function SidebarComponent(props: any) {
   const [workspaceScanLimitReached, setWorkspaceScanLimitReached] =
     useState(false);
   const [workspaceFileActionPath, setWorkspaceFileActionPath] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const telemetryEmitter: ITelemetryEmitter = props.getTelemetryEmitter();
   const [chatMode, setChatMode] = useState(NBIAPI.config.defaultChatMode);
 
@@ -1077,7 +1154,10 @@ function SidebarComponent(props: any) {
   const handleWorkspaceFileSelection = async (file: IWorkspaceFileOption) => {
     if (selectedContextFilePaths.has(file.path)) {
       setSelectedContextFiles(previousFiles =>
-        previousFiles.filter(selectedFile => selectedFile.path !== file.path)
+        previousFiles.filter(
+          selectedFile =>
+            selectedFile.source === 'upload' || selectedFile.path !== file.path
+        )
       );
       return;
     }
@@ -1118,10 +1198,171 @@ function SidebarComponent(props: any) {
     }
   };
 
-  const removeSelectedContextFile = (filePath: string) => {
+  const removeSelectedContextFile = (fileKey: string) => {
     setSelectedContextFiles(previousFiles =>
-      previousFiles.filter(file => file.path !== filePath)
+      previousFiles.filter(file => (file.serverPath ?? file.path) !== fileKey)
     );
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      !isDragOver &&
+      chatEnabled &&
+      event.dataTransfer.types.includes('Files')
+    ) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
+  };
+
+  const processDroppedFile = async (
+    file: File
+  ): Promise<ISelectedContextFile | null> => {
+    if (isLikelyTextFile(file)) {
+      const content = await readFileAsText(file);
+      if (content.trim() === '') {
+        throw new Error(`'${file.name}' is empty`);
+      }
+      return {
+        content,
+        lineCount: countContentLines(content),
+        path: file.name,
+        type: 'file',
+        source: 'upload'
+      };
+    }
+
+    const { serverPath, filename } = await NBIAPI.uploadFile(file);
+    return {
+      content: '',
+      lineCount: 0,
+      path: filename,
+      type: 'file',
+      source: 'upload',
+      serverPath
+    };
+  };
+
+  const addSystemNotice = (message: string) => {
+    setChatMessages(prev => [
+      ...prev,
+      {
+        id: UUID.uuid4(),
+        date: new Date(),
+        from: 'notice',
+        participant: { name: 'Notice' } as any,
+        contents: [
+          {
+            id: UUID.uuid4(),
+            type: ResponseStreamDataType.Markdown,
+            content: message,
+            created: new Date()
+          }
+        ]
+      }
+    ]);
+  };
+
+  const processAndAttachFiles = async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    const uploadedFiles = selectedContextFiles.filter(
+      f => f.source === 'upload'
+    );
+
+    // Duplicate detection: skip files already attached
+    const existingNames = new Set(uploadedFiles.map(f => f.path));
+    const uniqueFiles = files.filter(f => !existingNames.has(f.name));
+    const duplicateCount = files.length - uniqueFiles.length;
+
+    // Enforce file count limit
+    const currentUploadCount = uploadedFiles.length;
+    const available = MAX_ATTACHED_FILES - currentUploadCount;
+    const filesToProcess = uniqueFiles.slice(0, Math.max(0, available));
+    const skippedCount = uniqueFiles.length - filesToProcess.length;
+
+    if (filesToProcess.length === 0) {
+      const parts: string[] = [];
+      if (duplicateCount > 0) {
+        parts.push(`${duplicateCount} already attached`);
+      }
+      if (skippedCount > 0) {
+        parts.push(`limit of ${MAX_ATTACHED_FILES} files reached`);
+      }
+      addSystemNotice(`No files added: ${parts.join('; ')}.`);
+      return;
+    }
+
+    setIsUploadingFiles(true);
+    try {
+      const results = await Promise.allSettled(
+        filesToProcess.map(file => processDroppedFile(file))
+      );
+
+      const newContextFiles: ISelectedContextFile[] = [];
+      const errors: string[] = [];
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          newContextFiles.push(result.value);
+        } else if (result.status === 'rejected') {
+          errors.push(String(result.reason?.message ?? result.reason));
+        }
+      }
+
+      const notices: string[] = [];
+      if (errors.length > 0) {
+        notices.push(`Could not attach: ${errors.join('; ')}`);
+      }
+      if (duplicateCount > 0) {
+        notices.push(
+          `${duplicateCount} duplicate${duplicateCount > 1 ? 's' : ''} skipped`
+        );
+      }
+      if (skippedCount > 0) {
+        notices.push(
+          `${skippedCount} file${skippedCount > 1 ? 's' : ''} skipped (limit of ${MAX_ATTACHED_FILES})`
+        );
+      }
+      if (notices.length > 0) {
+        addSystemNotice(notices.join('. ') + '.');
+      }
+
+      if (newContextFiles.length > 0) {
+        setSelectedContextFiles(prev => [...prev, ...newContextFiles]);
+      }
+    } finally {
+      setIsUploadingFiles(false);
+    }
+  };
+
+  const handleDrop = async (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
+    if (!chatEnabled) {
+      return;
+    }
+    await processAndAttachFiles(Array.from(event.dataTransfer.files));
+  };
+
+  const handleFileInputChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    await processAndAttachFiles(files);
   };
 
   const cleanupRemovedToolsFromToolSelections = () => {
@@ -1782,14 +2023,19 @@ function SidebarComponent(props: any) {
         continue;
       }
 
-      additionalContext.push({
+      const contextItem: IContextItem & { isUpload?: boolean } = {
         type: ContextType.Custom,
         content: file.content,
         currentCellContents: null,
-        filePath: file.path,
+        filePath:
+          file.source === 'upload' ? (file.serverPath ?? file.path) : file.path,
         startLine: 1,
         endLine: file.lineCount
-      });
+      };
+      if (file.source === 'upload') {
+        contextItem.isUpload = true;
+      }
+      additionalContext.push(contextItem);
     }
 
     setShowWorkspaceFilePicker(false);
@@ -2337,7 +2583,17 @@ function SidebarComponent(props: any) {
   }, [ghLoginStatus]);
 
   return (
-    <div className="sidebar">
+    <div
+      className={`sidebar${isDragOver ? ' drag-over' : ''}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragOver && (
+        <div className="drop-zone-overlay">
+          <span>Drop files to attach as context</span>
+        </div>
+      )}
       <div className="sidebar-header">
         <div className="sidebar-title">Notebook Intelligence</div>
         {NBIAPI.config.isInClaudeCodeMode && (
@@ -2444,7 +2700,8 @@ function SidebarComponent(props: any) {
             value={prompt}
           />
           {(activeDocumentInfo?.filename ||
-            selectedContextFiles.length > 0) && (
+            selectedContextFiles.length > 0 ||
+            isUploadingFiles) && (
             <div className="user-input-context-row">
               {activeDocumentInfo?.filename && (
                 <div
@@ -2470,19 +2727,38 @@ function SidebarComponent(props: any) {
               )}
               {selectedContextFiles.map(file => (
                 <div
-                  key={file.path}
-                  className="user-input-context user-input-context-selected-file on"
-                  title={file.path}
+                  key={file.serverPath ?? file.path}
+                  className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}`}
+                  title={
+                    file.source === 'upload'
+                      ? `Uploaded: ${file.path}`
+                      : file.path
+                  }
                 >
-                  <div>{file.path}</div>
+                  <div>
+                    {file.source === 'upload' ? (
+                      <>
+                        <VscCloudUpload /> {file.path}
+                      </>
+                    ) : (
+                      file.path
+                    )}
+                  </div>
                   <div
                     className="user-input-context-toggle"
-                    onClick={() => removeSelectedContextFile(file.path)}
+                    onClick={() =>
+                      removeSelectedContextFile(file.serverPath ?? file.path)
+                    }
                   >
                     <VscClose title="Remove attached file" />
                   </div>
                 </div>
               ))}
+              {isUploadingFiles && (
+                <div className="user-input-context uploading-indicator">
+                  <div className="loading-ellipsis">Uploading</div>
+                </div>
+              )}
             </div>
           )}
           <div className="user-input-footer">
@@ -2510,6 +2786,20 @@ function SidebarComponent(props: any) {
                 <>{selectedContextFiles.length}</>
               )}
             </div>
+            <div
+              className="user-input-footer-button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload files from your computer"
+            >
+              <VscAttach />
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileInputChange}
+            />
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
               {!NBIAPI.config.isInClaudeCodeMode && (
