@@ -1,7 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from os import path
 import datetime as dt
@@ -21,9 +21,10 @@ from traitlets import Bool, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
+from notebook_intelligence.claude_sessions import list_sessions as list_claude_sessions
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
-from notebook_intelligence.util import ThreadSafeWebSocketConnector, set_jupyter_root_dir, get_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_jupyter_root_dir, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
 
@@ -591,6 +592,66 @@ class SkillBundleFileRenameHandler(SkillsBaseHandler):
             self.finish(json.dumps({"success": True}))
         except (FileExistsError, FileNotFoundError, ValueError) as e:
             self._error(e)
+
+
+class ClaudeSessionsListHandler(APIHandler):
+    """Lists prior Claude Code sessions for the current Jupyter working dir."""
+
+    @tornado.web.authenticated
+    def get(self):
+        if not ai_service_manager.is_claude_code_mode:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Claude Code mode is not enabled"}))
+            return
+
+        try:
+            sessions = list_claude_sessions(get_jupyter_root_dir())
+            self.finish(json.dumps({
+                "sessions": [asdict(s) for s in sessions],
+            }))
+        except Exception as e:
+            log.exception("Failed to list Claude sessions")
+            self.set_status(500)
+            self.finish(json.dumps({"error": str(e)}))
+
+class ClaudeSessionsResumeHandler(APIHandler):
+    """Reconnects the Claude client so the next query resumes a session."""
+
+    @tornado.web.authenticated
+    def post(self):
+        if not ai_service_manager.is_claude_code_mode:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Claude Code mode is not enabled"}))
+            return
+
+        try:
+            body = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Request body must be JSON"}))
+            return
+
+        session_id = body.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "session_id is required"}))
+            return
+
+        default_chat_participant = ai_service_manager.default_chat_participant
+        if not isinstance(default_chat_participant, ClaudeCodeChatParticipant):
+            self.set_status(404)
+            self.finish(json.dumps({"error": "Claude Code mode is not enabled"}))
+            return
+
+        try:
+            default_chat_participant.resume_session(session_id)
+        except Exception as e:
+            log.exception("Failed to resume Claude session %s", session_id)
+            self.set_status(500)
+            self.finish(json.dumps({"error": str(e)}))
+            return
+
+        self.finish(json.dumps({"success": True, "session_id": session_id}))
 
 class ChatHistory:
     """
@@ -1180,6 +1241,8 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_skill_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "rename")
         route_pattern_skill_bundle_file = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files")
         route_pattern_skill_bundle_file_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files", "rename")
+        route_pattern_claude_sessions = url_path_join(base_url, "notebook-intelligence", "claude-sessions")
+        route_pattern_claude_sessions_resume = url_path_join(base_url, "notebook-intelligence", "claude-sessions", "resume")
         GetCapabilitiesHandler.disabled_tools = self.disabled_tools
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
         GetCapabilitiesHandler.disabled_providers = self.disabled_providers
@@ -1209,6 +1272,8 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_skill_bundle_file, SkillBundleFileHandler),
             (route_pattern_skill_rename, SkillRenameHandler),
             (route_pattern_skill_detail, SkillDetailHandler),
+            (route_pattern_claude_sessions_resume, ClaudeSessionsResumeHandler),
+            (route_pattern_claude_sessions, ClaudeSessionsListHandler),
             (route_pattern_copilot, WebsocketCopilotHandler),
         ]
         web_app.add_handlers(host_pattern, NotebookIntelligence.handlers)

@@ -46,6 +46,7 @@ import {
   VscEyeClosed,
   VscAdd,
   VscClose,
+  VscHistory,
   VscTriangleRight,
   VscTriangleDown,
   VscSettingsGear,
@@ -63,6 +64,8 @@ import { CheckBoxItem } from './components/checkbox';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 import claudeSvgStr from '../style/icons/claude.svg';
 import { AskUserQuestion } from './components/ask-user-question';
+import { ClaudeSessionPicker } from './components/claude-session-picker';
+import { IClaudeSessionInfo } from './api';
 
 export enum RunChatCompletionType {
   Chat,
@@ -922,6 +925,7 @@ function SidebarComponent(props: any) {
   const [workspaceFileSearch, setWorkspaceFileSearch] = useState('');
   const [workspaceFilesLoaded, setWorkspaceFilesLoaded] = useState(false);
   const [workspaceFilesLoading, setWorkspaceFilesLoading] = useState(false);
+  const [showClaudeSessionPicker, setShowClaudeSessionPicker] = useState(false);
   const [workspaceFilesError, setWorkspaceFilesError] = useState('');
   const [workspaceScanLimitReached, setWorkspaceScanLimitReached] =
     useState(false);
@@ -1960,6 +1964,37 @@ function SidebarComponent(props: any) {
     setChatId(UUID.uuid4());
   };
 
+  const handleClaudeSessionResumed = (session: IClaudeSessionInfo) => {
+    setShowClaudeSessionPicker(false);
+    // Reset local chat view so the user starts from a clean slate in the
+    // UI; the Claude Code backend retains the resumed transcript and will
+    // answer subsequent prompts with full prior context.
+    setChatMessages([
+      {
+        id: UUID.uuid4(),
+        date: new Date(),
+        from: 'copilot',
+        contents: [
+          {
+            id: UUID.uuid4(),
+            type: ResponseStreamDataType.Markdown,
+            content: `Resumed Claude session \`${session.session_id.slice(0, 8)}\`${
+              session.preview ? ` \u2014 _${session.preview}_` : ''
+            }.`,
+            created: new Date()
+          }
+        ]
+      }
+    ]);
+    setPrompt('');
+    setSelectedContextFiles([]);
+    setShowWorkspaceFilePicker(false);
+    resetChatId();
+    resetPrefixSuggestions();
+    setPromptHistory([]);
+    setPromptHistoryIndex(0);
+  };
+
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.stopPropagation();
@@ -2305,6 +2340,15 @@ function SidebarComponent(props: any) {
     <div className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-title">Notebook Intelligence</div>
+        {NBIAPI.config.isInClaudeCodeMode && (
+          <div
+            className="user-input-footer-button"
+            onClick={() => setShowClaudeSessionPicker(true)}
+            title="Resume previous Claude session"
+          >
+            <VscHistory />
+          </div>
+        )}
         <div
           className="user-input-footer-button"
           onClick={() => handleSettingsButtonClick()}
@@ -2532,6 +2576,12 @@ function SidebarComponent(props: any) {
                 </div>
               ))}
             </div>
+          )}
+          {showClaudeSessionPicker && (
+            <ClaudeSessionPicker
+              onResume={handleClaudeSessionResumed}
+              onClose={() => setShowClaudeSessionPicker(false)}
+            />
           )}
           {showWorkspaceFilePicker && (
             <div

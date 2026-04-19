@@ -25,6 +25,10 @@ You can configure the Claude settings in the NBI Settings dialog. You can access
 
 <img src="media/claude-settings.png" alt="Claude settings" width=700 />
 
+#### Resuming a previous Claude session
+
+When Claude mode is enabled, the NBI chat sidebar shows a history icon next to the settings gear. Clicking it opens a picker listing Claude Code sessions recorded for the current JupyterLab working directory (the same transcripts Claude CLI stores under `~/.claude/projects/`). Selecting a session reconnects the Claude client with `resume`, so the next message you send continues that transcript with full prior context.
+
 ### Agent Mode
 
 In Agent Mode, built-in AI agent creates, edits and executes notebooks for you interactively. It can detect issues in the cells and fix for you.
