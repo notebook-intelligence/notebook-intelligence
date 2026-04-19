@@ -405,8 +405,8 @@ Manifest schema:
 ```yaml
 skills:
   - url: https://github.com/org/repo/tree/main/skills/data-eda
-    name: data-eda        # optional: override the installed skill name
-    scope: user           # optional: "user" (default) or "project"
+    name: data-eda # optional: override the installed skill name
+    scope: user # optional: "user" (default) or "project"
   - url: https://github.com/org/repo/tree/main/skills/ml-recipes
 ```
 
