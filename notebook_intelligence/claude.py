@@ -512,57 +512,59 @@ class ClaudeCodeClient():
             if data['id'] == event_id:
                 resp["data"] = data['data']
 
-        self._client_thread_signal.connect(_on_client_response)
+        # Capture the signal locally so the finally-disconnect is safe even if
+        # _mark_as_disconnected() nulls self._client_thread_signal mid-loop.
+        signal = self._client_thread_signal
+        signal.connect(_on_client_response)
 
         start_time = time.time()
 
-        while True:
-            self._reconnect_required = False
-            nbi_request_obj = get_current_request()
-            if nbi_request_obj is not None and nbi_request_obj.cancel_token.is_cancel_requested:
-                try:
-                    process: Process = self._client._transport._process
-                    process.kill()
+        try:
+            while True:
+                self._reconnect_required = False
+                nbi_request_obj = get_current_request()
+                if nbi_request_obj is not None and nbi_request_obj.cancel_token.is_cancel_requested:
+                    try:
+                        process: Process = self._client._transport._process
+                        process.kill()
 
-                    self._reconnect_required = True
-                    self._continue_conversation = True
-                except Exception as e:
-                    log.error(f"Error occurred while setting current request and response to None: {str(e)}")
-                self._client_thread_signal.disconnect(_on_client_response)
-                if self._reconnect_required:
+                        self._reconnect_required = True
+                        self._continue_conversation = True
+                    except Exception as e:
+                        log.error(f"Error occurred while setting current request and response to None: {str(e)}")
+                    if self._reconnect_required:
+                        self._mark_as_disconnected()
+                    return {
+                        "data": None,
+                        "success": False,
+                        "error": "Cancel requested by user"
+                    }
+                if resp["data"] is not None:
+                    return {
+                        "data": resp["data"],
+                        "success": True,
+                        "error": None
+                    }
+                # Bail out immediately if the worker thread has died (e.g. Claude
+                # Code failed to start on a previous event). Without this we'd
+                # poll for the full CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT window
+                # (30 min default) while the UI sits on "Thinking…".
+                if self._client_thread is None or not self._client_thread.is_alive():
                     self._mark_as_disconnected()
-                return {
-                    "data": None,
-                    "success": False,
-                    "error": "Cancel requested by user"
-                }
-            if resp["data"] is not None:
-                self._client_thread_signal.disconnect(_on_client_response)
-                return {
-                    "data": resp["data"],
-                    "success": True,
-                    "error": None
-                }
-            # Bail out immediately if the worker thread has died (e.g. Claude Code
-            # failed to start on a previous event). Without this we'd poll the
-            # response queue for the full CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT
-            # window (30 min default) while the UI sits on "Thinking…".
-            if self._client_thread is None or not self._client_thread.is_alive():
-                self._client_thread_signal.disconnect(_on_client_response)
-                self._mark_as_disconnected()
-                return {
-                    "data": None,
-                    "success": False,
-                    "error": "Claude agent client is not running",
-                }
-            if time.time() - start_time > CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT:
-                self._client_thread_signal.disconnect(_on_client_response)
-                return {
-                    "data": None,
-                    "success": False,
-                    "error": f"Claude agent client response timeout"
-                }
-            time.sleep(CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME)
+                    return {
+                        "data": None,
+                        "success": False,
+                        "error": "Claude agent is not running",
+                    }
+                if time.time() - start_time > CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT:
+                    return {
+                        "data": None,
+                        "success": False,
+                        "error": "Claude agent response timeout",
+                    }
+                time.sleep(CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME)
+        finally:
+            signal.disconnect(_on_client_response)
 
     def update_server_info(self):
         if self._reconnect_required:
@@ -968,8 +970,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             log.error(f"Error while handling Claude chat request: {e}", exc_info=True)
             try:
                 response.stream(MarkdownData(f"**Error:** {e}"))
-            except Exception:
-                pass
+            except Exception as stream_err:
+                log.debug(f"Could not stream error to client (likely closed websocket): {stream_err}")
         finally:
             try:
                 response.finish()
