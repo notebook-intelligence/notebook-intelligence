@@ -298,8 +298,11 @@ export function SettingsPanelComponentSkills(_props: any): JSX.Element {
           <button
             className="jp-Dialog-button jp-mod-reject jp-mod-styled"
             onClick={() => setImportOpen(true)}
+            title="Import from GitHub"
           >
-            <div className="jp-Dialog-buttonLabel">Import from GitHub</div>
+            <div className="jp-Dialog-buttonLabel">
+              {hasManagedSkills ? 'Import' : 'Import from GitHub'}
+            </div>
           </button>
           <button
             className="jp-Dialog-button jp-mod-reject jp-mod-styled"
