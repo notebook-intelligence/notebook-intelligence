@@ -14,6 +14,7 @@ from anyio.abc import Process
 from anthropic import Anthropic
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
+from notebook_intelligence._version import __version__ as NBI_VERSION
 import base64
 import logging
 from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
@@ -126,7 +127,8 @@ def fetch_claude_models(api_key: str = None, base_url: str = None) -> list[dict]
             api_key = None
         if base_url is not None and base_url.strip() == '':
             base_url = None
-        client = Anthropic(api_key=api_key, base_url=base_url)
+        client = Anthropic(api_key=api_key, base_url=base_url,
+                           default_headers={"User-Agent": f"NotebookIntelligence/{NBI_VERSION}"})
         page = client.models.list(limit=100)
         models = []
         for model in page.data:
@@ -154,7 +156,8 @@ class ClaudeChatModel(ChatModel):
         self._model_name = model_info["name"]
         self._context_window = model_info["context_window"]
         self._supports_tools = True
-        self._client = Anthropic(base_url=base_url, api_key=api_key)
+        self._client = Anthropic(base_url=base_url, api_key=api_key,
+                                 default_headers={"User-Agent": f"NotebookIntelligence/{NBI_VERSION}"})
 
     @property
     def id(self) -> str:
@@ -1013,6 +1016,8 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         base_url = claude_settings.get('base_url', '')
         if base_url != '':
             env['ANTHROPIC_BASE_URL'] = base_url
+
+        env["CLAUDE_CODE_ENTRYPOINT"] = "notebook-intelligence"
 
         continue_conversation = claude_settings.get('continue_conversation', False)
 
