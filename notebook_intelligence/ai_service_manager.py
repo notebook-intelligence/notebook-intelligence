@@ -69,7 +69,7 @@ class AIServiceManager(Host):
                 skill_manager=self._skill_manager,
                 manifest_source=manifest_source,
                 interval_seconds=int(self._options.get("skills_manifest_interval", 86400)),
-                manifest_token=self._options.get("skills_manifest_token") or None,
+                managed_token=self._options.get("managed_skills_token") or None,
             )
         self.initialize()
         self._skill_manager.start_watching()

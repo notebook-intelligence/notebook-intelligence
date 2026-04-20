@@ -61,12 +61,14 @@ class SkillReconciler:
         skill_manager: SkillManager,
         manifest_source: str,
         interval_seconds: int,
-        manifest_token: Optional[str] = None,
+        managed_token: Optional[str] = None,
     ):
         self._skill_manager = skill_manager
         self._manifest_source = manifest_source
         self._interval_seconds = max(int(interval_seconds), 1)
-        self._manifest_token = manifest_token
+        # Used for manifest fetch, commits-API probe, and tarball download — the
+        # whole managed pathway. User-initiated imports do not see this token.
+        self._managed_token = managed_token
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
@@ -75,7 +77,7 @@ class SkillReconciler:
         result = ReconcileResult()
         try:
             manifest = load_manifest(
-                self._manifest_source, token=self._manifest_token
+                self._manifest_source, token=self._managed_token
             )
         except ManifestError as e:
             msg = f"Could not load manifest: {e}"
@@ -168,6 +170,7 @@ class SkillReconciler:
             managed_source=entry.url,
             managed_ref=desired_sha or "",
             name_override=entry.name,
+            token=self._managed_token,
         )
         if existing is not None:
             result.updated += 1
@@ -179,7 +182,11 @@ class SkillReconciler:
         if ref_info.ref and _SHA_RE.match(ref_info.ref):
             return ref_info.ref
         return get_latest_commit_sha(
-            ref_info.owner, ref_info.repo, ref_info.ref, ref_info.subpath
+            ref_info.owner,
+            ref_info.repo,
+            ref_info.ref,
+            ref_info.subpath,
+            token=self._managed_token,
         )
 
     def _remove_stale(

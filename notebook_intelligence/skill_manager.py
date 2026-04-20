@@ -380,6 +380,7 @@ class SkillManager:
         managed_source: str,
         managed_ref: str,
         name_override: Optional[str] = None,
+        token: Optional[str] = None,
     ) -> Skill:
         """Install a skill from GitHub as a managed bundle.
 
@@ -387,8 +388,10 @@ class SkillManager:
         - Stamps `managed_source` and `managed_ref` frontmatter keys alongside `source`.
         - Always overwrites existing managed bundles, but refuses to overwrite a
           user-authored bundle of the same name (re-reads frontmatter to check).
+        - Accepts an explicit `token` (the deployment's managed-skills token)
+          instead of the caller's personal GITHUB_TOKEN / gh-CLI chain.
         """
-        staged = stage_skill_from_github(url)
+        staged = stage_skill_from_github(url, token=token)
         try:
             name = name_override.strip() if name_override else staged.name
             _validate_name(name)

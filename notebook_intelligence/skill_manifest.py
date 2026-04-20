@@ -140,7 +140,7 @@ def _fetch_url(url: str, *, token: Optional[str]) -> str:
         "User-Agent": "notebook-intelligence-skills-manifest",
         "Accept": "application/x-yaml, application/json, text/plain, */*",
     }
-    # Explicit NBI_SKILLS_MANIFEST_TOKEN wins. Otherwise, for github-hosted
+    # Explicit NBI_MANAGED_SKILLS_TOKEN wins. Otherwise, for github-hosted
     # manifests, fall back to the same GITHUB_TOKEN / GH_TOKEN / `gh auth token`
     # chain used for fetching skill tarballs — private-repo manifests should
     # just work when the user already has a GitHub login.

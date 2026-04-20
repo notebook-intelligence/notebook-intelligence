@@ -120,22 +120,30 @@ def _get_github_token() -> Optional[str]:
     return None
 
 
-def _github_api_headers() -> dict:
-    """Standard headers for GitHub API requests, with Bearer auth when available."""
+def _github_api_headers(override_token: Optional[str] = None) -> dict:
+    """Standard headers for GitHub API requests, with Bearer auth when available.
+
+    If `override_token` is provided it is used directly (no fallback). Otherwise
+    the standard `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` chain is consulted.
+    Managed-skill operations pass the deployment's scoped token explicitly so it
+    doesn't get overridden by whatever the user has in their environment.
+    """
     headers = {
         "User-Agent": "notebook-intelligence-skills-import",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = _get_github_token()
+    token = override_token if override_token is not None else _get_github_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
-def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
+def _fetch_tarball(
+    owner: str, repo: str, ref: Optional[str], *, token: Optional[str] = None
+) -> bytes:
     url = _tarball_url(owner, repo, ref)
-    headers = _github_api_headers()
+    headers = _github_api_headers(override_token=token)
     has_token = "Authorization" in headers
     req = urllib.request.Request(url, headers=headers)
     try:
@@ -177,7 +185,12 @@ def _fetch_tarball(owner: str, repo: str, ref: Optional[str]) -> bytes:
 
 
 def get_latest_commit_sha(
-    owner: str, repo: str, ref: Optional[str], subpath: str
+    owner: str,
+    repo: str,
+    ref: Optional[str],
+    subpath: str,
+    *,
+    token: Optional[str] = None,
 ) -> Optional[str]:
     """Return the SHA of the most recent commit touching `subpath` on `ref`.
 
@@ -192,7 +205,7 @@ def get_latest_commit_sha(
         params["path"] = subpath
     query = urllib.parse.urlencode(params)
     url = f"https://api.github.com/repos/{owner}/{repo}/commits?{query}"
-    req = urllib.request.Request(url, headers=_github_api_headers())
+    req = urllib.request.Request(url, headers=_github_api_headers(override_token=token))
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as response:
             data = response.read(64 * 1024)  # commits list is small; hard cap prevents abuse
@@ -281,15 +294,18 @@ def _derive_name(
     )
 
 
-def stage_skill_from_github(url: str) -> StagedSkill:
+def stage_skill_from_github(url: str, *, token: Optional[str] = None) -> StagedSkill:
     """Fetch, extract, and validate a skill. Returns a StagedSkill.
 
-    Caller is responsible for cleaning up `staged.tmp_root` when done.
+    Caller is responsible for cleaning up `staged.tmp_root` when done. An
+    explicit `token` overrides the standard GITHUB_TOKEN / GH_TOKEN / gh-CLI
+    chain — used by the managed-skills reconciler to scope tarball fetches to
+    the deployment's provided token.
     """
     import shutil
 
     ref = parse_github_url(url)
-    tarball = _fetch_tarball(ref.owner, ref.repo, ref.ref)
+    tarball = _fetch_tarball(ref.owner, ref.repo, ref.ref, token=token)
     tmp_root = Path(tempfile.mkdtemp(prefix="nbi-skill-import-"))
     try:
         skill_root = _extract_skill(tarball, ref.subpath, tmp_root)

@@ -197,7 +197,7 @@ class TestReconcileErrors:
 
         call_count = {"n": 0}
 
-        def fake_fetch(owner, repo, ref):
+        def fake_fetch(owner, repo, ref, *, token=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise ValueError("network flake")
@@ -296,6 +296,68 @@ class TestReconcileErrors:
         assert any("user-authored" in e for e in result.errors)
         # User skill untouched.
         assert Skill.from_path(user_dir / "alpha", "user").body.strip() == "mine"
+
+
+class TestManagedToken:
+    def test_managed_token_threaded_to_tarball_and_probe(
+        self, manager, tmp_path, skill_dirs
+    ):
+        user_dir, _ = skill_dirs
+        manifest = _write_manifest(
+            tmp_path,
+            "  - url: https://github.com/org/repo/tree/main/alpha\n",
+        )
+        tar = build_tarball({
+            "repo-xyz/alpha/SKILL.md": "---\nname: alpha\ndescription: a\n---\nbody",
+        })
+        reconciler = SkillReconciler(
+            manager, manifest, interval_seconds=60, managed_token="scoped-org-token"
+        )
+
+        with patch(
+            "notebook_intelligence.skill_reconciler.get_latest_commit_sha",
+            return_value="abc123",
+        ) as probe, patch(
+            "notebook_intelligence.skill_github_import._fetch_tarball",
+            return_value=tar,
+        ) as fetch:
+            reconciler.reconcile()
+
+        # Probe and tarball fetch both see the scoped managed token, not the
+        # user's GITHUB_TOKEN chain.
+        assert probe.call_args.kwargs.get("token") == "scoped-org-token"
+        assert fetch.call_args.kwargs.get("token") == "scoped-org-token"
+
+    def test_managed_token_failure_is_not_retried_with_fallback(
+        self, manager, tmp_path, skill_dirs
+    ):
+        """Option A: if the deployment's scoped token is rejected by GitHub, the
+        error surfaces — we don't silently retry with the user's GITHUB_TOKEN.
+        Hiding a misconfigured scoped token would let admins miss expirations.
+        """
+        manifest = _write_manifest(
+            tmp_path,
+            "  - url: https://github.com/org/repo/tree/main/alpha\n",
+        )
+        call_count = {"n": 0}
+
+        def fake_fetch(owner, repo, ref, *, token=None):
+            call_count["n"] += 1
+            raise ValueError("GitHub rejected the token (HTTP 401)")
+
+        reconciler = SkillReconciler(
+            manager, manifest, interval_seconds=60, managed_token="expired-token"
+        )
+        with _patch_sha("abc123"), patch(
+            "notebook_intelligence.skill_github_import._fetch_tarball",
+            side_effect=fake_fetch,
+        ):
+            result = reconciler.reconcile()
+
+        # Single attempt, error surfaced — no silent retry.
+        assert call_count["n"] == 1
+        assert result.added == 0
+        assert any("rejected the token" in e for e in result.errors)
 
 
 class TestBackgroundThread:

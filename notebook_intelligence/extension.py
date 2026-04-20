@@ -1289,11 +1289,15 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
-    skills_manifest_token = Unicode(
+    managed_skills_token = Unicode(
         default_value="",
         help="""
-        Optional bearer token used when fetching the manifest over HTTPS.
-        Overridden by the NBI_SKILLS_MANIFEST_TOKEN environment variable.
+        Optional bearer token used for ALL managed-skills GitHub operations:
+        fetching the manifest, probing commits, and downloading skill tarballs.
+        Lets an org scope a minimal-privilege token for the whole managed
+        pathway without affecting user-initiated imports (which continue to use
+        GITHUB_TOKEN / GH_TOKEN / `gh auth`). Overridden by the
+        NBI_MANAGED_SKILLS_TOKEN environment variable.
         """,
         config=True,
     )
@@ -1312,9 +1316,9 @@ class NotebookIntelligence(ExtensionApp):
     def initialize_ai_service(self, server_root_dir: str):
         global ai_service_manager
         manifest_source = os.environ.get("NBI_SKILLS_MANIFEST", "").strip() or self.skills_manifest.strip()
-        manifest_token = (
-            os.environ.get("NBI_SKILLS_MANIFEST_TOKEN", "").strip()
-            or self.skills_manifest_token.strip()
+        managed_token = (
+            os.environ.get("NBI_MANAGED_SKILLS_TOKEN", "").strip()
+            or self.managed_skills_token.strip()
         )
         interval_env = os.environ.get("NBI_SKILLS_MANIFEST_INTERVAL", "").strip()
         manifest_interval = self.skills_manifest_interval
@@ -1329,7 +1333,7 @@ class NotebookIntelligence(ExtensionApp):
             "server_root_dir": server_root_dir,
             "skills_manifest": manifest_source,
             "skills_manifest_interval": manifest_interval,
-            "skills_manifest_token": manifest_token,
+            "managed_skills_token": managed_token,
         })
 
     def initialize_templates(self):

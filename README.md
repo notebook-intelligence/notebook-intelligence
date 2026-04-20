@@ -398,7 +398,7 @@ Configure via environment variables (also available as traitlets on `NotebookInt
 
 - `NBI_SKILLS_MANIFEST` — URL (`https://...`) or local filesystem path to the manifest. Empty/unset disables the feature.
 - `NBI_SKILLS_MANIFEST_INTERVAL` — seconds between reconciles. Default `86400` (24h). Reconciliation also runs once at startup.
-- `NBI_SKILLS_MANIFEST_TOKEN` — optional bearer token for fetching the manifest itself over HTTPS. When the manifest URL is hosted on github.com / `raw.githubusercontent.com` / `*.githubusercontent.com` and this var is unset, NBI falls back to the same `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` chain used for skill-tarball fetches, so users with an existing GitHub login get private-manifest access automatically.
+- `NBI_MANAGED_SKILLS_TOKEN` — optional bearer token used for **all** managed-skills GitHub operations: fetching the manifest, probing commits, and downloading skill tarballs. Lets an org deploy a minimal-privilege scoped token covering the whole managed pathway — user-initiated imports (the Import-from-GitHub dialog, `POST /skills/import`) do **not** see this token and continue to use `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth`. When unset, managed operations fall back to the same chain. If set and a managed operation fails with an auth error, it fails loudly (no retry with the fallback chain) so misconfigured or expired scoped tokens stay visible to the admin.
 
 Manifest schema:
 
