@@ -1356,6 +1356,7 @@ svg.access-token-warning {
   text-align: center;
 }
 
+/* stylelint-disable-next-line no-descending-specificity */
 .nbi-skills-empty code {
   background-color: var(--jp-layout-color2);
   padding: 1px 4px;
@@ -1734,6 +1735,7 @@ svg.access-token-warning {
   color: var(--jp-ui-font-color2);
 }
 
+/* stylelint-disable-next-line no-descending-specificity */
 .nbi-form-hint code {
   background-color: var(--jp-layout-color2);
   padding: 1px 4px;
