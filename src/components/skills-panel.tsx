@@ -724,16 +724,17 @@ function SkillRow(props: {
         >
           ✎
         </button>
-        <button
-          type="button"
-          className="nbi-icon-button"
-          aria-label="Rename skill"
-          title={skill.managed ? 'Managed skills cannot be renamed' : 'Rename'}
-          disabled={skill.managed}
-          onClick={stopAnd(props.onRename)}
-        >
-          Aa
-        </button>
+        {!skill.managed && (
+          <button
+            type="button"
+            className="nbi-icon-button"
+            aria-label="Rename skill"
+            title="Rename"
+            onClick={stopAnd(props.onRename)}
+          >
+            Aa
+          </button>
+        )}
         <button
           type="button"
           className="nbi-icon-button"
@@ -743,16 +744,17 @@ function SkillRow(props: {
         >
           ⧉
         </button>
-        <button
-          type="button"
-          className="nbi-icon-button danger"
-          aria-label="Delete skill"
-          title={skill.managed ? 'Managed skills cannot be deleted' : 'Delete'}
-          disabled={skill.managed}
-          onClick={stopAnd(props.onDelete)}
-        >
-          🗑
-        </button>
+        {!skill.managed && (
+          <button
+            type="button"
+            className="nbi-icon-button danger"
+            aria-label="Delete skill"
+            title="Delete"
+            onClick={stopAnd(props.onDelete)}
+          >
+            🗑
+          </button>
+        )}
       </div>
     </div>
   );
