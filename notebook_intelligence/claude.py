@@ -306,7 +306,7 @@ class ClaudeCodeClient():
         return self._status
 
     def is_connected(self):
-        return self._client_thread is not None
+        return self._client_thread is not None and self._client_thread.is_alive()
 
     def connect(self):
         if self.is_connected():
@@ -542,6 +542,18 @@ class ClaudeCodeClient():
                     "data": resp["data"],
                     "success": True,
                     "error": None
+                }
+            # Bail out immediately if the worker thread has died (e.g. Claude Code
+            # failed to start on a previous event). Without this we'd poll the
+            # response queue for the full CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT
+            # window (30 min default) while the UI sits on "Thinking…".
+            if self._client_thread is None or not self._client_thread.is_alive():
+                self._client_thread_signal.disconnect(_on_client_response)
+                self._mark_as_disconnected()
+                return {
+                    "data": None,
+                    "success": False,
+                    "error": "Claude agent client is not running",
                 }
             if time.time() - start_time > CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT:
                 self._client_thread_signal.disconnect(_on_client_response)
@@ -943,9 +955,28 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             return await self.handle_inline_chat_request(request, response, options)
         self._current_chat_request = request
 
-        response.stream(ProgressData("Thinking..."))
-        self._client.query(request, response)
-        response.finish()
+        try:
+            response.stream(ProgressData("Thinking..."))
+            result = self._client.query(request, response)
+            # query() returns a string when it bails early without dispatching —
+            # e.g. the agent isn't connected, a response timeout elapsed, or the
+            # worker thread died. Surface it so the user sees why instead of a
+            # silent spinner stop.
+            if isinstance(result, str) and result:
+                response.stream(MarkdownData(f"**Claude agent error:** {result}"))
+        except Exception as e:
+            log.error(f"Error while handling Claude chat request: {e}", exc_info=True)
+            try:
+                response.stream(MarkdownData(f"**Error:** {e}"))
+            except Exception:
+                pass
+        finally:
+            try:
+                response.finish()
+            except Exception as e:
+                # Most common cause: the user's websocket closed mid-request.
+                # Nothing useful to send back; just keep the task from dying.
+                log.warning(f"Could not finalize Claude chat response: {e}")
 
     async def handle_inline_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         try:
