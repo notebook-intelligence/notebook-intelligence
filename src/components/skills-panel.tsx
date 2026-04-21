@@ -22,6 +22,10 @@ const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SKILL_NAME_REQUIREMENT =
   'Must be lowercase letters, digits, or hyphens (starting with a letter or digit), max 64 chars.';
 const SKILL_ENTRY_FILE = 'SKILL.md';
+// Bundles with more files than this collapse their file tabs to just SKILL.md.
+// Keeps the tab strip usable for reference-data skills that ship hundreds of
+// helper files; those are easier to edit on disk anyway.
+const BUNDLE_FILE_DISPLAY_LIMIT = 20;
 const COMMON_TOOLS = [
   'Read',
   'Write',
@@ -963,7 +967,19 @@ function SkillEditor(props: {
     ],
     [buffers]
   );
+  const bundleOverflow = orderedFileList.length > BUNDLE_FILE_DISPLAY_LIMIT;
+  const displayedFileList = bundleOverflow
+    ? [SKILL_ENTRY_FILE]
+    : orderedFileList;
   const [activeFile, setActiveFile] = useState<string>(SKILL_ENTRY_FILE);
+  // If a reload pushes the bundle over the threshold while a helper file is
+  // selected, snap back to SKILL.md — otherwise the tab strip shows no active
+  // tab and there's no way to navigate anywhere else.
+  useEffect(() => {
+    if (bundleOverflow && activeFile !== SKILL_ENTRY_FILE) {
+      setActiveFile(SKILL_ENTRY_FILE);
+    }
+  }, [bundleOverflow, activeFile]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [addFileDraft, setAddFileDraft] = useState('');
@@ -973,6 +989,7 @@ function SkillEditor(props: {
   const [hasCreated, setHasCreated] = useState(false);
   const [managed, setManaged] = useState(false);
   const [managedSource, setManagedSource] = useState('');
+  const [rootPath, setRootPath] = useState('');
   const errorRef = useRef<HTMLDivElement>(null);
 
   const effectiveName = isNew && !hasCreated ? name : (props.name ?? name);
@@ -984,6 +1001,7 @@ function SkillEditor(props: {
     setAllowedTools(skill.allowedTools ?? []);
     setManaged(skill.managed);
     setManagedSource(skill.managedSource ?? '');
+    setRootPath(skill.rootPath ?? '');
     const skillMdBody = skill.body ?? '';
     setSavedMeta({
       description: skill.description,
@@ -1489,13 +1507,26 @@ function SkillEditor(props: {
             </div>
           </div>
 
+          {bundleOverflow && (
+            <div className="nbi-form-hint">
+              Bundle contains {orderedFileList.length} files — showing{' '}
+              {SKILL_ENTRY_FILE} only. Edit supporting files directly on disk.
+              {rootPath && (
+                <>
+                  {' '}
+                  Path: <code>{rootPath}</code>
+                </>
+              )}
+            </div>
+          )}
           <BundleFileTabs
-            files={orderedFileList}
+            files={displayedFileList}
             activeFile={activeFile}
             renaming={renaming}
             renameDraft={renameDraft}
             addFileDraft={addFileDraft}
             fileDirty={fileDirty}
+            canAddFiles={!bundleOverflow}
             onSelect={handleSelectFile}
             onBeginRename={handleBeginRename}
             onCommitRename={handleCommitRename}
@@ -1528,6 +1559,7 @@ function BundleFileTabs(props: {
   renameDraft: string;
   addFileDraft: string;
   fileDirty: (path: string) => boolean;
+  canAddFiles: boolean;
   onSelect: (path: string) => void;
   onBeginRename: (path: string) => void;
   onCommitRename: () => void;
@@ -1646,39 +1678,40 @@ function BundleFileTabs(props: {
           </div>
         );
       })}
-      {adding ? (
-        <div className="nbi-skill-editor-tab adding">
-          <input
-            type="text"
-            autoFocus
-            placeholder="new-file.md"
-            value={props.addFileDraft}
-            onChange={e => props.onAddFileDraftChange(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                commitAdd();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                props.onAddFileDraftChange('');
-                setAdding(false);
-              }
-            }}
-            onBlur={commitAdd}
-            className="nbi-skill-editor-tab-rename-input"
-          />
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="nbi-skill-editor-tab-add"
-          aria-label="Add file"
-          title="Add file"
-          onClick={() => setAdding(true)}
-        >
-          +
-        </button>
-      )}
+      {props.canAddFiles &&
+        (adding ? (
+          <div className="nbi-skill-editor-tab adding">
+            <input
+              type="text"
+              autoFocus
+              placeholder="new-file.md"
+              value={props.addFileDraft}
+              onChange={e => props.onAddFileDraftChange(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitAdd();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  props.onAddFileDraftChange('');
+                  setAdding(false);
+                }
+              }}
+              onBlur={commitAdd}
+              className="nbi-skill-editor-tab-rename-input"
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="nbi-skill-editor-tab-add"
+            aria-label="Add file"
+            title="Add file"
+            onClick={() => setAdding(true)}
+          >
+            +
+          </button>
+        ))}
     </div>
   );
 }
