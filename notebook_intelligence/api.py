@@ -609,8 +609,6 @@ class ChatParticipant:
                     if message.get('tool_calls', None) is not None:
                         for tool_call in message['tool_calls']:
                             tool_call_rounds.append(tool_call)
-                    elif choice['message'].get('content', None) is not None:
-                        response.stream(MarkdownData(tool_response['choices'][0]['message']['content']))
 
                     messages.append(message)
 
