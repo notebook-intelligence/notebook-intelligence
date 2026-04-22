@@ -479,7 +479,7 @@ function ChatResponse(props: any) {
     }
 
     let reasoningContent = '';
-    let reasoningStartTime = new Date(item.created);
+    const reasoningStartTime = new Date(item.created);
     const reasoningEndTime = new Date();
 
     let startPos = -1;
