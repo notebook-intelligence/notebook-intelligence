@@ -475,11 +475,11 @@ function ChatResponse(props: any) {
   const extractReasoningContent = (item: IChatMessageContent) => {
     let currentContent = item.content as string;
     if (typeof currentContent !== 'string') {
-      return false;
+      return item.reasoningContent && !item.reasoningFinished;
     }
 
     let reasoningContent = '';
-    let reasoningStartTime = new Date();
+    let reasoningStartTime = new Date(item.created);
     const reasoningEndTime = new Date();
 
     let startPos = -1;
@@ -493,16 +493,17 @@ function ChatResponse(props: any) {
     }
 
     const hasStart = startPos >= 0;
-    reasoningStartTime = new Date(item.created);
 
     if (hasStart) {
       currentContent = currentContent.substring(startPos + startTag.length);
     }
 
     let endPos = -1;
+    let endTag = '';
     for (const tag of responseDetailTags) {
       endPos = currentContent.indexOf(tag);
       if (endPos >= 0) {
+        endTag = tag;
         break;
       }
     }
@@ -510,7 +511,7 @@ function ChatResponse(props: any) {
 
     if (hasEnd) {
       reasoningContent += currentContent.substring(0, endPos);
-      currentContent = currentContent.substring(endPos + startTag.length);
+      currentContent = currentContent.substring(endPos + endTag.length);
     } else {
       if (hasStart) {
         reasoningContent += currentContent;
@@ -518,14 +519,19 @@ function ChatResponse(props: any) {
       }
     }
 
-    item.content = currentContent;
-    item.reasoningTag = startTag;
-    item.reasoningContent = reasoningContent;
-    item.reasoningFinished = hasEnd;
-    item.reasoningTime =
-      (reasoningEndTime.getTime() - reasoningStartTime.getTime()) / 1000;
+    if (hasStart) {
+      item.content = currentContent;
+      item.reasoningTag = startTag;
+      item.reasoningContent = (item.reasoningContent || '') + reasoningContent;
+      item.reasoningFinished = hasEnd;
+    }
 
-    return hasStart && !hasEnd; // is thinking
+    if (item.reasoningContent) {
+      item.reasoningTime =
+        (reasoningEndTime.getTime() - reasoningStartTime.getTime()) / 1000;
+    }
+
+    return hasStart && !hasEnd; // is thinking extracted now
   };
 
   for (let i = 0; i < msg.contents.length; i++) {
@@ -535,7 +541,14 @@ function ChatResponse(props: any) {
       lastItemType === ResponseStreamDataType.MarkdownPart
     ) {
       const lastItem = groupedContents[groupedContents.length - 1];
-      lastItem.content += item.content;
+      lastItem.content += item.content || '';
+      if (item.reasoningContent) {
+        lastItem.reasoningContent =
+          (lastItem.reasoningContent || '') + item.reasoningContent;
+      }
+      if (item.reasoningFinished) {
+        lastItem.reasoningFinished = true;
+      }
     } else {
       groupedContents.push(structuredClone(item));
       lastItemType = item.type;
@@ -573,18 +586,14 @@ function ChatResponse(props: any) {
   };
 
   const getReasoningTitle = (item: IChatMessageContent) => {
-    if (item.reasoningTag === '<think>') {
-      return item.reasoningFinished
-        ? 'Thought'
-        : `Thinking (${Math.floor(item.reasoningTime)} s)`;
-    } else if (item.reasoningTag === '<terminal-output>') {
+    if (item.reasoningTag === '<terminal-output>') {
       return item.reasoningFinished
         ? 'Output'
         : `Running (${Math.floor(item.reasoningTime)} s)`;
     }
     return item.reasoningFinished
-      ? 'Output'
-      : `Output (${Math.floor(item.reasoningTime)} s)`;
+      ? 'Thought'
+      : `Thinking (${Math.floor(item.reasoningTime)} s)`;
   };
 
   const chatParticipantId = msg.participant?.id || 'default';
@@ -624,27 +633,30 @@ function ChatResponse(props: any) {
             case ResponseStreamDataType.MarkdownPart:
               return (
                 <>
-                  {item.reasoningContent && (
-                    <div className="expandable-content expanded">
+                  {item.reasoningContent &&
+                    typeof item.reasoningContent === 'string' && (
                       <div
-                        className="expandable-content-title"
-                        onClick={(event: any) => onExpandCollapseClick(event)}
+                        className={`expandable-content ${!item.reasoningFinished ? 'expanded' : ''}`}
                       >
-                        <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
-                        <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {getReasoningTitle(item)}
-                      </div>
-                      <div className="expandable-content-text">
-                        <MarkdownRenderer
-                          key={`key-${index}`}
-                          getApp={props.getApp}
-                          getActiveDocumentInfo={props.getActiveDocumentInfo}
+                        <div
+                          className="expandable-content-title"
+                          onClick={(event: any) => onExpandCollapseClick(event)}
                         >
-                          {item.reasoningContent}
-                        </MarkdownRenderer>
+                          <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
+                          <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
+                          {getReasoningTitle(item)}
+                        </div>
+                        <div className="expandable-content-text">
+                          <MarkdownRenderer
+                            key={`reasoning-${index}`}
+                            getApp={props.getApp}
+                            getActiveDocumentInfo={props.getActiveDocumentInfo}
+                          >
+                            {item.reasoningContent}
+                          </MarkdownRenderer>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
                   <MarkdownRenderer
                     key={`key-${index}`}
                     getApp={props.getApp}
@@ -2070,20 +2082,46 @@ function SidebarComponent(props: any) {
               contents.push({
                 id: UUID.uuid4(),
                 type: nbiContent.type,
-                content: nbiContent.content,
+                content: nbiContent.content || '',
+                reasoningContent: nbiContent.reasoning_content || '',
+                reasoningTag: nbiContent.reasoning_content
+                  ? '<think>'
+                  : undefined,
+                reasoningFinished:
+                  nbiContent.type === ResponseStreamDataType.Markdown &&
+                  nbiContent.reasoning_content
+                    ? true
+                    : false,
                 contentDetail: nbiContent.detail,
                 created: new Date(response.created)
               });
             } else {
               responseMessage =
                 response.data['choices']?.[0]?.['delta']?.['content'];
-              if (!responseMessage) {
+              const reasoningContent =
+                response.data['choices']?.[0]?.['delta']?.['reasoning_content'];
+              if (!responseMessage && !reasoningContent) {
                 return;
               }
+
+              // If we have existing reasoning content and now we get normal content, mark reasoning as finished
+              const lastMarkdownItem = contents
+                .filter(c => c.type === ResponseStreamDataType.MarkdownPart)
+                .pop();
+              if (
+                lastMarkdownItem &&
+                lastMarkdownItem.reasoningContent &&
+                responseMessage &&
+                !lastMarkdownItem.reasoningFinished
+              ) {
+                lastMarkdownItem.reasoningFinished = true;
+              }
+
               contents.push({
                 id: UUID.uuid4(),
                 type: ResponseStreamDataType.MarkdownPart,
-                content: responseMessage,
+                content: responseMessage || '',
+                reasoningContent: reasoningContent || '',
                 created: new Date(response.created)
               });
             }
@@ -2424,20 +2462,46 @@ function SidebarComponent(props: any) {
               contents.push({
                 id: UUID.uuid4(),
                 type: nbiContent.type,
-                content: nbiContent.content,
+                content: nbiContent.content || '',
+                reasoningContent: nbiContent.reasoning_content || '',
+                reasoningTag: nbiContent.reasoning_content
+                  ? '<think>'
+                  : undefined,
+                reasoningFinished:
+                  nbiContent.type === ResponseStreamDataType.Markdown &&
+                  nbiContent.reasoning_content
+                    ? true
+                    : false,
                 contentDetail: nbiContent.detail,
                 created: new Date(response.created)
               });
             } else {
               const responseMessage =
                 response.data['choices']?.[0]?.['delta']?.['content'];
-              if (!responseMessage) {
+              const reasoningContent =
+                response.data['choices']?.[0]?.['delta']?.['reasoning_content'];
+              if (!responseMessage && !reasoningContent) {
                 return;
               }
+
+              // If we have existing reasoning content and now we get normal content, mark reasoning as finished
+              const lastMarkdownItem = contents
+                .filter(c => c.type === ResponseStreamDataType.MarkdownPart)
+                .pop();
+              if (
+                lastMarkdownItem &&
+                lastMarkdownItem.reasoningContent &&
+                responseMessage &&
+                !lastMarkdownItem.reasoningFinished
+              ) {
+                lastMarkdownItem.reasoningFinished = true;
+              }
+
               contents.push({
                 id: response.id,
                 type: ResponseStreamDataType.MarkdownPart,
-                content: responseMessage,
+                content: responseMessage || '',
+                reasoningContent: reasoningContent || '',
                 created: new Date(response.created)
               });
             }

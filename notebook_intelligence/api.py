@@ -132,6 +132,7 @@ class ResponseStreamData:
 class MarkdownData(ResponseStreamData):
     content: str = ''
     detail: dict = None
+    reasoning_content: str = ''
 
     @property
     def data_type(self) -> ResponseStreamDataType:
@@ -140,6 +141,7 @@ class MarkdownData(ResponseStreamData):
 @dataclass
 class MarkdownPartData(ResponseStreamData):
     content: str = ''
+    reasoning_content: str = ''
 
     @property
     def data_type(self) -> ResponseStreamDataType:
@@ -585,13 +587,31 @@ class ChatParticipant:
                 options['tool_choice'] = 'auto'
 
                 for choice in tool_response['choices']:
-                    if choice['message'].get('tool_calls', None) is not None:
-                        for tool_call in choice['message']['tool_calls']:
-                            tool_call_rounds.append(tool_call)
-                    elif choice['message'].get('content', None) is not None:
-                        response.stream(MarkdownData(tool_response['choices'][0]['message']['content']))
+                    message = choice['message']
+                    # Some models use 'reasoning', some use 'reasoning_content'
+                    raw_reasoning = message.get('reasoning') or message.get('reasoning_content') or ''
+                    
+                    reasoning = ''
+                    if isinstance(raw_reasoning, dict):
+                        reasoning = (raw_reasoning.get('text') or 
+                                     raw_reasoning.get('content') or 
+                                     raw_reasoning.get('thought') or 
+                                     str(raw_reasoning))
+                    else:
+                        reasoning = str(raw_reasoning)
+                    
+                    content = message.get('content') or ''
+                    if not isinstance(content, str):
+                        content = str(content)
+                    
+                    if reasoning or content:
+                        response.stream(MarkdownData(content=content, reasoning_content=reasoning))
 
-                    messages.append(choice['message'])
+                    if message.get('tool_calls', None) is not None:
+                        for tool_call in message['tool_calls']:
+                            tool_call_rounds.append(tool_call)
+
+                    messages.append(message)
 
                 had_tool_call = len(tool_call_rounds) > 0
 
