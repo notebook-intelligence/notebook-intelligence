@@ -52,6 +52,7 @@ class ClaudeAgentClientStatus(str, Enum):
 CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME", "0.5"))
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "1800"))
 CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "0.5"))
+CLAUDE_AGENT_CONNECT_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CONNECT_TIMEOUT", "15"))
 
 _current_request = None
 _current_response = None
@@ -278,6 +279,7 @@ class ClaudeCodeClient():
         self._client_queue = None
         self._client_thread_signal = None
         self._client_thread = None
+        self._connect_resolved = threading.Event()
         self._status = ClaudeAgentClientStatus.NotConnected
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
@@ -325,6 +327,7 @@ class ClaudeCodeClient():
         self._reconnect_required = False
         self._client_queue = Queue()
         self._client_thread_signal: SignalImpl = SignalImpl()
+        self._connect_resolved.clear()
         try:
             self._client_thread = threading.Thread(
                 name="Claude Agent Client Thread",
@@ -333,10 +336,23 @@ class ClaudeCodeClient():
                 args=(self._client_thread_func(),)
             )
             self._client_thread.start()
-            self._update_server_info_async()
+            # Block until the worker has either finished the SDK handshake or
+            # failed — otherwise callers that check is_connected() afterwards
+            # see a momentarily-alive thread that's about to die on spawn
+            # failure, and never reach the "not connected" error branch (#147).
+            if not self._connect_resolved.wait(timeout=CLAUDE_AGENT_CONNECT_TIMEOUT):
+                log.warning(
+                    f"Claude agent did not reach a terminal connect state within "
+                    f"{CLAUDE_AGENT_CONNECT_TIMEOUT}s"
+                )
+            if self.is_connected():
+                self._update_server_info_async()
         except Exception as e:
             self._client_thread = None
-            log.error(f"Error occurred while connecting to Claude agent client: {str(e)}")
+            log.error(
+                f"Error occurred while connecting to Claude agent client: {str(e)}",
+                exc_info=True,
+            )
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def disconnect(self):
@@ -384,6 +400,7 @@ class ClaudeCodeClient():
         try:
             async with await self._get_client() as client:
                 self._set_status(ClaudeAgentClientStatus.Connected)
+                self._connect_resolved.set()
                 set_current_claude_client(client)
 
                 while True:
@@ -484,8 +501,12 @@ class ClaudeCodeClient():
                         log.error(f"Unknown event type {event}")
         except Exception as e:
             self._client_thread = None
-            log.error(f"Error occurred while running MCP server thread: {str(e)}")
+            log.error(
+                f"Error occurred while running MCP server thread: {str(e)}",
+                exc_info=True,
+            )
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
+            self._connect_resolved.set()
 
     def _create_client(self) -> ClaudeSDKClient:
         continue_conversation_cfg = self._host.nbi_config.claude_settings.get('continue_conversation', False)
@@ -574,10 +595,14 @@ class ClaudeCodeClient():
         finally:
             signal.disconnect(_on_client_response)
 
-    def update_server_info(self):
-        if self._reconnect_required:
+    def _ensure_connected(self) -> bool:
+        """Reconnect if the worker thread is missing or the SDK flagged a retry."""
+        if self._reconnect_required or not self.is_connected():
             self.connect()
-        if not self.is_connected():
+        return self.is_connected()
+
+    def update_server_info(self):
+        if not self._ensure_connected():
             return
         self._set_status(ClaudeAgentClientStatus.UpdatingServerInfo)
         response = self._send_claude_agent_request(ClaudeAgentEventType.GetServerInfo)
@@ -592,10 +617,8 @@ class ClaudeCodeClient():
         return self._server_info
 
     def query(self, request: ChatRequest, response: ChatResponse):
-        if self._reconnect_required:
-            self.connect()
-        if not self.is_connected():
-            return f"Claude agent is not connected"
+        if not self._ensure_connected():
+            return "Claude agent is not connected. Check the server log for the underlying startup error."
 
         response = self._send_claude_agent_request(ClaudeAgentEventType.Query, {
             "request": request,
@@ -609,9 +632,7 @@ class ClaudeCodeClient():
             return response["error"]
 
     def clear_chat_history(self):
-        if self._reconnect_required:
-            self.connect()
-        if not self.is_connected():
+        if not self._ensure_connected():
             return
         response = self._send_claude_agent_request(ClaudeAgentEventType.ClearChatHistory)
 

@@ -37,6 +37,7 @@ def _make_client():
     client._client_queue = Queue()
     client._client_thread_signal = SignalImpl()
     client._client_thread = None
+    client._connect_resolved = threading.Event()
     client._status = ClaudeAgentClientStatus.NotConnected
     client._server_info = None
     client._server_info_lock = threading.Lock()
@@ -126,6 +127,240 @@ class TestSendClaudeAgentRequestDeadThread:
         # locally-captured signal in _send_claude_agent_request should still
         # have had its listener removed.
         assert len(signal_before._listeners) == listeners_before
+
+
+class TestEnsureConnected:
+    """The helper the three callers (query, update_server_info, clear_chat_history)
+    all share. Before this refactor each had its own slightly-different guard."""
+
+    def test_noop_when_already_connected(self):
+        client = _make_client()
+        live = Mock()
+        live.is_alive.return_value = True
+        client._client_thread = live
+        client.connect = Mock()
+
+        assert client._ensure_connected() is True
+        client.connect.assert_not_called()
+
+    def test_calls_connect_when_thread_dead(self):
+        client = _make_client()
+        client._client_thread = None
+
+        live = Mock()
+        live.is_alive.return_value = True
+        client.connect = Mock(
+            side_effect=lambda: setattr(client, "_client_thread", live)
+        )
+
+        assert client._ensure_connected() is True
+        client.connect.assert_called_once()
+
+    def test_calls_connect_when_reconnect_required_even_if_thread_alive(self):
+        # _reconnect_required is set from inside the worker thread when the
+        # SDK reports an error but before the thread has fully exited.
+        client = _make_client()
+        live = Mock()
+        live.is_alive.return_value = True
+        client._client_thread = live
+        client._reconnect_required = True
+        client.connect = Mock()
+
+        client._ensure_connected()
+        client.connect.assert_called_once()
+
+
+class TestQueryReconnect:
+    def test_reconnects_when_thread_has_died(self):
+        # Dead thread: caller observed it as "not connected" and couldn't
+        # recover without restarting JupyterLab (#147).
+        client = _make_client()
+        dead_thread = threading.Thread(target=lambda: None)
+        dead_thread.start()
+        dead_thread.join()
+        client._client_thread = dead_thread
+
+        live_thread = Mock()
+        live_thread.is_alive.return_value = True
+
+        def revive_thread():
+            client._client_thread = live_thread
+
+        client.connect = Mock(side_effect=revive_thread)
+        client._send_claude_agent_request = Mock(
+            return_value={"data": "ok", "success": True, "error": None}
+        )
+
+        result = client.query(MagicMock(), MagicMock())
+
+        client.connect.assert_called_once()
+        client._send_claude_agent_request.assert_called_once()
+        assert result == "ok"
+
+    def test_returns_informative_error_when_reconnect_fails(self):
+        client = _make_client()
+        client._client_thread = None
+        client.connect = Mock()
+        client._send_claude_agent_request = Mock()
+
+        result = client.query(MagicMock(), MagicMock())
+
+        client.connect.assert_called_once()
+        client._send_claude_agent_request.assert_not_called()
+        assert "not connected" in result
+        assert "server log" in result
+
+
+class TestConnectWaitsForReadiness:
+    """``connect()`` must not return until the worker thread has reached a
+    terminal state (Connected or FailedToConnect). Otherwise the caller's
+    post-connect ``is_connected()`` check sees a momentarily-alive thread
+    that's about to die on subprocess-spawn failure — exactly the #147 race
+    that made PR #148's first attempt ineffective for the reporter.
+    """
+
+    def test_waits_for_connected_signal(self, monkeypatch):
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 5
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        worker_started = threading.Event()
+        stop_worker = threading.Event()
+
+        async def fake_worker():
+            # Simulate a slow handshake so connect() must actually wait.
+            await asyncio.sleep(0.05)
+            client._status = ClaudeAgentClientStatus.Connected
+            client._connect_resolved.set()
+            worker_started.set()
+            # Keep thread alive so is_connected() stays True after connect().
+            while not stop_worker.is_set():
+                await asyncio.sleep(0.01)
+
+        client._client_thread_func = fake_worker
+
+        try:
+            start = time.monotonic()
+            client.connect()
+            elapsed = time.monotonic() - start
+            assert worker_started.is_set()
+            assert elapsed >= 0.05
+            assert client.is_connected()
+            client._update_server_info_async.assert_called_once()
+        finally:
+            stop_worker.set()
+            if client._client_thread is not None:
+                client._client_thread.join(timeout=1)
+
+    def test_returns_promptly_on_spawn_failure(self, monkeypatch):
+        # The #147 race: _get_client() raises (SDK subprocess spawn failed).
+        # The outer except in _client_thread_func must set _connect_resolved
+        # so connect() returns immediately instead of waiting the full
+        # CLAUDE_AGENT_CONNECT_TIMEOUT.
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 5
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        async def spawn_failure():
+            raise RuntimeError("SDK spawn failed")
+
+        client._get_client = spawn_failure
+
+        start = time.monotonic()
+        client.connect()
+        elapsed = time.monotonic() - start
+
+        # Well under the 5s timeout — the except branch signals promptly.
+        assert elapsed < 2
+        assert not client.is_connected()
+        assert client._status == ClaudeAgentClientStatus.FailedToConnect
+        # No server-info fetch when the handshake failed.
+        client._update_server_info_async.assert_not_called()
+
+    def test_returns_after_timeout_when_worker_hangs(self, monkeypatch):
+        # Defensive: if the worker hangs in the async setup without raising
+        # or setting the event, connect() still returns after the timeout.
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 0.1
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        stop_worker = threading.Event()
+
+        async def hanging_worker():
+            while not stop_worker.is_set():
+                await asyncio.sleep(0.01)
+
+        client._client_thread_func = hanging_worker
+
+        try:
+            start = time.monotonic()
+            client.connect()
+            elapsed = time.monotonic() - start
+            assert 0.1 <= elapsed < 2
+        finally:
+            stop_worker.set()
+            if client._client_thread is not None:
+                client._client_thread.join(timeout=1)
+
+    def test_query_surfaces_server_log_error_when_spawn_fails(self, monkeypatch):
+        """End-to-end of the #147 scenario raffaelemancuso hit after PR #148
+        commit 1: with only the naive retry, query()'s post-connect
+        is_connected() check passed while the worker thread was momentarily
+        alive, so the user saw the stale 'Claude agent is not running'
+        error from _send_claude_agent_request's dead-thread path. With
+        connect() now blocking until readiness resolves, query() returns
+        the informative 'Check the server log' error instead.
+        """
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 2
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        async def spawn_failure():
+            raise RuntimeError("SDK spawn failed")
+
+        client._get_client = spawn_failure
+
+        result = client.query(MagicMock(), MagicMock())
+
+        assert "not connected" in result
+        assert "server log" in result
+
+
+class TestOtherCallersEnsureConnected:
+    """update_server_info / clear_chat_history used to check only
+    _reconnect_required, not is_connected(), so a dead thread without the
+    flag set left them silently no-op'd. Now they route through
+    _ensure_connected() and pick up the same recovery behavior as query()."""
+
+    def test_update_server_info_reconnects_on_dead_thread(self):
+        client = _make_client()
+        client._client_thread = None
+        client.connect = Mock()
+        client._send_claude_agent_request = Mock()
+
+        client.update_server_info()
+
+        client.connect.assert_called_once()
+        client._send_claude_agent_request.assert_not_called()
+
+    def test_clear_chat_history_reconnects_on_dead_thread(self):
+        client = _make_client()
+        client._client_thread = None
+        client.connect = Mock()
+        client._send_claude_agent_request = Mock()
+
+        client.clear_chat_history()
+
+        client.connect.assert_called_once()
+        client._send_claude_agent_request.assert_not_called()
 
 
 def _make_participant():
