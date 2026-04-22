@@ -1246,7 +1246,8 @@ svg.access-token-warning {
   padding: 8px 12px;
   margin: 4px 8px;
   border-radius: 4px;
-  background-color: var(--jp-info-color3);
+  background-color: var(--jp-layout-color2);
+  border-left: 3px solid var(--jp-info-color1);
   color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size0);
 }
@@ -1291,9 +1292,9 @@ svg.access-token-warning {
 .nbi-skills-error {
   padding: 8px 12px;
   border-radius: 4px;
-  background-color: var(--jp-error-color3, rgb(230 100 100 / 15%));
+  background-color: var(--jp-layout-color2);
   color: var(--jp-ui-font-color1);
-  border: 1px solid var(--jp-error-color1, #d32f2f);
+  border-left: 3px solid var(--jp-error-color1, #d32f2f);
   font-size: var(--jp-ui-font-size1);
 }
 
@@ -1517,8 +1518,9 @@ svg.access-token-warning {
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background-color: var(--jp-inverse-layout-color1, #323232);
-  color: var(--jp-inverse-ui-font-color1, #fff);
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  border: 1px solid var(--jp-border-color1);
   border-radius: 4px;
   box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
   font-size: var(--jp-ui-font-size1);
