@@ -50,11 +50,16 @@ class OllamaChatModel(ChatModel):
 
         if stream:
             for chunk in ollama_response:
+                delta = chunk['message']
+                reasoning = delta.get('reasoning_content') or delta.get('reasoning')
+                if reasoning is not None:
+                    reasoning = str(reasoning)
                 response.stream({
                         "choices": [{
                             "delta": {
-                                "role": chunk['message']['role'],
-                                "content": chunk['message']['content']
+                                "role": delta['role'],
+                                "content": delta['content'],
+                                "reasoning_content": reasoning
                             }
                         }]
                     })
@@ -62,6 +67,10 @@ class OllamaChatModel(ChatModel):
             return
         else:
             json_resp = json.loads(ollama_response.model_dump_json())
+            message = ollama_response.message
+            reasoning = getattr(message, 'reasoning_content', None) or getattr(message, 'reasoning', None)
+            if reasoning:
+                json_resp['message']['reasoning_content'] = str(reasoning)
 
             return {
                 'choices': [
