@@ -19,7 +19,9 @@ from notebook_intelligence.llm_providers.ollama_llm_provider import OllamaLLMPro
 from notebook_intelligence.llm_providers.openai_compatible_llm_provider import OpenAICompatibleLLMProvider
 from notebook_intelligence.mcp_manager import MCPManager
 from notebook_intelligence.rule_manager import RuleManager
-from notebook_intelligence.util import ThreadSafeWebSocketConnector
+from notebook_intelligence.skill_manager import SkillManager
+from notebook_intelligence.skill_reconciler import SkillReconciler
+from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +58,23 @@ class AIServiceManager(Host):
         self._websocket_connector: ThreadSafeWebSocketConnector = None
         # Initialize rule manager if rules are enabled
         self._rule_manager = RuleManager(self._nbi_config.rules_directory) if self._nbi_config.rules_enabled else None
+        self._skill_manager = SkillManager(
+            user_dir=self._nbi_config.user_skills_directory,
+            project_dir=self._nbi_config.project_skills_directory(get_jupyter_root_dir()),
+        )
+        self._skill_reconciler: Optional[SkillReconciler] = None
+        manifest_source = (self._options.get("skills_manifest") or "").strip()
+        if manifest_source:
+            self._skill_reconciler = SkillReconciler(
+                skill_manager=self._skill_manager,
+                manifest_source=manifest_source,
+                interval_seconds=int(self._options.get("skills_manifest_interval", 86400)),
+                managed_token=self._options.get("managed_skills_token") or None,
+            )
         self.initialize()
+        self._skill_manager.start_watching()
+        if self._skill_reconciler is not None:
+            self._skill_reconciler.start()
 
     @property
     def nbi_config(self) -> NBIConfig:
@@ -69,11 +87,19 @@ class AIServiceManager(Host):
     def get_rule_manager(self) -> Optional[RuleManager]:
         """Get the rule manager instance."""
         return self._rule_manager
-    
+
     def reload_rules(self):
         """Reload rules from disk (for development/testing)."""
         if self._rule_manager:
             self._rule_manager.load_rules(force_reload=True)
+
+    def get_skill_manager(self) -> SkillManager:
+        """Get the skill manager instance."""
+        return self._skill_manager
+
+    def get_skill_reconciler(self) -> Optional[SkillReconciler]:
+        """Get the managed-skills reconciler, if one is configured."""
+        return self._skill_reconciler
 
     @property
     def websocket_connector(self) -> ThreadSafeWebSocketConnector:
@@ -485,6 +511,8 @@ class AIServiceManager(Host):
 
     def handle_stop_request(self):
         self._mcp_manager.handle_stop_request()
+        if self._skill_reconciler is not None:
+            self._skill_reconciler.stop()
 
     def update_mcp_server_connections(self, disabled_mcp_servers: list[str]):
         self._mcp_manager.update_mcp_server_connections(disabled_mcp_servers)

@@ -479,7 +479,7 @@ function ChatResponse(props: any) {
     }
 
     let reasoningContent = '';
-    let reasoningStartTime = new Date(item.created);
+    const reasoningStartTime = new Date(item.created);
     const reasoningEndTime = new Date();
 
     let startPos = -1;
@@ -541,7 +541,7 @@ function ChatResponse(props: any) {
       lastItemType === ResponseStreamDataType.MarkdownPart
     ) {
       const lastItem = groupedContents[groupedContents.length - 1];
-      lastItem.content += (item.content || '');
+      lastItem.content += item.content || '';
       if (item.reasoningContent) {
         lastItem.reasoningContent =
           (lastItem.reasoningContent || '') + item.reasoningContent;
@@ -633,27 +633,30 @@ function ChatResponse(props: any) {
             case ResponseStreamDataType.MarkdownPart:
               return (
                 <>
-                  {item.reasoningContent && typeof item.reasoningContent === 'string' && (
-                    <div className={`expandable-content ${!item.reasoningFinished ? 'expanded' : ''}`}>
+                  {item.reasoningContent &&
+                    typeof item.reasoningContent === 'string' && (
                       <div
-                        className="expandable-content-title"
-                        onClick={(event: any) => onExpandCollapseClick(event)}
+                        className={`expandable-content ${!item.reasoningFinished ? 'expanded' : ''}`}
                       >
-                        <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
-                        <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
-                        {getReasoningTitle(item)}
-                      </div>
-                      <div className="expandable-content-text">
-                        <MarkdownRenderer
-                          key={`reasoning-${index}`}
-                          getApp={props.getApp}
-                          getActiveDocumentInfo={props.getActiveDocumentInfo}
+                        <div
+                          className="expandable-content-title"
+                          onClick={(event: any) => onExpandCollapseClick(event)}
                         >
-                          {item.reasoningContent}
-                        </MarkdownRenderer>
+                          <VscTriangleRight className="collapsed-icon"></VscTriangleRight>
+                          <VscTriangleDown className="expanded-icon"></VscTriangleDown>{' '}
+                          {getReasoningTitle(item)}
+                        </div>
+                        <div className="expandable-content-text">
+                          <MarkdownRenderer
+                            key={`reasoning-${index}`}
+                            getApp={props.getApp}
+                            getActiveDocumentInfo={props.getActiveDocumentInfo}
+                          >
+                            {item.reasoningContent}
+                          </MarkdownRenderer>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
                   <MarkdownRenderer
                     key={`key-${index}`}
                     getApp={props.getApp}
@@ -2081,7 +2084,9 @@ function SidebarComponent(props: any) {
                 type: nbiContent.type,
                 content: nbiContent.content || '',
                 reasoningContent: nbiContent.reasoning_content || '',
-                reasoningTag: nbiContent.reasoning_content ? '<think>' : undefined,
+                reasoningTag: nbiContent.reasoning_content
+                  ? '<think>'
+                  : undefined,
                 reasoningFinished:
                   nbiContent.type === ResponseStreamDataType.Markdown &&
                   nbiContent.reasoning_content
@@ -2459,7 +2464,9 @@ function SidebarComponent(props: any) {
                 type: nbiContent.type,
                 content: nbiContent.content || '',
                 reasoningContent: nbiContent.reasoning_content || '',
-                reasoningTag: nbiContent.reasoning_content ? '<think>' : undefined,
+                reasoningTag: nbiContent.reasoning_content
+                  ? '<think>'
+                  : undefined,
                 reasoningFinished:
                   nbiContent.type === ResponseStreamDataType.Markdown &&
                   nbiContent.reasoning_content
@@ -2605,12 +2612,33 @@ function SidebarComponent(props: any) {
     NBIAPI.getGHLoginRequired()
   );
   const [chatEnabled, setChatEnabled] = useState(NBIAPI.getChatEnabled());
+  const [skillsReloadedVisible, setSkillsReloadedVisible] = useState(false);
 
   useEffect(() => {
     NBIAPI.configChanged.connect(() => {
       setGHLoginRequired(NBIAPI.getGHLoginRequired());
       setChatEnabled(NBIAPI.getChatEnabled());
     });
+  }, []);
+
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const listener = () => {
+      setSkillsReloadedVisible(true);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      timeout = setTimeout(() => {
+        setSkillsReloadedVisible(false);
+      }, 4000);
+    };
+    NBIAPI.skillsReloaded.connect(listener);
+    return () => {
+      NBIAPI.skillsReloaded.disconnect(listener);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -2647,6 +2675,13 @@ function SidebarComponent(props: any) {
         >
           <VscSettingsGear />
         </div>
+      </div>
+      <div className="nbi-skills-reloaded-banner-live" aria-live="polite">
+        {skillsReloadedVisible && (
+          <div className="nbi-skills-reloaded-banner">
+            Skills reloaded — applied to the current session.
+          </div>
+        )}
       </div>
       {!chatEnabled && !ghLoginRequired && (
         <div className="sidebar-login-info">

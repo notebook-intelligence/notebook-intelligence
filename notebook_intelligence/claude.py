@@ -51,7 +51,7 @@ class ClaudeAgentClientStatus(str, Enum):
 
 CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME", "0.5"))
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "1800"))
-CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "3"))
+CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "0.5"))
 
 _current_request = None
 _current_response = None
@@ -304,6 +304,14 @@ class ClaudeCodeClient():
     @property
     def status(self) -> ClaudeAgentClientStatus:
         return self._status
+
+    @property
+    def continue_conversation(self) -> bool | None:
+        return self._continue_conversation
+
+    @continue_conversation.setter
+    def continue_conversation(self, value: bool | None):
+        self._continue_conversation = value
 
     def is_connected(self):
         return self._client_thread is not None and self._client_thread.is_alive()
@@ -905,6 +913,25 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         self._host = host
         self._client_options: ClaudeAgentOptions = self._create_client_options()
         self._client = ClaudeCodeClient(host, self._client_options)
+        skill_manager = host.get_skill_manager()
+        if skill_manager is not None and skill_manager is not NotImplemented:
+            skill_manager.on_skills_changed(self._on_skills_changed)
+
+    def _on_skills_changed(self):
+        # Called from the skill watcher thread. Marshal onto the Tornado event loop before
+        # touching asyncio state — update_client_debounced uses asyncio.get_event_loop().
+        connector = self._host.websocket_connector
+        if connector is None:
+            return
+        try:
+            self._client.continue_conversation = True
+            connector.schedule(self.update_client_debounced)
+            connector.write_message({
+                "type": BackendMessageType.SkillsReloaded,
+                "data": {}
+            })
+        except Exception as e:
+            log.error(f"Error while handling skills changed event: {e}")
 
     @property
     def id(self) -> str:
@@ -1070,4 +1097,6 @@ If you need to install a Python package within a notebook cell code, use %pip in
 
     async def _update_client_debounced(self):
         await asyncio.sleep(CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME)
-        self.update_client()
+        # update_client() does synchronous disconnect/connect with blocking time.sleep
+        # inside _send_claude_agent_request. Run it off the event loop thread.
+        await asyncio.get_event_loop().run_in_executor(None, self.update_client)

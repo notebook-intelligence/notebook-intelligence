@@ -144,6 +144,16 @@ class NBIConfig:
         return os.path.join(self.nbi_user_dir, 'rules')
 
     @property
+    def user_skills_directory(self) -> str:
+        # Mirrors Claude's own CLAUDE_CONFIG_DIR override so the extension picks up
+        # skills from the same directory Claude is using.
+        base = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(os.path.expanduser('~'), '.claude')
+        return os.path.join(base, 'skills')
+
+    def project_skills_directory(self, project_root: str) -> str:
+        return os.path.join(project_root, '.claude', 'skills')
+
+    @property
     def active_rules(self) -> dict:
         """Get dictionary of active rule states (filename -> bool)."""
         return self.get('active_rules', {})

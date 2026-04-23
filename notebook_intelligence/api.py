@@ -33,6 +33,7 @@ class BackendMessageType(str, Enum):
     GitHubCopilotLoginStatusChange = 'github-copilot-login-status-change'
     MCPServerStatusChange = 'mcp-server-status-change'
     ClaudeCodeStatusChange = 'claude-code-status-change'
+    SkillsReloaded = 'skills-reloaded'
 
 class ResponseStreamDataType(str, Enum):
     LLMRaw = 'llm-raw'
@@ -907,6 +908,10 @@ class Host:
     
     def get_rule_manager(self):
         """Get the rule manager instance if available."""
+        return NotImplemented
+
+    def get_skill_manager(self):
+        """Get the skill manager instance if available."""
         return NotImplemented
 
     @property
