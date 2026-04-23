@@ -195,7 +195,7 @@ class TestQueryReconnect:
 
         client.connect.assert_called_once()
         client._send_claude_agent_request.assert_called_once()
-        assert result == "ok"
+        assert result is None
 
     def test_returns_informative_error_when_reconnect_fails(self):
         client = _make_client()

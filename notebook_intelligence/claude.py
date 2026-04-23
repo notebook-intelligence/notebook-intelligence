@@ -349,10 +349,7 @@ class ClaudeCodeClient():
                 self._update_server_info_async()
         except Exception as e:
             self._client_thread = None
-            log.error(
-                f"Error occurred while connecting to Claude agent client: {str(e)}",
-                exc_info=True,
-            )
+            log.error(f"Error occurred while connecting to Claude agent client: {str(e)}")
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
 
     def disconnect(self):
@@ -518,10 +515,7 @@ class ClaudeCodeClient():
                         log.error(f"Unknown event type {event}")
         except Exception as e:
             self._client_thread = None
-            log.error(
-                f"Error occurred while running MCP server thread: {str(e)}",
-                exc_info=True,
-            )
+            log.error(f"Error occurred while running MCP server thread: {str(e)}")
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
             self._connect_resolved.set()
 
@@ -643,7 +637,9 @@ class ClaudeCodeClient():
         })
 
         if response["success"]:
-            return response["data"]
+            # Query results are streamed to `response` as they arrive; the
+            # success payload is just a sentinel, not something to surface.
+            return None
         else:
             log.error(f"Claude agent query failed: {response['error']}")
             return response["error"]
