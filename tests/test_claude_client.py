@@ -17,6 +17,7 @@ import time
 from queue import Queue
 from unittest.mock import AsyncMock, MagicMock, Mock
 
+import notebook_intelligence.claude as claude_module
 from notebook_intelligence.api import ChatResponse, MarkdownData
 from notebook_intelligence.claude import (
     ClaudeAgentClientStatus,
@@ -73,6 +74,42 @@ class TestIsConnected:
         finally:
             stop.set()
             thread.join(timeout=1)
+
+
+class TestClientThreadEventLoop:
+    def test_windows_uses_proactor_loop_without_changing_global_policy(self, monkeypatch):
+        client = _make_client()
+        created_loop = asyncio.new_event_loop()
+        set_policy_calls = []
+
+        class FakeProactorPolicy:
+            def new_event_loop(self):
+                return created_loop
+
+        monkeypatch.setattr(claude_module.sys, "platform", "win32", raising=False)
+        monkeypatch.setattr(
+            claude_module.asyncio,
+            "WindowsProactorEventLoopPolicy",
+            lambda: FakeProactorPolicy(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            claude_module.asyncio,
+            "set_event_loop_policy",
+            lambda *args, **kwargs: set_policy_calls.append((args, kwargs)),
+        )
+
+        observed_loop = None
+
+        async def sample():
+            nonlocal observed_loop
+            observed_loop = asyncio.get_running_loop()
+
+        client._run_client_thread(sample())
+
+        assert observed_loop is created_loop
+        assert created_loop.is_closed()
+        assert set_policy_calls == []
 
 
 class TestSendClaudeAgentRequestDeadThread:
