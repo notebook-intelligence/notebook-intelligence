@@ -602,11 +602,10 @@ class ClaudeCodeClient():
             "response": response
         })
 
-        if response["success"]:
-            return response["data"]
-        else:
-            log.error(f"Claude agent query failed: {response['error']}")
-            return response["error"]
+        if not response.get("success"):
+            log.error(f"Claude agent query failed: {response.get('error')}")
+        
+        return response
 
     def clear_chat_history(self):
         if self._reconnect_required:
@@ -987,12 +986,14 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         try:
             response.stream(ProgressData("Thinking..."))
             result = self._client.query(request, response)
-            # query() returns a string when it bails early without dispatching —
+            # query() returns a response dictionary. If it bails early or fails —
             # e.g. the agent isn't connected, a response timeout elapsed, or the
-            # worker thread died. Surface it so the user sees why instead of a
+            # worker thread died — success is False. Surface it so the user sees why instead of a
             # silent spinner stop.
-            if isinstance(result, str) and result:
-                response.stream(MarkdownData(f"**Claude agent error:** {result}"))
+            if not result.get("success"):
+                err_msg = result.get("error")
+                if err_msg:
+                    response.stream(MarkdownData(f"**Claude agent error:** {err_msg}"))
         except Exception as e:
             log.error(f"Error while handling Claude chat request: {e}", exc_info=True)
             try:
