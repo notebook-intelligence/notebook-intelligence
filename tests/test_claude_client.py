@@ -86,13 +86,21 @@ class TestClientThreadEventLoop:
             def new_event_loop(self):
                 return created_loop
 
-        monkeypatch.setattr(claude_module.sys, "platform", "win32", raising=False)
+        # Patch the policy attribute before sys.platform: on Python 3.14+
+        # non-Windows platforms, asyncio.__getattr__'s shim for
+        # WindowsProactorEventLoopPolicy is guarded by a sys.platform check
+        # and references a windows_events module that wasn't imported. If
+        # sys.platform is patched to "win32" first, monkeypatch's getattr
+        # (to save the old value) triggers that branch and raises NameError,
+        # which raising=False doesn't catch. Ordering the policy patch first
+        # lets the shim fall through to AttributeError cleanly.
         monkeypatch.setattr(
             claude_module.asyncio,
             "WindowsProactorEventLoopPolicy",
             lambda: FakeProactorPolicy(),
             raising=False,
         )
+        monkeypatch.setattr(claude_module.sys, "platform", "win32", raising=False)
         monkeypatch.setattr(
             claude_module.asyncio,
             "set_event_loop_policy",

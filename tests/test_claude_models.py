@@ -1,6 +1,6 @@
 """Tests for Claude model fetching and caching in notebook_intelligence.claude."""
 
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import ANY, Mock, patch, MagicMock
 
 import pytest
 
@@ -172,4 +172,6 @@ class TestFetchClaudeModels:
 
         fetch_claude_models(api_key="  ", base_url="")
 
-        mock_anthropic_cls.assert_called_once_with(api_key=None, base_url=None)
+        mock_anthropic_cls.assert_called_once_with(
+            api_key=None, base_url=None, default_headers=ANY
+        )
