@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import asyncio
-import sys
 from enum import Enum
 from queue import Queue
 import threading
@@ -353,6 +352,7 @@ class ClaudeCodeClient():
                 name="Claude Agent Client Thread",
                 target=self._run_client_thread,
                 daemon=True,
+                args=(self._client_thread_func(),),
             )
             self._client_thread.start()
             # Block until the worker has either finished the SDK handshake or
@@ -411,23 +411,6 @@ class ClaudeCodeClient():
                     })
             except Exception as e:
                 log.error(f"Error occurred while sending status message to websocket: {str(e)}")
-
-    def _run_client_thread(self):
-        # The Claude Agent SDK spawns claude.exe via asyncio.create_subprocess_exec.
-        # On Windows the SelectorEventLoop raises NotImplementedError for subprocess
-        # creation; only ProactorEventLoop supports it. Python's default policy on
-        # Windows varies across versions and distributions (e.g. uv's 3.14 builds
-        # hand out Selector), so force Proactor here for this thread's loop
-        # instead of relying on the ambient policy. See #147.
-        if sys.platform == "win32":
-            loop = asyncio.ProactorEventLoop()
-            try:
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._client_thread_func())
-            finally:
-                loop.close()
-        else:
-            asyncio.run(self._client_thread_func())
 
     async def _client_thread_func(self):
         try:
