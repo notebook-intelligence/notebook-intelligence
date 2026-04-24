@@ -3,6 +3,7 @@
 import json
 import os
 import asyncio
+import sys
 from enum import Enum
 from queue import Queue
 import threading
@@ -316,6 +317,24 @@ class ClaudeCodeClient():
     def is_connected(self):
         return self._client_thread is not None and self._client_thread.is_alive()
 
+    def _create_client_thread_event_loop(self) -> asyncio.AbstractEventLoop:
+        if sys.platform == 'win32' and hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
+            return asyncio.WindowsProactorEventLoopPolicy().new_event_loop()
+        return asyncio.new_event_loop()
+
+    def _run_client_thread(self, coro):
+        loop = self._create_client_thread_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(coro)
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            asyncio.set_event_loop(None)
+            loop.close()
+
     def connect(self):
         if self.is_connected():
             return
@@ -328,7 +347,7 @@ class ClaudeCodeClient():
         try:
             self._client_thread = threading.Thread(
                 name="Claude Agent Client Thread",
-                target=asyncio.run,
+                target=self._run_client_thread,
                 daemon=True,
                 args=(self._client_thread_func(),)
             )
