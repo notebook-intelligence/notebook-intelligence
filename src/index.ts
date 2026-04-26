@@ -1663,8 +1663,23 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           }
           generatedContent += content;
         },
-        onContentStreamEnd: () => {
+        onContentStreamEnd: (streamError?: string | null) => {
           if (existingCode !== '') {
+            return;
+          }
+          if (streamError) {
+            // The backend tagged this stream as interrupted. Discard the
+            // partial buffer rather than auto-inserting truncated code (or
+            // worse, the [Stream interrupted] marker text itself) into the
+            // user's cell, and surface the failure as a toast.
+            generatedContent = '';
+            removePopover();
+            app.commands.execute('apputils:notify', {
+              message: `Inline chat failed: ${streamError}`,
+              type: 'error',
+              options: { autoClose: true }
+            });
+            editor.focus();
             return;
           }
           applyGeneratedCode();

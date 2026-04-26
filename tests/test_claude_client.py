@@ -22,6 +22,7 @@ from notebook_intelligence.api import ChatResponse, MarkdownData
 from notebook_intelligence.claude import (
     ClaudeAgentClientStatus,
     ClaudeAgentEventType,
+    ClaudeChatModel,
     ClaudeCodeChatParticipant,
     ClaudeCodeClient,
     SignalImpl,
@@ -503,6 +504,286 @@ class TestHandleChatRequestErrorHandling:
         # shouldn't have touched the response.
         response.finish.assert_not_called()
         response.stream.assert_not_called()
+
+
+class _FakeMessageStream:
+    """Stand-in for the Anthropic SDK's MessageStreamManager.
+
+    The SDK returns a sync context manager whose ``text_stream`` attribute
+    yields decoded text deltas. ``ClaudeChatModel.completions`` only touches
+    those two pieces, so the fake mirrors exactly that surface."""
+
+    def __init__(self, chunks):
+        self.text_stream = iter(chunks)
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.exited = True
+        return False
+
+
+def _make_chat_model(chunks):
+    """Build a ``ClaudeChatModel`` without calling __init__ (avoids hitting
+    the live Anthropic API). The returned model has its ``_client.messages
+    .stream`` wired to a ``_FakeMessageStream`` that yields ``chunks``."""
+    model = ClaudeChatModel.__new__(ClaudeChatModel)
+    model._model_id = "claude-sonnet-test"
+    model._model_name = "Claude Sonnet (test)"
+    model._context_window = 200000
+    model._supports_tools = True
+    model._client = MagicMock()
+    fake_stream = _FakeMessageStream(chunks)
+    model._client.messages.stream = MagicMock(return_value=fake_stream)
+    return model, fake_stream
+
+
+class TestClaudeChatModelStreaming:
+    """``ClaudeChatModel.completions`` powers Claude-mode inline chat
+    (Ctrl+G). It must stream deltas as they arrive so the diff pane fills
+    in progressively, honour the cancel token between chunks, and always
+    end with ``response.finish()`` so the front-end stops the spinner."""
+
+    def test_each_chunk_is_streamed_as_its_own_delta(self):
+        # Three deltas in -> three response.stream calls out -> one finish.
+        # Proves we no longer buffer the whole response into a single delta.
+        model, fake_stream = _make_chat_model(["def ", "foo():", "\n    pass"])
+        response = MagicMock()
+
+        model.completions(messages=[{"role": "user", "content": "x"}], response=response)
+
+        assert response.stream.call_count == 3
+        emitted = [
+            call.args[0]["choices"][0]["delta"]["content"]
+            for call in response.stream.call_args_list
+        ]
+        assert emitted == ["def ", "foo():", "\n    pass"]
+        response.finish.assert_called_once()
+        # Context manager entered and exited cleanly so the SDK can release
+        # the underlying HTTP stream.
+        assert fake_stream.entered and fake_stream.exited
+
+    def test_uses_messages_stream_not_messages_create(self):
+        # Regression guard: if someone reverts this to messages.create the
+        # diff pane goes back to "empty until done". Easier to assert the
+        # API choice directly than to test the user-visible symptom.
+        model, _ = _make_chat_model(["hi"])
+        response = MagicMock()
+
+        model.completions(messages=[{"role": "user", "content": "x"}], response=response)
+
+        model._client.messages.stream.assert_called_once()
+        kwargs = model._client.messages.stream.call_args.kwargs
+        assert kwargs["model"] == "claude-sonnet-test"
+        assert kwargs["messages"] == [{"role": "user", "content": "x"}]
+        assert kwargs["max_tokens"] == 10000
+        model._client.messages.create.assert_not_called()
+
+    def test_empty_chunks_are_skipped(self):
+        # The Anthropic stream can occasionally yield empty strings between
+        # content blocks. Forwarding those wastes a websocket frame and
+        # creates an empty assistant turn in the front-end's accumulator.
+        model, _ = _make_chat_model(["hello", "", " world", ""])
+        response = MagicMock()
+
+        model.completions(messages=[{"role": "user", "content": "x"}], response=response)
+
+        assert response.stream.call_count == 2
+        emitted = [
+            call.args[0]["choices"][0]["delta"]["content"]
+            for call in response.stream.call_args_list
+        ]
+        assert emitted == ["hello", " world"]
+
+    def test_pre_cancelled_request_skips_anthropic_stream_open(self):
+        # A fast CancelChatRequest can flip the token before the worker
+        # thread reaches completions(). The check must run BEFORE the with
+        # block, otherwise the underlying messages.stream call still opens
+        # the HTTP request and burns an Anthropic call whose output has
+        # nowhere to go. finish() still runs so the websocket end event
+        # closes the front-end's spinner.
+        model, _ = _make_chat_model(["alpha", "beta"])
+        response = MagicMock()
+        cancel_token = MagicMock()
+        cancel_token.is_cancel_requested = True
+
+        model.completions(
+            messages=[{"role": "user", "content": "x"}],
+            response=response,
+            cancel_token=cancel_token,
+        )
+
+        # The actual API call must not have been opened — that's the whole
+        # point of the early-out. Asserting on response.stream alone (as an
+        # earlier version of this test did) was a false positive: a fake
+        # MessageStreamManager has no side effect analogous to opening the
+        # HTTP stream, so a missing emit doesn't prove the network was
+        # spared.
+        model._client.messages.stream.assert_not_called()
+        response.stream.assert_not_called()
+        response.finish.assert_called_once()
+
+    def test_cancel_token_short_circuits_mid_stream(self):
+        # User hits Escape while Claude is mid-response. The token flips on
+        # the next iteration so we stop emitting and let the with-block
+        # close the stream — abandoning the rest of the chunks.
+        model, _ = _make_chat_model(["alpha", "beta", "gamma"])
+        response = MagicMock()
+        cancel_token = MagicMock()
+        # Allow one chunk, then request cancel before the second.
+        cancel_token.is_cancel_requested = False
+
+        emit_count = {"n": 0}
+        original_stream = response.stream
+
+        def stream_then_cancel(payload):
+            original_stream(payload)
+            emit_count["n"] += 1
+            if emit_count["n"] == 1:
+                cancel_token.is_cancel_requested = True
+
+        response.stream = stream_then_cancel
+
+        model.completions(
+            messages=[{"role": "user", "content": "x"}],
+            response=response,
+            cancel_token=cancel_token,
+        )
+
+        # First chunk slipped through, second triggered the cancel check
+        # and broke the loop, third never reached the user.
+        emitted = [
+            payload["choices"][0]["delta"]["content"]
+            for (payload,), _ in original_stream.call_args_list
+        ]
+        assert emitted == ["alpha"]
+        # finish() still runs so the front-end's spinner closes — the user
+        # already saw the popover dismiss on Escape, but the websocket end
+        # event must arrive regardless.
+        response.finish.assert_called_once()
+
+    def test_no_cancel_token_is_safe(self):
+        # The non-Claude code paths still call completions without a cancel
+        # token. Defaulting to None must not crash.
+        model, _ = _make_chat_model(["a", "b"])
+        response = MagicMock()
+
+        model.completions(
+            messages=[{"role": "user", "content": "x"}],
+            response=response,
+            cancel_token=None,
+        )
+
+        assert response.stream.call_count == 2
+        response.finish.assert_called_once()
+
+    def test_mid_stream_exception_emits_error_marker_and_reraises(self):
+        # Anthropic raising mid-stream used to leave the diff pane showing
+        # silently truncated code (the outer handler's MarkdownData error
+        # never reaches the inline popover, which only consumes payloads with
+        # delta.content). The fix surfaces the failure as a final delta into
+        # the same channel and re-raises so the caller still finishes.
+        class ExplodingStream(_FakeMessageStream):
+            def __init__(self, before_chunks, exc):
+                super().__init__(before_chunks)
+                self._exc = exc
+
+                def gen():
+                    for c in before_chunks:
+                        yield c
+                    raise exc
+
+                self.text_stream = gen()
+
+        model = ClaudeChatModel.__new__(ClaudeChatModel)
+        model._model_id = "claude-sonnet-test"
+        model._model_name = "Claude Sonnet (test)"
+        model._context_window = 200000
+        model._supports_tools = True
+        model._client = MagicMock()
+        boom = RuntimeError("connection reset by peer")
+        model._client.messages.stream = MagicMock(
+            return_value=ExplodingStream(["def add(a, b):\n", "    return a + b"], boom)
+        )
+        response = MagicMock()
+
+        try:
+            model.completions(
+                messages=[{"role": "user", "content": "x"}], response=response
+            )
+        except RuntimeError as e:
+            assert e is boom
+        else:
+            raise AssertionError("expected the underlying stream error to propagate")
+
+        payloads = [call.args[0] for call in response.stream.call_args_list]
+        emitted = [p["choices"][0]["delta"]["content"] for p in payloads]
+        # Two real chunks, then a marker so the user sees the response was
+        # cut short instead of trusting the truncated code.
+        assert emitted[:2] == ["def add(a, b):\n", "    return a + b"]
+        assert "Stream interrupted" in emitted[-1]
+        assert "connection reset by peer" in emitted[-1]
+        # The marker payload must also carry the structured nbi_stream_error
+        # field so the front-end auto-insert path can detect the failure and
+        # skip writing the partial buffer to the user's cell.
+        assert payloads[-1].get("nbi_stream_error") == "connection reset by peer"
+        # finish() is the caller's responsibility on the error path; we must
+        # not double-finish here.
+        response.finish.assert_not_called()
+
+    def test_mid_stream_exception_with_bracketed_text_keeps_structured_field(self):
+        # Many real Anthropic / network errors contain bracketed fragments
+        # like ``[SSL: CERTIFICATE_VERIFY_FAILED]`` or ``[Errno 11001]``.
+        # The frontend marker-strip regex used to anchor on the first inner
+        # ``]`` and leak the suffix into the user's code; the popover and
+        # auto-insert paths now branch on nbi_stream_error rather than
+        # parsing the marker, so this asserts the contract the frontend
+        # depends on: the structured field carries the verbatim error text
+        # regardless of how many brackets it contains.
+        class ExplodingStream(_FakeMessageStream):
+            def __init__(self, before_chunks, exc):
+                super().__init__(before_chunks)
+
+                def gen():
+                    for c in before_chunks:
+                        yield c
+                    raise exc
+
+                self.text_stream = gen()
+
+        model = ClaudeChatModel.__new__(ClaudeChatModel)
+        model._model_id = "claude-sonnet-test"
+        model._model_name = "Claude Sonnet (test)"
+        model._context_window = 200000
+        model._supports_tools = True
+        model._client = MagicMock()
+        boom = RuntimeError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate"
+        )
+        model._client.messages.stream = MagicMock(
+            return_value=ExplodingStream(["partial code"], boom)
+        )
+        response = MagicMock()
+
+        try:
+            model.completions(
+                messages=[{"role": "user", "content": "x"}], response=response
+            )
+        except RuntimeError:
+            pass
+
+        payloads = [call.args[0] for call in response.stream.call_args_list]
+        # Marker text contains the brackets verbatim — that's fine because
+        # the frontend strips by line, not by inner-bracket boundary.
+        assert "[SSL:" in payloads[-1]["choices"][0]["delta"]["content"]
+        # Structured field is the source of truth for the frontend's
+        # error-vs-success branch.
+        assert payloads[-1].get("nbi_stream_error") == str(boom)
+
 
 class TestNormalizeAnthropicCredential:
     """Settings panel saves unset string fields as ``""`` rather than ``None``.

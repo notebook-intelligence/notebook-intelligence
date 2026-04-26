@@ -56,6 +56,20 @@ export function moveCodeSectionBoundaryMarkersToNewLine(
 }
 
 export function extractLLMGeneratedCode(code: string): string {
+  // Strip our backend-emitted stream-interruption marker. The Claude inline
+  // handler pushes it into the same text channel so the diff pane shows
+  // what went wrong, but we never want it landing verbatim in the user's
+  // file when fresh-generation auto-inserts the result (or when the user
+  // accepts a truncated diff). The pattern is anchored to end-of-string
+  // because the backend always emits the marker as the last delta, and
+  // its closing bracket is required so legitimate generated code that
+  // happens to contain the phrase mid-buffer (e.g.
+  // ``print("[Stream interrupted: demo]")``) is not stripped. Greedy
+  // ``[^\n]*\]`` backtracks to the last ``]`` on the marker line, so
+  // bracketed exception strings such as
+  // ``[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate``
+  // and ``[Errno 11001] getaddrinfo failed`` are still matched in full.
+  code = code.replace(/\n*\[Stream interrupted:[^\n]*\]\n*$/, '');
   if (code.endsWith('```')) {
     code = code.slice(0, -3);
   }
