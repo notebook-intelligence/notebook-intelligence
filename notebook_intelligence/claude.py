@@ -121,14 +121,24 @@ def _get_context_window(model_id: str) -> int:
     except Exception:
         return 200000
 
+def _normalize_anthropic_credential(value: Any) -> str | None:
+    """Settings-panel inputs save unset fields as ``""`` rather than ``None``.
+    The Anthropic SDK forwards an empty ``base_url`` straight to httpx, which
+    rejects it with ``UnsupportedProtocol``; an empty ``api_key`` blocks the
+    SDK from falling back to ``ANTHROPIC_API_KEY``. Normalize both to ``None``
+    so the SDK's defaults kick in. Non-string values (``False``, ``123``,
+    ``None``, dicts) coming from a malformed config also collapse to
+    ``None`` so the SDK gets a clean default rather than crashing."""
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
 def fetch_claude_models(api_key: str = None, base_url: str = None) -> list[dict]:
     """Fetch available models from the Anthropic API and update cache."""
     try:
-        # Pass None instead of empty string so SDK falls back to ANTHROPIC_API_KEY env var
-        if api_key is not None and api_key.strip() == '':
-            api_key = None
-        if base_url is not None and base_url.strip() == '':
-            base_url = None
+        api_key = _normalize_anthropic_credential(api_key)
+        base_url = _normalize_anthropic_credential(base_url)
         client = Anthropic(api_key=api_key, base_url=base_url,
                            default_headers={"User-Agent": f"NotebookIntelligence/{NBI_VERSION}"})
         page = client.models.list(limit=100)
@@ -158,7 +168,8 @@ class ClaudeChatModel(ChatModel):
         self._model_name = model_info["name"]
         self._context_window = model_info["context_window"]
         self._supports_tools = True
-        self._client = Anthropic(base_url=base_url, api_key=api_key,
+        self._client = Anthropic(base_url=_normalize_anthropic_credential(base_url),
+                                 api_key=_normalize_anthropic_credential(api_key),
                                  default_headers={"User-Agent": f"NotebookIntelligence/{NBI_VERSION}"})
 
     @property
@@ -183,7 +194,7 @@ class ClaudeChatModel(ChatModel):
             max_tokens=10000,
             messages=messages
         )
- 
+
         for block in resp.content:
             if isinstance(block, AnthropicTextBlock):
                 response.stream({
@@ -207,7 +218,8 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
         self._model_id = model_id
         self._model_name = model_info["name"]
         self._context_window = model_info["context_window"]
-        self._client = Anthropic(base_url=base_url, api_key=api_key)
+        self._client = Anthropic(base_url=_normalize_anthropic_credential(base_url),
+                                 api_key=_normalize_anthropic_credential(api_key))
 
     @property
     def id(self) -> str:
