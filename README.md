@@ -2,9 +2,10 @@
 
 Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. It adds chat, inline edit, auto-complete, and an agent that can drive notebooks — backed by GitHub Copilot, an OpenAI-compatible or LiteLLM-compatible endpoint, local [Ollama](https://ollama.com/) models, or Anthropic's Claude Code CLI.
 
+NBI is free and open-source. Connect it to a free or paid LLM provider of your choice — GitHub Copilot, any OpenAI- or LiteLLM-compatible endpoint, Ollama (local), or Anthropic Claude (via the Claude Code CLI). Provider charges, when applicable, are paid directly to the provider.
+
 ## Contents
 
-- [What it costs](#what-it-costs)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Concepts](#concepts)
@@ -27,10 +28,6 @@ Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framewor
 - [Further reading](#further-reading)
 - [Roadmap](#roadmap)
 - [License](#license)
-
-## What it costs
-
-NBI is free and open-source. Connect it to a free or paid LLM provider of your choice — GitHub Copilot, any OpenAI- or LiteLLM-compatible endpoint, Ollama (local), or Anthropic Claude (via the Claude Code CLI). Provider charges, when applicable, are paid directly to the provider.
 
 ## Requirements
 
