@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "rootDir": "../..",
+    "noUnusedLocals": false,
+    "isolatedModules": true,
+    "types": ["jest", "node"]
+  },
+  "include": ["./**/*.ts", "./**/*.tsx"]
+}
