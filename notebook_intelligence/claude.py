@@ -547,16 +547,26 @@ class ClaudeCodeClient():
             "args": event_args,
         }
         set_current_request(None)
-        self._client_queue.put(event)
+
+        # _mark_as_disconnected() nulls both fields, so snapshot them once
+        # rather than dereferencing through `self` repeatedly and racing with
+        # a concurrent disconnect.
+        queue = self._client_queue
+        signal = self._client_thread_signal
+        if queue is None or signal is None:
+            return {
+                "data": None,
+                "success": False,
+                "error": "Claude agent is not connected",
+            }
+
+        queue.put(event)
 
         resp = {"data": None}
         def _on_client_response(data: dict):
             if data['id'] == event_id:
                 resp["data"] = data['data']
 
-        # Capture the signal locally so the finally-disconnect is safe even if
-        # _mark_as_disconnected() nulls self._client_thread_signal mid-loop.
-        signal = self._client_thread_signal
         signal.connect(_on_client_response)
 
         start_time = time.time()
