@@ -1,8 +1,8 @@
 # Administrator Guide
 
-This guide covers deploying Notebook Intelligence at scale — JupyterHub, KubeSpawner, Kubeflow, multi-tenant clusters, regulated environments. For end-user documentation see the [README](../README.md).
+This guide covers deploying Notebook Intelligence at scale — JupyterHub, KubeSpawner, Kubeflow, multi-tenant clusters, regulated environments. For end-user documentation, see the [README](../README.md).
 
-> NBI is a per-user tool. Every section below assumes the extension is running inside a per-user Jupyter Server, not a shared one. Server-side state is per-user; there is no central NBI service.
+> NBI is a per-user tool. Every section below assumes the extension runs inside a per-user Jupyter Server, not a shared one. Server-side state is per-user; there is no central NBI service.
 
 ---
 
@@ -35,10 +35,10 @@ This guide covers deploying Notebook Intelligence at scale — JupyterHub, KubeS
 NBI reads configuration from three layers, listed in order of precedence (later wins):
 
 1. **Environment-wide base config** — `<env-prefix>/share/jupyter/nbi/config.json` and `<env-prefix>/share/jupyter/nbi/mcp.json`. Bake into your image. Read once at startup.
-2. **User config** — `~/.jupyter/nbi/config.json` and `~/.jupyter/nbi/mcp.json`. Mutated by the user via the Settings dialog. Per-user PVC.
+2. **User config** — `~/.jupyter/nbi/config.json` and `~/.jupyter/nbi/mcp.json`. The user mutates these via the Settings dialog. Lives on the per-user PVC.
 3. **Environment variables** — `NBI_*` and certain provider variables (see the [reference table](#environment-variables-and-traitlets)). Override at pod startup time.
 
-Traitlets configured via JupyterLab CLI flags or `jupyter_server_config.py` (e.g., `c.NotebookIntelligence.disabled_providers = [...]`) are evaluated at server startup. Where a traitlet has a corresponding env var (e.g., `NBI_ENABLED_PROVIDERS` for `disabled_providers`/`allow_enabling_providers_with_env`), the env var is read at request time.
+Traitlets configured via JupyterLab CLI flags or `jupyter_server_config.py` (e.g., `c.NotebookIntelligence.disabled_providers = [...]`) are evaluated at server startup. Where a traitlet has a corresponding env var (e.g., `NBI_ENABLED_PROVIDERS` for `disabled_providers` and `allow_enabling_providers_with_env`), NBI reads the env var at request time.
 
 Manual edits to `config.json` while JupyterLab is running require a JupyterLab restart to take effect. Edits via the Settings dialog are picked up live.
 
@@ -57,7 +57,7 @@ Manual edits to `config.json` while JupyterLab is running require a JupyterLab r
 | `<env-prefix>/share/jupyter/nbi/`         | No (image)  | Org-wide base config. Bake into your container image.                                                                           |
 | Project-scope `<project>/.claude/skills/` | Per project | Lives in the user's working directory. Persists if the working directory does.                                                  |
 
-For Kubeflow / KubeSpawner: mount the user's home directory on a PVC and ensure `~/.jupyter`, `~/.claude` are inside that mount. Anything else (`/tmp`, `~/.cache`) can be ephemeral.
+For Kubeflow or KubeSpawner: mount the user's home directory on a PVC and ensure `~/.jupyter` and `~/.claude` are inside that mount. Anything else (`/tmp`, `~/.cache`) can be ephemeral.
 
 ---
 
@@ -65,7 +65,7 @@ For Kubeflow / KubeSpawner: mount the user's home directory on a PVC and ensure 
 
 If users share a home directory across nodes (NFS-backed shared HPC, classroom labs):
 
-- **Race conditions in `~/.jupyter/nbi/`.** Concurrent writes from two login nodes can corrupt `config.json`. NBI does not file-lock. Either pin each user to one node, or use a per-node config-prefix.
+- **Race conditions in `~/.jupyter/nbi/`.** Concurrent writes from two login nodes can corrupt `config.json`. NBI does not file-lock. Pin each user to one node, or use a per-node config prefix.
 - **`NBI_GH_ACCESS_TOKEN_PASSWORD` default is unsafe.** The default password (`nbi-access-token-password`) is shared across installs. On a multi-tenant cluster, anyone with read access to another user's `~/.jupyter/nbi/user-data.json` can decrypt their Copilot token. Set a per-user password (e.g., derived from the Hub user secret), or disable "remember login" entirely (see [Restricting features](#restricting-features-for-managed-deployments)).
 - **Skill collisions.** Two users sharing `~/.claude/skills/` will see each other's skills. Make sure each user has a unique home.
 
@@ -92,7 +92,10 @@ The full surface, in one table.
 | `NBI_MANAGED_SKILLS_TOKEN`          | str  | unset                       | env (overrides traitlet)           | Same as above; env takes precedence.                                                                                         |
 | `NBI_GH_ACCESS_TOKEN_PASSWORD`      | str  | `nbi-access-token-password` | env                                | Password used to encrypt the stored Copilot token in `user-data.json`. **Change in multi-tenant deployments.**               |
 | `NBI_RULES_AUTO_RELOAD`             | bool | `true`                      | env                                | When `false`, ruleset edits require a JupyterLab restart to take effect.                                                     |
-| `GITHUB_TOKEN` / `GH_TOKEN`         | str  | unset                       | env                                | Used (in that order) by user-initiated skill imports for GitHub auth. Falls back to `gh` CLI auth.                           |
+| `NBI_CLAUDE_CLI_PATH`               | str  | unset                       | env                                | Absolute path to the Claude Code CLI binary. When unset, NBI looks up `claude` on `PATH`.                                    |
+| `NBI_GHE_SUBDOMAIN`                 | str  | `""`                        | env                                | GitHub Enterprise subdomain for GitHub Copilot users on a GHE tenant. Empty selects github.com.                              |
+| `NBI_LOG_LEVEL`                     | str  | `INFO`                      | env                                | Python logging level for the `notebook_intelligence` logger.                                                                 |
+| `GITHUB_TOKEN`, `GH_TOKEN`          | str  | unset                       | env                                | Used (in that order) by user-initiated skill imports for GitHub auth. Falls back to `gh` CLI auth.                           |
 
 Configure traitlets in `jupyter_server_config.py`:
 
@@ -118,9 +121,9 @@ NBI runs entirely inside the user's Jupyter Server process. There is no privileg
 
 For regulated tenants:
 
-1. Disable the most powerful tools — minimally `nbi-command-execute` and `nbi-file-edit`. See [Restricting features](#restricting-features-for-managed-deployments).
+1. Disable the most powerful tools — at minimum `nbi-command-execute` and `nbi-file-edit`. See [Restricting features](#restricting-features-for-managed-deployments).
 2. Restrict the providers the user can pick. Force a single self-hosted endpoint with `disabled_providers` plus the org's base config.
-3. Disable user-initiated skill imports (currently network-layer only — see [`docs/skills.md`](skills.md#disabling-user-initiated-github-imports)).
+3. Disable user-initiated skill imports (currently network-layer only — see [`skills.md`](skills.md#disabling-user-initiated-github-imports)).
 4. Run with a non-root container user, with no host-network access and no host-path mounts beyond the user's PVC.
 
 ---
@@ -131,11 +134,11 @@ By default, custom-provider API keys (Anthropic, OpenAI-compatible, LiteLLM-comp
 
 Recommended approach for clusters:
 
-- **Inject the org's keys via env vars at pod startup.** Set the provider's expected env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) on the pod. Configure the provider in `<env-prefix>/share/jupyter/nbi/config.json` without a key — NBI will pick up the provider's standard env var.
+- **Inject the org's keys via env vars at pod startup.** Set the provider's expected env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) on the pod. Configure the provider in `<env-prefix>/share/jupyter/nbi/config.json` without a key — NBI picks up the provider's standard env var.
 - **Source secrets from your secret manager.** Vault, External Secrets Operator, AWS Secrets Manager, GCP Secret Manager, or KubeSpawner's `c.KubeSpawner.environment` callback can all populate the pod env from a secret backend at spawn time.
-- **Do not commit `config.json`.** Even the env-prefix base config should not contain keys; pull keys from env at spawn.
+- **Don't commit `config.json`.** Even the env-prefix base config should not contain keys; pull keys from env at spawn.
 
-`${ENV_VAR}`-style interpolation directly inside `config.json` is not currently supported. Tracked as a feature request.
+`${ENV_VAR}`-style interpolation inside `config.json` is not currently supported. Tracked as a feature request.
 
 ---
 
@@ -143,7 +146,7 @@ Recommended approach for clusters:
 
 NBI's `openai-compatible` and `litellm-compatible` providers can target any endpoint that speaks the respective wire format.
 
-**Azure OpenAI** (via the OpenAI-compatible provider):
+**Azure OpenAI** (via the `openai-compatible` provider):
 
 ```json
 {
@@ -158,7 +161,7 @@ NBI's `openai-compatible` and `litellm-compatible` providers can target any endp
 }
 ```
 
-**vLLM / TGI / any local OpenAI-compatible server**:
+**vLLM, TGI, or any local OpenAI-compatible server**:
 
 ```json
 {
@@ -191,7 +194,7 @@ Bake the base config into your image and let users select their model from the d
 
 ## Custom CA certs and corporate proxies
 
-NBI's HTTP requests use Python's `requests` and `httpx`, plus `litellm`/`openai`/`anthropic` SDKs. All honor standard Python TLS and proxy environment variables:
+NBI's HTTP requests use Python's `requests` and `httpx`, plus the `litellm`, `openai`, and `anthropic` SDKs. All honor standard Python TLS and proxy environment variables:
 
 ```bash
 REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
@@ -201,9 +204,9 @@ HTTP_PROXY=http://corp-proxy.example.com:3128
 NO_PROXY=localhost,127.0.0.1,.cluster.local
 ```
 
-Set these on the pod (`c.KubeSpawner.environment` for Hub; environment in your Dockerfile or compose file otherwise). The Claude Code CLI is a separate Node.js process and reads the same `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS` conventions.
+Set these on the pod (`c.KubeSpawner.environment` for Hub; environment in your Dockerfile or compose file otherwise). The Claude Code CLI is a separate Node.js process and reads the same `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS` conventions.
 
-The frontend talks only to its own Jupyter Server backend, which proxies the LLM calls. The browser does not need a corporate-CA trust.
+The frontend talks only to its own Jupyter Server backend, which proxies the LLM calls. The browser does not need a corporate CA trust.
 
 ---
 
@@ -213,9 +216,9 @@ Steps for deploying to a network with no general internet egress:
 
 1. **Pre-build the Docker image** with NBI installed, the Claude Code CLI binary baked in, and any MCP server packages pre-installed (do **not** rely on `npx -y` at runtime).
 2. **Manifest hosting.** Set `NBI_SKILLS_MANIFEST` to either a `file://` path (a manifest baked into the image) or an internal `https://` URL on a network the pod can reach.
-3. **Skill bundles.** Either bake the skills into the image under `~/.claude/skills/` (managed-status will be reset since they aren't from the manifest), or host the GitHub-style tarballs at an internal mirror and write the manifest URLs to point at it.
-4. **Disable user-initiated GitHub imports** at the network layer — block `github.com`, `codeload.github.com`, `raw.githubusercontent.com`. Users can still install skills from the local filesystem by dropping bundles into `~/.claude/skills/`.
-5. **MCP `npx -y` is incompatible** with air-gap. Pre-install the server binary and reference it directly:
+3. **Skill bundles.** Either bake the skills into the image under `~/.claude/skills/` (managed status will reset since they aren't from the manifest), or host the GitHub-style tarballs at an internal mirror and write the manifest URLs to point at it.
+4. **Disable user-initiated GitHub imports** at the network layer — block `github.com`, `codeload.github.com`, and `raw.githubusercontent.com`. Users can still install skills from the local filesystem by dropping bundles into `~/.claude/skills/`.
+5. **MCP `npx -y` is incompatible with air-gap.** Pre-install the server binary and reference it directly:
 
    ```json
    {
@@ -228,7 +231,7 @@ Steps for deploying to a network with no general internet egress:
    }
    ```
 
-6. **LLM endpoint.** Air-gap means a self-hosted endpoint (vLLM, TGI, LiteLLM proxy in front of Bedrock-via-VPC-endpoint, etc.). See [Self-hosted LLM endpoints](#self-hosted-llm-endpoints).
+6. **LLM endpoint.** Air-gap requires a self-hosted endpoint (vLLM, TGI, or a LiteLLM proxy in front of a VPC-endpoint Bedrock, etc.). See [Self-hosted LLM endpoints](#self-hosted-llm-endpoints).
 
 ---
 
@@ -265,7 +268,7 @@ Pair with `<env-prefix>/share/jupyter/nbi/config.json` shipping an Ollama provid
 
 Block egress to all external LLM hosts at the network layer as defense in depth (see [`PRIVACY.md`](../PRIVACY.md#egress-allowlist) for the full list).
 
-This is a **starting point**, not a HIPAA-compliance certification. Run a security review of the full stack (Ollama, your Jupyter image, KubeSpawner, network policy) before treating any data as protected.
+This is a **starting point**, not a HIPAA compliance certification. Run a security review of the full stack (Ollama, your Jupyter image, KubeSpawner, network policy) before treating any data as protected.
 
 ---
 
@@ -309,7 +312,7 @@ c.NotebookIntelligence.allow_enabling_tools_with_env = True
 NBI_ENABLED_BUILTIN_TOOLS=nbi-notebook-execute,nbi-python-file-edit
 ```
 
-NBI does not currently support an explicit allowlist mode (`allowed_providers`, `allowed_tools`). A new built-in provider added in a minor release would auto-enable for users on `disabled_providers=[]`. If this matters for your compliance posture, pin to specific NBI versions and review changelog entries before upgrading. Tracked as a feature request.
+NBI does not currently support an explicit allowlist mode (`allowed_providers`, `allowed_tools`). A new built-in provider added in a minor release would auto-enable for users with `disabled_providers=[]`. If this matters for your compliance posture, pin to specific NBI versions and review changelog entries before upgrading. Tracked as a feature request.
 
 ---
 
@@ -335,7 +338,7 @@ c.KubeSpawner.profile_list = [
 ]
 ```
 
-Skill name collisions between manifests and user-authored skills are handled per-entry by the reconciler (managed entries skip user-authored skills with the same name). Across teams, if a user moves between profiles that ship different `data-eda` skills, they will see whichever team's skill the active profile reconciled most recently. Keep team skill names distinct (`team-ds-data-eda`, `team-ml-data-eda`) to avoid surprises.
+The reconciler handles skill name collisions between manifests and user-authored skills per entry (managed entries skip user-authored skills with the same name). Across teams, if a user moves between profiles that ship different `data-eda` skills, they see whichever team's skill the active profile reconciled most recently. Keep team skill names distinct (`team-ds-data-eda`, `team-ml-data-eda`) to avoid surprises.
 
 ---
 
@@ -344,9 +347,9 @@ Skill name collisions between manifests and user-authored skills are handled per
 `NBI_MANAGED_SKILLS_TOKEN` (or the `managed_skills_token` traitlet) authenticates managed-skills GitHub operations (manifest fetch when hosted on github.com, commits-API probing, tarball downloads).
 
 - **Minimum scope:** `contents:read` on the org/repos that host the manifest and skill bundles.
-- **Rotation:** tokens are read from env on every reconcile cycle. Restart the pod (or reissue the env, if your KubeSpawner re-reads on resume) to rotate.
+- **Rotation:** NBI reads the token from env on every reconcile cycle. Restart the pod (or reissue the env, if your KubeSpawner re-reads on resume) to rotate.
 - **401/403 behavior:** a single auth failure on a managed operation is logged and **not retried with the fallback token chain** when `NBI_MANAGED_SKILLS_TOKEN` is set. This keeps misconfiguration visible. The reconciler continues with remaining entries.
-- **User-initiated imports do not see this token.** They use `GITHUB_TOKEN` → `GH_TOKEN` → `gh` CLI auth. Keep these separate so a misconfigured org token can't unintentionally be applied to user imports.
+- **User-initiated imports do not see this token.** They use `GITHUB_TOKEN` → `GH_TOKEN` → `gh` CLI auth. Keep these separate so a misconfigured org token can't unintentionally apply to user imports.
 
 ---
 
@@ -354,7 +357,7 @@ Skill name collisions between manifests and user-authored skills are handled per
 
 When `enable_chat_feedback = True`, NBI emits a `telemetry` event in-process whenever a user gives thumbs-up/down feedback in chat. The event payload includes the rating, the prompt, the response, and the model.
 
-The event is **emitted in-process only**. Nothing leaves the pod unless you write a custom handler that listens for it. The shape of the payload is not currently considered stable API; if you build on it, pin to a specific NBI version.
+The event is **emitted in-process only**. Nothing leaves the process unless you write a custom handler that listens for it. The payload shape is not currently considered stable API; if you build on it, pin to a specific NBI version.
 
 To pipe feedback into your internal observability stack (Kafka, OTel collector), write an extension that registers a listener for the `telemetry` event and forwards it.
 
@@ -362,7 +365,7 @@ To pipe feedback into your internal observability stack (Kafka, OTel collector),
 
 ## HTTP API surface
 
-All routes live under `/notebook-intelligence/`. All require Jupyter authentication (XSRF token + Jupyter login token) — the labextension obtains these automatically. There is no admin-only route; access control is via Jupyter Server itself.
+All routes live under `/notebook-intelligence/`. All require Jupyter authentication (XSRF token plus Jupyter login token) — the labextension obtains these automatically. There is no admin-only route; access control runs through Jupyter Server itself.
 
 | Route                                                       | Method          | Purpose                                                                           |
 | ----------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
@@ -377,7 +380,7 @@ All routes live under `/notebook-intelligence/`. All require Jupyter authenticat
 | `/notebook-intelligence/gh-logout`                          | GET             | Sign out of GitHub Copilot.                                                       |
 | `/notebook-intelligence/copilot`                            | WS              | Streaming chat / inline-completion WebSocket.                                     |
 | `/notebook-intelligence/rules`                              | GET             | List discovered rules.                                                            |
-| `/notebook-intelligence/rules/<id>/toggle`                  | POST            | Toggle a rule's `active` field.                                                   |
+| `/notebook-intelligence/rules/<id>/toggle`                  | PUT             | Toggle a rule's `active` field.                                                   |
 | `/notebook-intelligence/rules/reload`                       | POST            | Manually reload all rules.                                                        |
 | `/notebook-intelligence/skills`                             | GET/POST        | List or create skills.                                                            |
 | `/notebook-intelligence/skills/context`                     | GET             | Skill context info for the active workspace.                                      |
@@ -398,19 +401,19 @@ The extension respects `c.ServerApp.base_url`. Behind JupyterHub at `/user/<name
 
 ## Failure modes
 
-| Condition                                      | User-visible behavior                                                     | Where to look in logs                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------- |
-| LLM provider unreachable                       | Chat shows "Thinking…" then a connection error toast.                     | JupyterLab terminal (server stderr).                      |
-| LLM 401 (bad / expired key)                    | Chat shows the provider's error message.                                  | JupyterLab terminal; provider's own SDK logs.             |
-| Claude CLI missing                             | Chat hangs on "Thinking…" in Claude mode; never returns.                  | JupyterLab terminal — `claude-agent-sdk` connect failure. |
-| Claude CLI fails to start (path mismatch)      | Same as above.                                                            | Same — set Claude CLI path in NBI Settings.               |
-| MCP stdio server crashes                       | The server's tools disappear from `@mcp` chat participant.                | JupyterLab terminal — server's stderr.                    |
-| MCP `npx -y` package fetch fails (offline)     | Server fails to start; tools missing.                                     | JupyterLab terminal.                                      |
-| Managed-skills manifest 5xx / DNS failure      | Reconciler logs the error; existing managed skills remain installed.      | JupyterLab terminal — `skill_reconciler` warning/error.   |
-| Managed-skills tarball fetch fails (per entry) | That entry stays at the previous installed version; others succeed.       | JupyterLab terminal — per-entry error.                    |
-| `NBI_MANAGED_SKILLS_TOKEN` 401/403             | Reconcile fails; loud log; does not fall back to user GITHUB_TOKEN chain. | JupyterLab terminal.                                      |
-| Ruleset frontmatter is invalid YAML            | Rule is skipped; others load.                                             | JupyterLab terminal — `rule_manager` warning.             |
-| Encrypted token decrypt fails                  | User is prompted to re-login on the chat sidebar.                         | JupyterLab terminal.                                      |
+| Condition                                      | User-visible behavior                                                      | Where to look in logs                                     |
+| ---------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------- |
+| LLM provider unreachable                       | Chat shows "Thinking…", then a connection-error toast.                     | JupyterLab terminal (server stderr).                      |
+| LLM 401 (bad or expired key)                   | Chat shows the provider's error message.                                   | JupyterLab terminal; the provider's own SDK logs.         |
+| Claude CLI missing                             | Chat hangs on "Thinking…" in Claude mode; never returns.                   | JupyterLab terminal — `claude-agent-sdk` connect failure. |
+| Claude CLI fails to start (path mismatch)      | Same as above.                                                             | Same — set `NBI_CLAUDE_CLI_PATH` and restart JupyterLab.  |
+| MCP stdio server crashes                       | The server's tools disappear from `@mcp` chat participant.                 | JupyterLab terminal — server's stderr.                    |
+| MCP `npx -y` package fetch fails (offline)     | Server fails to start; tools missing.                                      | JupyterLab terminal.                                      |
+| Managed-skills manifest 5xx / DNS failure      | Reconciler logs the error; existing managed skills remain installed.       | JupyterLab terminal — `skill_reconciler` warning/error.   |
+| Managed-skills tarball fetch fails (per entry) | That entry stays at the previously installed version; others succeed.      | JupyterLab terminal — per-entry error.                    |
+| `NBI_MANAGED_SKILLS_TOKEN` 401/403             | Reconcile fails; loud log; does not fall back to the `GITHUB_TOKEN` chain. | JupyterLab terminal.                                      |
+| Ruleset frontmatter is invalid YAML            | Rule is skipped; others load.                                              | JupyterLab terminal — `rule_manager` warning.             |
+| Encrypted token decrypt fails                  | The chat sidebar prompts the user to sign in again.                        | JupyterLab terminal.                                      |
 
 ---
 
@@ -445,7 +448,7 @@ NBI's `cryptography` dependency is used solely to encrypt the stored GitHub Copi
 
 If you operate under FIPS:
 
-- Run with the FIPS-mode OpenSSL build of Python. NBI's `cryptography` calls (Fernet under the hood, AES-128-CBC + HMAC-SHA256) work under FIPS-mode OpenSSL.
+- Run with the FIPS-mode OpenSSL build of Python. NBI's `cryptography` calls (Fernet under the hood — AES-128-CBC plus HMAC-SHA256) work under FIPS-mode OpenSSL.
 - Set a per-user `NBI_GH_ACCESS_TOKEN_PASSWORD` so the encryption key is not derivable.
 - For higher assurance, disable "remember GitHub Copilot login" entirely so no encrypted-at-rest token exists.
 
@@ -455,8 +458,8 @@ NBI itself does not assert FIPS compliance.
 
 ## Resource footprint
 
-NBI's per-user memory cost depends on which Python deps actually get imported. A clean Jupyter Server with NBI installed but no LLM activity uses roughly the baseline of `notebook_intelligence` plus its server-imported dependencies.
+NBI's per-user memory cost depends on which Python dependencies actually get imported. A clean Jupyter Server with NBI installed but no LLM activity uses roughly the baseline of `notebook_intelligence` plus its server-imported dependencies.
 
-We have not published measured numbers. If you size pods aggressively, profile your image: import everything NBI imports lazily (run a chat turn, trigger inline completion, exercise `claude-agent-sdk`) and measure RSS before sizing your pod-memory request. Inline completion under load is the most chatty path; consider provider-side rate limits if you have hundreds of simultaneous users on a paid endpoint.
+We have not published measured numbers. If you size pods aggressively, profile your image: import everything NBI imports lazily (run a chat turn, trigger inline completion, exercise `claude-agent-sdk`) and measure RSS before sizing your pod memory request. Inline completion under load is the chattiest path; consider provider-side rate limits if you have hundreds of simultaneous users on a paid endpoint.
 
-A measured-baseline doc is on the roadmap. If you have numbers from a production deployment, please share them in a GitHub issue.
+A measured-baseline document is on the roadmap. If you have numbers from a production deployment, share them in a GitHub issue.

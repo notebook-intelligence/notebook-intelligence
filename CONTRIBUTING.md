@@ -2,22 +2,22 @@
 
 Thanks for considering a contribution to Notebook Intelligence!
 
-> **Just want to use NBI?** You don't need to read this file. `pip install notebook-intelligence` and the [README](README.md) Quick Start are all you need.
+> **Just want to use NBI?** You don't need to read this file. `pip install notebook-intelligence` and the [README](README.md) quick start are all you need.
 
 ## Filing a good bug report
 
-Please include the following so we can reproduce the issue:
+Include the following so we can reproduce the issue:
 
 - **NBI version** — output of `pip show notebook-intelligence`.
 - **JupyterLab version** — output of `jupyter --version`.
-- **Python version and OS** — `python --version`; macOS / Linux / Windows + version.
-- **Browser** — Chrome / Firefox / Safari + version, if the issue is in the chat sidebar or settings UI.
-- **LLM provider** — GitHub Copilot, Claude, OpenAI-compatible, LiteLLM-compatible, or Ollama, plus the model name.
+- **Python version and OS** — `python --version`; macOS, Linux, or Windows plus version.
+- **Browser** — Chrome, Firefox, or Safari plus version, if the issue is in the chat sidebar or settings UI.
+- **LLM provider** — GitHub Copilot, OpenAI-compatible, LiteLLM-compatible, Ollama, or Claude mode, plus the model name.
 - **Claude mode** — on or off.
-- **Reproduction steps** — minimum sequence of clicks/messages.
+- **Reproduction steps** — minimum sequence of clicks and messages.
 - **Logs** — relevant excerpts from the JupyterLab terminal (server-side errors), the browser DevTools console (frontend errors), and any redacted contents of `~/.jupyter/nbi/config.json` if the issue is configuration-related.
 
-See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common problems with copy-pasteable fixes — please check there first.
+See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common problems with copy-pasteable fixes — check there first.
 
 ## Reporting a security issue
 
@@ -42,13 +42,14 @@ NBI has two halves:
   - `src/chat-sidebar.tsx` — chat sidebar React tree.
   - `src/components/settings-panel.tsx` — settings dialog.
   - `src/components/skills-panel.tsx` — Claude Skills management UI.
-  - `src/api.ts` — HTTP client for the server extension.
+  - `src/api.ts` — high-level client for the server extension (chat WebSocket, capabilities, config).
+  - `src/handler.ts` — thin wrapper over Jupyter's `ServerConnection.makeRequest`.
 
-The two halves communicate over the routes registered in `extension.py` (REST + WebSocket). All routes live under `/notebook-intelligence/`. See [`docs/admin-guide.md`](docs/admin-guide.md#http-api-surface) for the full list.
+The two halves communicate over the routes registered in `extension.py` (REST and WebSocket). All routes live under `/notebook-intelligence/`. See [`docs/admin-guide.md`](docs/admin-guide.md#http-api-surface) for the full list.
 
 ## Development install
 
-You will need Node.js 18+ to build the frontend. The `jlpm` command is JupyterLab's pinned version of [yarn](https://yarnpkg.com/) that ships with JupyterLab — install JupyterLab first to get it.
+You'll need Node.js 18 or newer to build the frontend. The `jlpm` command is JupyterLab's pinned version of [yarn](https://yarnpkg.com/) — install JupyterLab first to get it.
 
 ```bash
 # Clone the repo and change into the directory.
@@ -103,12 +104,12 @@ There is no Python test suite at the moment. Manual end-to-end verification is d
 
 ```bash
 jlpm lint:check   # check, no fixes
-jlpm lint         # check + auto-fix prettier/eslint/stylelint
+jlpm lint         # check and auto-fix prettier, eslint, and stylelint
 ```
 
-CI runs `lint:check`. Identifiers prefixed with `_` are treated as intentionally unused and are excluded from the unused-vars rule.
+CI runs `lint:check`. Identifiers prefixed with `_` are treated as intentionally unused and excluded from the unused-vars rule.
 
-If `jlpm install` produces lockfile changes you didn't expect, your local Yarn version probably differs from the one bundled with JupyterLab. `jlpm` ships with JupyterLab (currently Yarn 3.5.0) — use it directly instead of a system-wide `yarn`.
+If `jlpm install` produces unexpected lockfile changes, your local Yarn version probably differs from the one bundled with JupyterLab. `jlpm` ships with JupyterLab — use it directly instead of a system-wide `yarn`.
 
 ## Packaging
 

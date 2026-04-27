@@ -4,7 +4,7 @@ NBI's ruleset system lets you inject custom guidelines into AI prompts so the as
 
 ## How it works
 
-Rules are stored in `~/.jupyter/nbi/rules/`. NBI loads them at startup, watches the directory for changes, and selects which rules apply to each chat turn based on the file frontmatter and current context (file type, notebook kernel, chat mode).
+Rules live in `~/.jupyter/nbi/rules/`. NBI loads them at startup, watches the directory for changes, and selects which rules apply to each chat turn based on the file frontmatter and the current context (file type, notebook kernel, chat mode).
 
 Selected rules are concatenated in priority order and prepended to the system prompt sent to the LLM.
 
@@ -28,7 +28,7 @@ priority: 10
 
 ### Mode-specific rules — apply only to a chat mode
 
-NBI has three chat modes: `ask` (Q&A), `agent` (autonomous tool use), `inline-chat` (cell-level code generation/edit).
+NBI has three chat modes: `ask` (Q&A), `agent` (autonomous tool use), and `inline-chat` (cell-level code generation and edit).
 
 Create `~/.jupyter/nbi/rules/modes/agent/01-testing.md`:
 
@@ -94,7 +94,7 @@ To disable the system entirely, edit `~/.jupyter/nbi/config.json`:
 
 ## Auto-reload
 
-By default, NBI watches `~/.jupyter/nbi/rules/` and reloads rules on change without requiring a JupyterLab restart. This is controlled by `NBI_RULES_AUTO_RELOAD`:
+By default, NBI watches `~/.jupyter/nbi/rules/` and reloads rules on change without requiring a JupyterLab restart. The `NBI_RULES_AUTO_RELOAD` environment variable controls this:
 
 ```bash
 export NBI_RULES_AUTO_RELOAD=false   # disable; restart JupyterLab to pick up rule changes

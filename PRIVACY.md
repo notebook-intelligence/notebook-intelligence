@@ -4,41 +4,41 @@ This page documents what NBI sends to external services, when, and how administr
 
 ## What NBI sends, by provider
 
-The table below describes what each LLM provider receives **when you actively use a feature** (chat message, inline completion, agent action). Idle JupyterLab does not contact the provider.
+The table below describes what each LLM provider receives **when you actively use a feature** (chat message, inline completion, agent action). An idle JupyterLab does not contact the provider.
 
-| Provider                   | What is sent                                                                                            | When                                                 | Destination                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| **GitHub Copilot**         | Prompt, surrounding cell source, attached files (when you click "attach")                               | Per request (chat) and as you type (inline-complete) | `api.githubcopilot.com`, `api.github.com` (auth)                                      |
-| **Anthropic / Claude API** | Prompt, surrounding cell source, attached files, tool-call results from agent mode                      | Per request and per agent step                       | `api.anthropic.com` (or your configured Base URL)                                     |
-| **Claude Code (CLI)**      | Prompt, working-directory file reads requested by Claude, shell-command output for tools Claude invokes | Per agent turn                                       | Whatever the Claude Code CLI is configured to talk to (typically `api.anthropic.com`) |
-| **OpenAI-compatible**      | Prompt, surrounding cell source, attached files                                                         | Per request and inline-complete                      | The Base URL you configured (`api.openai.com` by default)                             |
-| **LiteLLM-compatible**     | Same as OpenAI-compatible; LiteLLM proxy forwards to the upstream model you configured                  | Per request                                          | The Base URL of your LiteLLM proxy                                                    |
-| **Ollama (local)**         | Prompt, surrounding cell source, attached files                                                         | Per request                                          | Localhost (or the host you configured); **no external network**                       |
+| Provider                          | What is sent                                                                                            | When                                                 | Destination                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **GitHub Copilot**                | Prompt, surrounding cell source, attached files (when you click _attach_)                               | Per request (chat) and as you type (inline complete) | `api.githubcopilot.com`, `api.github.com` (auth)                                      |
+| **OpenAI-compatible**             | Prompt, surrounding cell source, attached files                                                         | Per request and per inline-completion request        | The Base URL you configured (`api.openai.com` by default)                             |
+| **LiteLLM-compatible**            | Same as OpenAI-compatible; the LiteLLM proxy forwards to the upstream model you configured              | Per request                                          | The Base URL of your LiteLLM proxy                                                    |
+| **Ollama (local)**                | Prompt, surrounding cell source, attached files                                                         | Per request                                          | Localhost (or the host you configured); **no external network**                       |
+| **Anthropic API** (Claude mode)   | Prompt, surrounding cell source, attached files                                                         | Per inline-chat or auto-complete request             | `api.anthropic.com` (or your configured Base URL)                                     |
+| **Claude Code CLI** (Claude mode) | Prompt, working-directory file reads requested by Claude, shell-command output for tools Claude invokes | Per agent turn in the chat panel                     | Whatever the Claude Code CLI is configured to talk to (typically `api.anthropic.com`) |
 
 ### Cell outputs are included when the cell is attached
 
-NBI does **not** automatically include rendered cell outputs in every prompt. Outputs are sent only when:
+NBI does **not** automatically include rendered cell outputs in every prompt. Outputs go out only when:
 
-- You attach a notebook or cell explicitly via the "attach files" UI.
-- The active context references a notebook and the agent (or inline chat) reads its source — the source view in `.ipynb` JSON includes any saved outputs in the file.
+- You attach a notebook or cell explicitly via the _attach files_ UI.
+- The active context references a notebook and the agent (or inline chat) reads its source — the `.ipynb` JSON includes any saved outputs.
 
-If your cells contain sensitive outputs (PHI, PII, secrets), clear them before invoking AI features, or use a local-only provider (Ollama). Inline completion is keystroke-driven and only sends the cell source; it does not transmit unrelated cells or outputs.
+If your cells contain sensitive outputs (PHI, PII, secrets), clear them before invoking AI features, or use a local-only provider (Ollama). Inline completion is keystroke-driven and sends only the cell source; it does not transmit unrelated cells or outputs.
 
 ## Egress allowlist
 
 Hosts NBI may contact, depending on which features are enabled:
 
-| Host                                            | Purpose                                                                                                    |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `api.githubcopilot.com`                         | GitHub Copilot chat and inline completion                                                                  |
-| `api.github.com`                                | GitHub Copilot device-flow login; managed-skills manifest fetches when hosted on github.com; skill imports |
-| `github.com` / `codeload.github.com`            | Skill tarball downloads (`Import from GitHub` and managed-skills reconciler)                               |
-| `raw.githubusercontent.com`                     | Manifest fetches when `NBI_SKILLS_MANIFEST` points at a `raw.githubusercontent.com` URL                    |
-| `api.anthropic.com`                             | Claude API and Claude Code (default)                                                                       |
-| `api.openai.com`                                | OpenAI-compatible provider (default Base URL)                                                              |
-| Your configured Base URL                        | OpenAI-compatible / LiteLLM-compatible / Claude when redirected to a self-hosted endpoint                  |
-| `localhost:11434` (or your Ollama host)         | Ollama local model serving                                                                                 |
-| `registry.npmjs.org` and configured npm mirrors | Only if MCP servers are configured to launch via `npx -y` — `npx` fetches the package on first run         |
+| Host                                            | Purpose                                                                                                          |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `api.githubcopilot.com`                         | GitHub Copilot chat and inline completion                                                                        |
+| `api.github.com`                                | GitHub Copilot device-flow login; managed-skills manifest fetches when hosted on github.com; skill imports       |
+| `github.com`, `codeload.github.com`             | Skill tarball downloads (Import from GitHub and the managed-skills reconciler)                                   |
+| `raw.githubusercontent.com`                     | Manifest fetches when `NBI_SKILLS_MANIFEST` points at a `raw.githubusercontent.com` URL                          |
+| `api.anthropic.com`                             | Anthropic API for Claude-mode inline chat and auto-complete; also the default destination of the Claude Code CLI |
+| `api.openai.com`                                | OpenAI-compatible provider (default Base URL)                                                                    |
+| Your configured Base URL                        | OpenAI-compatible, LiteLLM-compatible, or Claude when pointed at a self-hosted endpoint                          |
+| `localhost:11434` (or your Ollama host)         | Ollama local model serving                                                                                       |
+| `registry.npmjs.org` and configured npm mirrors | Only if MCP servers are configured to launch via `npx -y` — `npx` fetches the package on first run               |
 
 For the configurable destinations above (Base URLs, Ollama host, MCP `npx` packages), the destination is whatever you or your admin set. There is no other implicit network activity.
 
@@ -64,11 +64,11 @@ The encrypted GitHub token uses a default password (`nbi-access-token-password`)
 
 NBI does not collect telemetry, send analytics, or report usage.
 
-The `enable_chat_feedback` traitlet (off by default) emits an internal `telemetry` event when a user gives thumbs-up/down feedback in chat. The event is **emitted in-process only** — nothing leaves the pod unless you write a custom handler that listens for it. See [`docs/admin-guide.md`](docs/admin-guide.md#chat-feedback-event-hook).
+The `enable_chat_feedback` traitlet (off by default) emits an internal `telemetry` event when a user gives thumbs-up/down feedback in chat. The event is **emitted in-process only** — nothing leaves the process unless you write a custom handler that listens for it. See [`docs/admin-guide.md`](docs/admin-guide.md#chat-feedback-event-hook).
 
 ## Reproducibility caveat
 
-LLM outputs are non-deterministic. Pinning the model name, temperature, and seed does **not** guarantee identical output across runs — provider-side updates, load-balancing, and silent model deprecation can all shift behavior. Treat AI-generated code as a draft to be reviewed, tested, and committed like any other contribution. For research artifacts that need reproducibility, save the exact prompt, model name, and date alongside the generated output.
+LLM outputs are non-deterministic. Pinning the model name, temperature, and seed does **not** guarantee identical output across runs — provider-side updates, load balancing, and silent model deprecation can all shift behavior. Treat AI-generated code as a draft to be reviewed, tested, and committed like any other contribution. For research artifacts that need reproducibility, save the exact prompt, model name, and date alongside the generated output.
 
 ## Privacy-sensitive deployment recipes
 

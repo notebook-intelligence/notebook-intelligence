@@ -16,7 +16,8 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 - Chat feedback mechanism for AI responses, configurable via the `enable_chat_feedback` traitlet, with a `telemetry` event hook.
 - Attach files as context in chat.
-- Newline in chat input on Shift+Enter.
+- `Shift+Enter` inserts a newline in the chat input.
+- Disable LLM providers via the `disabled_providers` traitlet, with optional per-pod re-enable via `NBI_ENABLED_PROVIDERS`.
 
 ### Changed
 
@@ -32,8 +33,7 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 ### Added
 
-- Configurable Claude CLI path via Claude settings (`claude_cli_path`).
-- Disable LLM providers via `disabled_providers` and re-enable via `NBI_ENABLED_PROVIDERS`.
+- Configurable Claude Code CLI path via the `NBI_CLAUDE_CLI_PATH` environment variable.
 
 ### Changed
 
@@ -57,12 +57,12 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 - Auto-complete debounce delay configuration.
 - Additional inline-completion options in Claude mode.
+- Conversation continuation in Claude mode.
 
 ### Changed
 
 - Settings dialog hides Claude-specific options when Claude mode is off.
 - NBI sidebar moved to the left side of the JupyterLab UI.
-- "Remember GitHub Copilot login" support, encrypted at rest with `NBI_GH_ACCESS_TOKEN_PASSWORD`.
 
 ### Fixed
 

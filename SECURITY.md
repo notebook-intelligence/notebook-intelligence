@@ -2,15 +2,15 @@
 
 ## Reporting a vulnerability
 
-Please **do not** open a public GitHub issue for security vulnerabilities.
+**Do not** open a public GitHub issue for security vulnerabilities.
 
 Email the maintainer directly at **mbektasgh@outlook.com** with:
 
-- A description of the vulnerability and the impact you have observed.
+- A description of the vulnerability and the impact you observed.
 - Steps to reproduce, including affected versions of NBI, JupyterLab, and Python.
 - Any proof-of-concept code or logs (redact secrets).
 
-You should expect an acknowledgement within five business days. We will work with you on a coordinated disclosure timeline once we confirm the issue.
+Expect an acknowledgement within five business days. Once we confirm the issue, we'll work with you on a coordinated disclosure timeline.
 
 ## Supported versions
 
