@@ -169,7 +169,8 @@
             "@typescript-eslint/no-unused-vars": [
                 "warn",
                 {
-                    "args": "none"
+                    "args": "none",
+                    "varsIgnorePattern": "^_"
                 }
             ],
             "@typescript-eslint/no-explicit-any": "off",
