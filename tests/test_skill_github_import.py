@@ -120,6 +120,22 @@ class TestExtractSkill:
         with pytest.raises(ValueError, match="Unsafe path"):
             _extract_skill(buf.getvalue(), "", tmp_path)
 
+    def test_rejects_absolute_path(self, tmp_path):
+        """An entry with an absolute name (e.g. /etc/passwd) must be rejected
+        even though it contains no '..' segments."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            # Wrapper directory so _extract_skill sees a top_dir.
+            wrapper = tarfile.TarInfo(name="repo-abc/")
+            wrapper.type = tarfile.DIRTYPE
+            tar.addfile(wrapper)
+            data = b"evil"
+            info = tarfile.TarInfo(name="/tmp/nbi-pwn")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        with pytest.raises(ValueError, match="Unsafe path"):
+            _extract_skill(buf.getvalue(), "", tmp_path)
+
     def test_skips_symlinks(self, tmp_path):
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
