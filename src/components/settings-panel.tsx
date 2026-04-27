@@ -93,9 +93,13 @@ function SettingsPanelTabsComponent(props: any) {
   );
 
   useEffect(() => {
-    NBIAPI.configChanged.connect(() => {
+    const handler = () => {
       setIsInClaudeCodeMode(NBIAPI.config.isInClaudeCodeMode);
-    });
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
   }, []);
 
   return (
@@ -737,11 +741,15 @@ function SettingsPanelComponentMCPServers(props: any) {
   };
 
   useEffect(() => {
-    NBIAPI.configChanged.connect(() => {
+    const handler = () => {
       mcpServersRef.current = nbiConfig.toolConfig.mcpServers;
       mcpServerSettingsRef.current = nbiConfig.mcpServerSettings;
       setRenderCount(renderCount => renderCount + 1);
-    });
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
   }, []);
 
   return (
@@ -905,11 +913,15 @@ function SettingsPanelComponentClaude(props: any) {
   const [loadingModels, setLoadingModels] = useState(false);
 
   useEffect(() => {
-    NBIAPI.configChanged.connect(() => {
+    const handler = () => {
       claudeSettingsRef.current = nbiConfig.claudeSettings;
       setClaudeModels(nbiConfig.claudeModels);
       setRenderCount(renderCount => renderCount + 1);
-    });
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
   }, []);
 
   const refreshClaudeModels = async () => {
