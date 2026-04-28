@@ -1423,7 +1423,7 @@ function SidebarComponent(props: any) {
   }, [mcpServerEnabledState]);
 
   useEffect(() => {
-    NBIAPI.configChanged.connect(() => {
+    const handler = () => {
       toolConfigRef.current = NBIAPI.config.toolConfig;
       mcpServerSettingsRef.current = NBIAPI.config.mcpServerSettings;
       const newMcpServerEnabledState = mcpServerSettingsToEnabledState(
@@ -1432,7 +1432,11 @@ function SidebarComponent(props: any) {
       );
       setMCPServerEnabledState(newMcpServerEnabledState);
       setRenderCount(renderCount => renderCount + 1);
-    });
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
   }, []);
 
   useEffect(() => {
@@ -2615,10 +2619,14 @@ function SidebarComponent(props: any) {
   const [skillsReloadedVisible, setSkillsReloadedVisible] = useState(false);
 
   useEffect(() => {
-    NBIAPI.configChanged.connect(() => {
+    const handler = () => {
       setGHLoginRequired(NBIAPI.getGHLoginRequired());
       setChatEnabled(NBIAPI.getChatEnabled());
-    });
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
   }, []);
 
   useEffect(() => {
