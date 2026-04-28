@@ -682,6 +682,28 @@ export class NBIAPI {
     );
   }
 
+  /**
+   * Subscribe to inbound websocket messages for a single request, forwarding
+   * them to `responseEmitter`. The subscription auto-disconnects when the
+   * server emits StreamEnd, preventing per-request listener accumulation.
+   */
+  private static _subscribeUntilStreamEnd(
+    messageId: string,
+    responseEmitter: IChatCompletionResponseEmitter
+  ): void {
+    const handler = (_: unknown, msg: any) => {
+      const parsed = JSON.parse(msg);
+      if (parsed.id !== messageId) {
+        return;
+      }
+      responseEmitter.emit(parsed);
+      if (parsed.type === BackendMessageType.StreamEnd) {
+        this._messageReceived.disconnect(handler);
+      }
+    };
+    this._messageReceived.connect(handler);
+  }
+
   static async chatRequest(
     messageId: string,
     chatId: string,
@@ -694,12 +716,7 @@ export class NBIAPI {
     toolSelections: IToolSelections,
     responseEmitter: IChatCompletionResponseEmitter
   ) {
-    this._messageReceived.connect((_, msg) => {
-      msg = JSON.parse(msg);
-      if (msg.id === messageId) {
-        responseEmitter.emit(msg);
-      }
-    });
+    this._subscribeUntilStreamEnd(messageId, responseEmitter);
     this._webSocket.send(
       JSON.stringify({
         id: messageId,
@@ -743,12 +760,7 @@ export class NBIAPI {
     responseEmitter: IChatCompletionResponseEmitter
   ) {
     const messageId = UUID.uuid4();
-    this._messageReceived.connect((_, msg) => {
-      msg = JSON.parse(msg);
-      if (msg.id === messageId) {
-        responseEmitter.emit(msg);
-      }
-    });
+    this._subscribeUntilStreamEnd(messageId, responseEmitter);
     this._webSocket.send(
       JSON.stringify({
         id: messageId,
@@ -795,12 +807,7 @@ export class NBIAPI {
     filename: string,
     responseEmitter: IChatCompletionResponseEmitter
   ) {
-    this._messageReceived.connect((_, msg) => {
-      msg = JSON.parse(msg);
-      if (msg.id === messageId) {
-        responseEmitter.emit(msg);
-      }
-    });
+    this._subscribeUntilStreamEnd(messageId, responseEmitter);
     this._webSocket.send(
       JSON.stringify({
         id: messageId,
