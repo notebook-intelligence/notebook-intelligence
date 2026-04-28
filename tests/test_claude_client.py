@@ -174,6 +174,22 @@ class TestSendClaudeAgentRequestDeadThread:
         # have had its listener removed.
         assert len(signal_before._listeners) == listeners_before
 
+    def test_returns_error_when_queue_or_signal_is_none(self):
+        """If _mark_as_disconnected ran before us (queue/signal both None),
+        the request must surface a "not connected" error rather than crash
+        with AttributeError on `None.put` or `None.connect`."""
+        client = _make_client()
+        client._client_queue = None
+        client._client_thread_signal = None
+
+        result = client._send_claude_agent_request(ClaudeAgentEventType.Query, {})
+
+        assert result == {
+            "data": None,
+            "success": False,
+            "error": "Claude agent is not connected",
+        }
+
 
 class TestEnsureConnected:
     """The helper the three callers (query, update_server_info, clear_chat_history)
