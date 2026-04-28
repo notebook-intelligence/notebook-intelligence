@@ -153,6 +153,10 @@ export class NBIConfig {
     return this.capabilities.chat_model;
   }
 
+  get chatModelSupportsVision(): boolean {
+    return this.capabilities.chat_model_supports_vision === true;
+  }
+
   get inlineCompletionModel(): any {
     return this.capabilities.inline_completion_model;
   }

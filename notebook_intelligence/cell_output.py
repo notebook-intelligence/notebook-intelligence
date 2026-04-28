@@ -23,8 +23,14 @@ def format_output_context(payload: dict, supports_vision: bool = False) -> str:
     Cell outputs are untrusted user content. They're wrapped in a nonced
     XML envelope and prefaced with a treat-as-data marker so a malicious
     output can't close a markdown code fence and inject instructions.
+
+    The nonce is visible to the model alongside the untrusted content, so
+    the envelope alone isn't sufficient to prevent a forged close tag.
+    Anywhere untrusted content lands inside the envelope, occurrences of
+    "</notebook-cell-" are neutralized so an attacker can't synthesize a
+    matching close tag.
     """
-    cell_source = payload.get("cellSource", "")
+    cell_source = _neutralize_close_tag(str(payload.get("cellSource", "")))
     mime_bundles = payload.get("mimeBundles", [])
     is_error = bool(payload.get("isError", False))
     truncated = bool(payload.get("truncated", False))
@@ -71,9 +77,20 @@ def _render_bundle(bundle: dict, supports_vision: bool) -> str:
         if cleaned is not None:
             # Build the data URL server-side from validated base64 + the
             # declared mime so a forged POST can't smuggle markdown
-            # characters into the URL.
+            # characters into the URL. Base64 alphabet can't contain a
+            # close tag, so no further neutralization is needed here.
             return f"\n\n![cell output](data:{mime};base64,{cleaned})"
-    return f"\n\n[{mime}]\n{data}"
+    return f"\n\n[{mime}]\n{_neutralize_close_tag(data)}"
+
+
+def _neutralize_close_tag(s: str) -> str:
+    """Break occurrences of "</notebook-cell-" in untrusted content.
+
+    The envelope nonce is visible to the model in plain text, so an attacker
+    could otherwise emit a literal close tag matching it inside cell content
+    and trick the model into reading subsequent text as instructions.
+    """
+    return s.replace("</notebook-cell-", "</notebook-cell-\u200b")
 
 
 def _clean_base64(s: str) -> Optional[str]:

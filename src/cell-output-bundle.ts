@@ -1,7 +1,11 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import { CodeCell } from '@jupyterlab/cells';
-import { getTokenCount, removeAnsiChars, truncateToTokenCount } from './utils';
+import {
+  formatJupyterError,
+  getTokenCount,
+  truncateToTokenCount
+} from './utils';
 import { IOutputContextItem } from './tokens';
 
 export const MAX_TOKENS_PER_OUTPUT = 4000;
@@ -66,7 +70,7 @@ export function cellOutputAsContextBundle(
 
     if (output.output_type === 'error') {
       isError = true;
-      pushBundle('application/vnd.jupyter.error', formatError(output));
+      pushBundle('application/vnd.jupyter.error', formatJupyterError(output));
       continue;
     }
 
@@ -128,14 +132,6 @@ function isValidBase64(s: string): boolean {
   // could break out of a markdown image URL on the server side.
   const compact = s.replace(/\s+/g, '');
   return /^[A-Za-z0-9+/]+=*$/.test(compact);
-}
-
-function formatError(output: any): string {
-  const head = `${output.ename ?? 'Error'}: ${output.evalue ?? ''}`.trim();
-  const tb = Array.isArray(output.traceback)
-    ? output.traceback.map((line: string) => removeAnsiChars(line)).join('\n')
-    : '';
-  return tb ? `${head}\n${tb}` : head;
 }
 
 function stripHtml(html: string): string {

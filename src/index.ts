@@ -1800,7 +1800,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
             return;
           }
           const outputContext = cellOutputAsContextBundle(
-            activeCell as CodeCell
+            activeCell as CodeCell,
+            { supportsVision: NBIAPI.config.chatModelSupportsVision }
           );
           document.dispatchEvent(
             new CustomEvent('copilotSidebar:addOutputContext', {

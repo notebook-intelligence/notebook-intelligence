@@ -101,6 +101,14 @@ export function markdownToComment(source: string): string {
     .join('\n');
 }
 
+export function formatJupyterError(output: any): string {
+  const head = `${output.ename ?? 'Error'}: ${output.evalue ?? ''}`.trim();
+  const tb = Array.isArray(output.traceback)
+    ? output.traceback.map((line: string) => removeAnsiChars(line)).join('\n')
+    : '';
+  return tb ? `${head}\n${tb}` : head;
+}
+
 export function cellOutputAsText(cell: CodeCell): string {
   let content = '';
   const outputs = cell.outputArea.model.toJSON();
@@ -113,12 +121,10 @@ export function cellOutputAsText(cell: CodeCell): string {
     } else if (output.output_type === 'stream') {
       content += output.text + '\n';
     } else if (output.output_type === 'error') {
+      // Preserve the existing behavior of skipping errors without a
+      // traceback array; the bundle formatter does include the head alone.
       if (Array.isArray(output.traceback)) {
-        content += output.ename + ': ' + output.evalue + '\n';
-        content +=
-          output.traceback
-            .map(item => removeAnsiChars(item as string))
-            .join('\n') + '\n';
+        content += formatJupyterError(output) + '\n';
       }
     }
   }

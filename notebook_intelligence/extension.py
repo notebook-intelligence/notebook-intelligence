@@ -105,6 +105,20 @@ def _build_cell_output_features_response(
     }
 
 
+def _resolve_supports_vision(ai_service_manager) -> bool:
+    """Whether the active chat model can render images.
+
+    In Claude Code mode the active model is Claude (always vision-capable),
+    not ``ai_service_manager.chat_model`` (which still reflects the user's
+    most recent non-Claude selection). Fall through to the regular chat
+    model's capability otherwise.
+    """
+    if ai_service_manager.is_claude_code_mode:
+        return True
+    chat_model = ai_service_manager.chat_model
+    return chat_model.supports_vision if chat_model is not None else False
+
+
 def _resolve_policy_with_env(env_var_name: str, traitlet_value: str) -> str:
     """Resolve a feature policy: env var wins if valid, else traitlet."""
     env_value = os.environ.get(env_var_name, "").strip()
@@ -190,6 +204,9 @@ class GetCapabilitiesHandler(APIHandler):
             "inline_completion_models": ai_service_manager.inline_completion_model_ids,
             "embedding_models": ai_service_manager.embedding_model_ids,
             "chat_model": nbi_config.chat_model,
+            "chat_model_supports_vision": _resolve_supports_vision(
+                ai_service_manager
+            ),
             "inline_completion_model": nbi_config.inline_completion_model,
             "embedding_model": nbi_config.embedding_model,
             "chat_participants": [],
@@ -1165,8 +1182,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                             remaining_token_budget,
                         )
                         continue
-                    chat_model = ai_service_manager.chat_model
-                    supports_vision = chat_model.supports_vision if chat_model is not None else False
+                    supports_vision = _resolve_supports_vision(ai_service_manager)
                     context_message = _format_output_context(output_context, supports_vision=supports_vision)
                     remaining_token_budget -= estimated_tokens
                     chat_history.append({"role": "user", "content": context_message})
