@@ -22,7 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from notebook_intelligence.skillset import (
@@ -240,9 +240,10 @@ def _extract_skill(
             if m.issym() or m.islnk():
                 # Skip symlinks for safety — they can escape the extraction dir.
                 continue
-            name = m.name.lstrip("/")
-            parts = Path(name).parts
-            if any(p == ".." for p in parts):
+            # Tar names are POSIX by spec, so use PurePosixPath to keep the
+            # absolute-path check platform-independent.
+            path = PurePosixPath(m.name)
+            if path.is_absolute() or any(p == ".." for p in path.parts):
                 raise ValueError(f"Unsafe path in archive: {m.name}")
             if m.isfile():
                 total_bytes += m.size
@@ -252,7 +253,15 @@ def _extract_skill(
                         f"({MAX_EXTRACTED_BYTES // (1024 * 1024)} MB)"
                     )
             safe_members.append(m)
-        tar.extractall(into, members=safe_members)
+        # `filter="data"` (PEP 706, available on Python 3.12+ and patch-level
+        # backports of 3.10/3.11) blocks absolute paths, traversal, device
+        # files, and unsafe permission bits at the tarfile layer. Our explicit
+        # checks above remain the safety net for older Python patch levels
+        # that lack `tarfile.data_filter`.
+        extract_kwargs = {}
+        if hasattr(tarfile, "data_filter"):
+            extract_kwargs["filter"] = "data"
+        tar.extractall(into, members=safe_members, **extract_kwargs)
 
     extracted = into / top_dir
     if not extracted.is_dir():
