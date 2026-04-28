@@ -131,6 +131,25 @@ export function getTokenCount(source: string): number {
   return tokens.length;
 }
 
+// Encode once, slice the token array, decode back. Avoids the O(log n)
+// re-encoding a binary search would do on every truncation.
+export function truncateToTokenCount(
+  text: string,
+  maxTokens: number
+): { text: string; size: number } {
+  if (maxTokens <= 0 || text.length === 0) {
+    return { text: '', size: 0 };
+  }
+  const tokens = tiktoken_encoding.encode(text);
+  if (tokens.length <= maxTokens) {
+    return { text, size: tokens.length };
+  }
+  const sliced = tokens.slice(0, maxTokens);
+  const bytes = tiktoken_encoding.decode(sliced);
+  const decoded = new TextDecoder('utf-8').decode(bytes);
+  return { text: decoded, size: sliced.length };
+}
+
 export function compareSelectionPoints(
   lhs: CodeEditor.IPosition,
   rhs: CodeEditor.IPosition

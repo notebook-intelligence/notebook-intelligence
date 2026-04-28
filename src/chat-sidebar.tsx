@@ -26,6 +26,7 @@ import {
   IChatCompletionResponseEmitter,
   IChatParticipant,
   IContextItem,
+  IOutputContextItem,
   ITelemetryEmitter,
   IToolSelections,
   RequestDataType,
@@ -73,9 +74,7 @@ export enum RunChatCompletionType {
   Chat,
   ExplainThis,
   FixThis,
-  GenerateCode,
-  ExplainThisOutput,
-  TroubleshootThisOutput
+  GenerateCode
 }
 
 export interface IRunChatCompletionRequest {
@@ -310,6 +309,9 @@ interface ISelectedContextFile {
   type: string;
   source?: 'workspace' | 'upload';
   serverPath?: string;
+  outputContext?: IOutputContextItem;
+  cellIndex?: number;
+  notebookFilename?: string;
 }
 
 const MAX_ATTACHED_FILES = 10;
@@ -931,9 +933,7 @@ async function submitCompletionRequest(
         responseEmitter
       );
     case RunChatCompletionType.ExplainThis:
-    case RunChatCompletionType.FixThis:
-    case RunChatCompletionType.ExplainThisOutput:
-    case RunChatCompletionType.TroubleshootThisOutput: {
+    case RunChatCompletionType.FixThis: {
       return NBIAPI.chatRequest(
         request.messageId,
         request.chatId,
@@ -1947,13 +1947,21 @@ function SidebarComponent(props: any) {
     setShowModeTools(!showModeTools);
   };
 
-  const handleUserInputSubmit = async () => {
-    setPromptHistoryIndex(promptHistory.length + 1);
-    setPromptHistory([...promptHistory, prompt]);
+  const handleUserInputSubmit = async (options?: {
+    promptOverride?: string;
+    extraOutputContext?: ISelectedContextFile;
+  }) => {
+    const submitPrompt = options?.promptOverride ?? prompt;
+    const isAutoSubmit = options?.promptOverride !== undefined;
+
+    if (!isAutoSubmit) {
+      setPromptHistoryIndex(promptHistory.length + 1);
+      setPromptHistory([...promptHistory, prompt]);
+    }
     setShowPopover(false);
 
     const promptPrefixParts = [];
-    const promptParts = prompt.split(' ');
+    const promptParts = submitPrompt.split(' ');
     if (promptParts.length > 1) {
       for (let i = 0; i < Math.min(promptParts.length, 2); i++) {
         const part = promptParts[i];
@@ -1976,7 +1984,7 @@ function SidebarComponent(props: any) {
           {
             id: UUID.uuid4(),
             type: ResponseStreamDataType.Markdown,
-            content: prompt,
+            content: submitPrompt,
             created: new Date()
           }
         ]
@@ -1984,7 +1992,7 @@ function SidebarComponent(props: any) {
     ];
     setChatMessages(newList);
 
-    if (prompt.startsWith('/clear')) {
+    if (submitPrompt.startsWith('/clear')) {
       setChatMessages([]);
       setPrompt('');
       setSelectedContextFiles([]);
@@ -2004,7 +2012,7 @@ function SidebarComponent(props: any) {
     setCopilotRequestInProgress(true);
 
     const activeDocInfo: IActiveDocumentInfo = props.getActiveDocumentInfo();
-    const extractedPrompt = prompt;
+    const extractedPrompt = submitPrompt;
     const contents: IChatMessageContent[] = [];
     const app = props.getApp();
     const additionalContext: IContextItem[] = [];
@@ -2032,6 +2040,18 @@ function SidebarComponent(props: any) {
     }
 
     for (const file of selectedContextFiles) {
+      if (file.outputContext) {
+        additionalContext.push({
+          type: ContextType.OutputContext,
+          content: '',
+          currentCellContents: null,
+          filePath: file.path,
+          cellIndex: file.cellIndex,
+          outputContext: file.outputContext
+        });
+        continue;
+      }
+
       if (
         currentFileUsesWholeDocument &&
         activeDocumentInfo?.filePath === file.path
@@ -2052,6 +2072,28 @@ function SidebarComponent(props: any) {
         contextItem.isUpload = true;
       }
       additionalContext.push(contextItem);
+    }
+
+    // Auto-submit caller (e.g. Explain/Troubleshoot menu items) passes the
+    // freshly-attached output bundle directly: the matching pill is queued
+    // via setSelectedContextFiles in the same tick, so reading it from state
+    // here would still be empty. Dedup against any pre-existing pill for the
+    // same cell to avoid double-bundling.
+    if (options?.extraOutputContext) {
+      const extra = options.extraOutputContext;
+      const alreadyAttached = selectedContextFiles.some(
+        f => f.path === extra.path && f.outputContext
+      );
+      if (!alreadyAttached && extra.outputContext) {
+        additionalContext.push({
+          type: ContextType.OutputContext,
+          content: '',
+          currentCellContents: null,
+          filePath: extra.path,
+          cellIndex: extra.cellIndex,
+          outputContext: extra.outputContext
+        });
+      }
     }
 
     setShowWorkspaceFilePicker(false);
@@ -2189,10 +2231,11 @@ function SidebarComponent(props: any) {
       }
     );
 
-    const newPrompt = '';
-
-    setPrompt(newPrompt);
-    filterPrefixSuggestions(newPrompt);
+    if (!isAutoSubmit) {
+      const newPrompt = '';
+      setPrompt(newPrompt);
+      filterPrefixSuggestions(newPrompt);
+    }
 
     telemetryEmitter.emitTelemetryEvent({
       type: TelemetryEventType.ChatRequest,
@@ -2206,6 +2249,12 @@ function SidebarComponent(props: any) {
       }
     });
   };
+
+  // Refresh the ref so listeners registered with stable identity (e.g.
+  // addOutputContextHandler) always invoke the latest closure of submit
+  // and see current chat state.
+  const handleUserInputSubmitRef = useRef(handleUserInputSubmit);
+  handleUserInputSubmitRef.current = handleUserInputSubmit;
 
   const handleUserInputCancel = async () => {
     NBIAPI.sendWebSocketMessage(
@@ -2421,12 +2470,6 @@ function SidebarComponent(props: any) {
         case RunChatCompletionType.FixThis:
           message = `Fix this code:\n\`\`\`\n${request.content}\n\`\`\`\n`;
           break;
-        case RunChatCompletionType.ExplainThisOutput:
-          message = `Explain this notebook cell output: \n\`\`\`\n${request.content}\n\`\`\`\n`;
-          break;
-        case RunChatCompletionType.TroubleshootThisOutput:
-          message = `Troubleshoot errors reported in the notebook cell output: \n\`\`\`\n${request.content}\n\`\`\`\n`;
-          break;
       }
       const messageId = UUID.uuid4();
       request.messageId = messageId;
@@ -2454,7 +2497,7 @@ function SidebarComponent(props: any) {
       const contents: IChatMessageContent[] = [];
 
       submitCompletionRequest(request, {
-        emit: response => {
+        emit: async response => {
           if (response.type === BackendMessageType.StreamMessage) {
             const delta = response.data['choices']?.[0]?.['delta'];
             if (!delta) {
@@ -2511,6 +2554,33 @@ function SidebarComponent(props: any) {
             }
           } else if (response.type === BackendMessageType.StreamEnd) {
             setCopilotRequestInProgress(false);
+          } else if (response.type === BackendMessageType.RunUICommand) {
+            const runUiMessageId = response.id;
+            let result = 'void';
+            try {
+              result = await props
+                .getApp()
+                .commands.execute(response.data.commandId, response.data.args);
+            } catch (error) {
+              result = `Error executing command: ${error}`;
+            }
+
+            const data = {
+              callback_id: response.data.callback_id,
+              result: result || 'void'
+            };
+
+            try {
+              JSON.stringify(data);
+            } catch (error) {
+              data.result = 'Could not serialize the result';
+            }
+
+            NBIAPI.sendWebSocketMessage(
+              runUiMessageId,
+              RequestDataType.RunUICommandResponse,
+              data
+            );
           }
           const messageId = UUID.uuid4();
           setChatMessages([
@@ -2542,6 +2612,63 @@ function SidebarComponent(props: any) {
       );
     };
   }, [chatMessages]);
+
+  const addOutputContextHandler = useCallback((eventData: any) => {
+    const detail = eventData?.detail;
+    if (!detail || !detail.outputContext) {
+      return;
+    }
+    const cellIndex: number | undefined = detail.cellIndex;
+    const notebookFilename: string | undefined = detail.notebookFilename;
+    const cellId: string | undefined = detail.cellId;
+    const autoSubmitPrompt: string | undefined = detail.autoSubmitPrompt;
+    // Cell IDs are stable across cell moves/renames, so two right-clicks on
+    // the same cell collapse to one attachment. Fall back to the (notebook,
+    // index) tuple only when the platform doesn't expose an ID.
+    const path = cellId
+      ? `nbi://output/cell/${cellId}`
+      : `nbi://output/${notebookFilename ?? 'notebook'}/${cellIndex ?? 0}`;
+
+    const attached: ISelectedContextFile = {
+      content: '',
+      lineCount: 0,
+      path,
+      type: 'output',
+      outputContext: detail.outputContext as IOutputContextItem,
+      cellIndex,
+      notebookFilename
+    };
+
+    setSelectedContextFiles(prev => {
+      if (prev.some(file => file.path === path)) {
+        return prev;
+      }
+      if (prev.length >= MAX_ATTACHED_FILES) {
+        return prev;
+      }
+      return [...prev, attached];
+    });
+
+    if (autoSubmitPrompt) {
+      handleUserInputSubmitRef.current({
+        promptOverride: autoSubmitPrompt,
+        extraOutputContext: attached
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener(
+      'copilotSidebar:addOutputContext',
+      addOutputContextHandler
+    );
+    return () => {
+      document.removeEventListener(
+        'copilotSidebar:addOutputContext',
+        addOutputContextHandler
+      );
+    };
+  }, [addOutputContextHandler]);
 
   const activeDocumentChangeHandler = (eventData: any) => {
     // if file changes reset the context toggle
@@ -2797,35 +2924,48 @@ function SidebarComponent(props: any) {
                   )}
                 </div>
               )}
-              {selectedContextFiles.map(file => (
-                <div
-                  key={file.serverPath ?? file.path}
-                  className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}`}
-                  title={
-                    file.source === 'upload'
-                      ? `Uploaded: ${file.path}`
-                      : file.path
-                  }
-                >
-                  <div>
-                    {file.source === 'upload' ? (
-                      <>
-                        <VscCloudUpload /> {file.path}
-                      </>
-                    ) : (
-                      file.path
-                    )}
-                  </div>
+              {selectedContextFiles.map(file => {
+                const isOutput = !!file.outputContext;
+                const cellLabel =
+                  typeof file.cellIndex === 'number'
+                    ? `Cell ${file.cellIndex + 1} output`
+                    : 'Cell output';
+                const label = isOutput
+                  ? file.notebookFilename
+                    ? `${cellLabel} (${file.notebookFilename})`
+                    : cellLabel
+                  : file.path;
+                const titleText = isOutput
+                  ? label
+                  : file.source === 'upload'
+                    ? `Uploaded: ${file.path}`
+                    : file.path;
+                return (
                   <div
-                    className="user-input-context-toggle"
-                    onClick={() =>
-                      removeSelectedContextFile(file.serverPath ?? file.path)
-                    }
+                    key={file.serverPath ?? file.path}
+                    className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}${isOutput ? ' output-context' : ''}`}
+                    title={titleText}
                   >
-                    <VscClose title="Remove attached file" />
+                    <div>
+                      {file.source === 'upload' ? (
+                        <>
+                          <VscCloudUpload /> {file.path}
+                        </>
+                      ) : (
+                        label
+                      )}
+                    </div>
+                    <div
+                      className="user-input-context-toggle"
+                      onClick={() =>
+                        removeSelectedContextFile(file.serverPath ?? file.path)
+                      }
+                    >
+                      <VscClose title="Remove attached file" />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {isUploadingFiles && (
                 <div className="user-input-context uploading-indicator">
                   <div className="loading-ellipsis">Uploading</div>

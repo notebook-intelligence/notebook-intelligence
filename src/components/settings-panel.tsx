@@ -201,6 +201,31 @@ function SettingsPanelComponentGeneral(props: any) {
   );
   const [inlineCompletionDebouncerDelay, setInlineCompletionDebouncerDelay] =
     useState(nbiConfig.inlineCompletionDebouncerDelay);
+  const [cellOutputFeatures, setCellOutputFeatures] = useState(
+    nbiConfig.cellOutputFeatures
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      setCellOutputFeatures(NBIAPI.config.cellOutputFeatures);
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
+  }, []);
+
+  const toggleExplainError = () => {
+    NBIAPI.setConfig({
+      enable_explain_error: !cellOutputFeatures.explain_error.enabled
+    });
+  };
+
+  const toggleOutputFollowup = () => {
+    NBIAPI.setConfig({
+      enable_output_followup: !cellOutputFeatures.output_followup.enabled
+    });
+  };
 
   const updateModelOptionsForProvider = (
     providerId: string,
@@ -608,6 +633,46 @@ function SettingsPanelComponentGeneral(props: any) {
               </div>
             </div>
           )}
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Cell output features
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <CheckBoxItem
+                  label="Explain cell errors"
+                  title="Show a 'Troubleshoot errors in output' context-menu item on failed cells"
+                  checked={cellOutputFeatures.explain_error.enabled}
+                  disabled={cellOutputFeatures.explain_error.locked}
+                  tooltip={
+                    cellOutputFeatures.explain_error.locked
+                      ? 'Locked by your administrator'
+                      : ''
+                  }
+                  onClick={toggleExplainError}
+                />
+              </div>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <CheckBoxItem
+                  label="Ask about cell outputs"
+                  title="Right-click a cell output to attach it to the chat"
+                  checked={cellOutputFeatures.output_followup.enabled}
+                  disabled={cellOutputFeatures.output_followup.locked}
+                  tooltip={
+                    cellOutputFeatures.output_followup.locked
+                      ? 'Locked by your administrator'
+                      : ''
+                  }
+                  onClick={toggleOutputFollowup}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div className="model-config-section">
           <div className="model-config-section-header">Config file path</div>

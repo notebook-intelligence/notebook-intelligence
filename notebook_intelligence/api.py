@@ -761,6 +761,10 @@ class AIModel(LLMPropertyProvider):
     def supports_tools(self) -> bool:
         return False
 
+    @property
+    def supports_vision(self) -> bool:
+        return False
+
 class ChatModel(AIModel):
     def completions(self, messages: list[dict], tools: list[dict] = None, response: ChatResponse = None, cancel_token: CancelToken = None, options: dict = {}) -> Any:
         raise NotImplemented
@@ -821,6 +825,7 @@ class TelemetryEventType(str, Enum):
     FixThisCodeRequest = 'fix-this-code-request'
     ExplainThisOutputRequest = 'explain-this-output-request'
     TroubleshootThisOutputRequest = 'troubleshoot-this-output-request'
+    OutputFollowUpRequest = 'output-follow-up-request'
     GenerateCodeRequest = 'generate-code-request'
     ChatRequest = 'chat-request'
     InlineChatRequest = 'inline-chat-request'
