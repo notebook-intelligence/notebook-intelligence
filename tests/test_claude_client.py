@@ -25,6 +25,7 @@ from notebook_intelligence.claude import (
     ClaudeCodeChatParticipant,
     ClaudeCodeClient,
     SignalImpl,
+    _normalize_anthropic_credential,
 )
 
 
@@ -486,3 +487,41 @@ class TestHandleChatRequestErrorHandling:
         # shouldn't have touched the response.
         response.finish.assert_not_called()
         response.stream.assert_not_called()
+
+class TestNormalizeAnthropicCredential:
+    """Settings panel saves unset string fields as ``""`` rather than ``None``.
+    The Anthropic SDK forwards an empty ``base_url`` to httpx which rejects
+    it with ``UnsupportedProtocol``, and an empty ``api_key`` blocks the SDK
+    from falling back to ``ANTHROPIC_API_KEY``. The normaliser collapses
+    whitespace-only / empty values to ``None`` so the SDK defaults engage."""
+
+    def test_none_passes_through(self):
+        assert _normalize_anthropic_credential(None) is None
+
+    def test_empty_string_becomes_none(self):
+        assert _normalize_anthropic_credential("") is None
+
+    def test_whitespace_only_becomes_none(self):
+        assert _normalize_anthropic_credential("   ") is None
+        assert _normalize_anthropic_credential("\t\n") is None
+
+    def test_real_value_passes_through(self):
+        assert _normalize_anthropic_credential("sk-ant-real") == "sk-ant-real"
+        assert _normalize_anthropic_credential("https://api.anthropic.com") == "https://api.anthropic.com"
+
+    def test_surrounding_whitespace_is_stripped(self):
+        # A value pasted with stray whitespace must reach the SDK clean.
+        assert _normalize_anthropic_credential("  sk-ant-real  ") == "sk-ant-real"
+
+    def test_non_string_values_become_none(self):
+        # claude_settings comes from raw JSON. A malformed config writing
+        # ``"api_key": false`` or ``"base_url": 123`` would otherwise crash
+        # client construction with ``AttributeError: 'bool' object has no
+        # attribute 'strip'`` deep inside a request handler.
+        assert _normalize_anthropic_credential(False) is None
+        assert _normalize_anthropic_credential(True) is None
+        assert _normalize_anthropic_credential(0) is None
+        assert _normalize_anthropic_credential(123) is None
+        assert _normalize_anthropic_credential(1.5) is None
+        assert _normalize_anthropic_credential([]) is None
+        assert _normalize_anthropic_credential({"key": "x"}) is None
