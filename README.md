@@ -1,51 +1,109 @@
 # Notebook Intelligence
 
-Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. It can use GitHub Copilot or AI models from any other LLM Provider, including local models from [Ollama](https://ollama.com/). NBI greatly boosts the productivity of JupyterLab users with AI assistance.
+Notebook Intelligence (NBI) is an AI coding assistant and extensible AI framework for JupyterLab. It adds chat, inline edit, auto-complete, and an agent that can drive notebooks — backed by GitHub Copilot, an OpenAI-compatible or LiteLLM-compatible endpoint, local [Ollama](https://ollama.com/) models, or Anthropic's Claude Code CLI.
 
-## Feature Highlights
+NBI is free and open-source. Connect it to a free or paid LLM provider of your choice — GitHub Copilot, any OpenAI- or LiteLLM-compatible endpoint, Ollama (local), or Anthropic Claude (via the Claude Code CLI). Provider charges, when applicable, are paid directly to the provider.
 
-### Claude Mode
+## Contents
 
-Notebook Intelligence provides a dedicated mode for [Claude Code](https://code.claude.com/) integration. In **Claude mode**, NBI uses Claude Code for AI Agent Chat UI and Claude models for inline chat (in editors) and auto-complete suggestions.
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Concepts](#concepts)
+- [Feature highlights](#feature-highlights)
+  - [Claude mode](#claude-mode)
+  - [Agent mode](#agent-mode)
+  - [Code generation with inline chat](#code-generation-with-inline-chat)
+  - [Auto-complete](#auto-complete)
+  - [Chat interface](#chat-interface)
+- [Configuration](#configuration)
+  - [Configuration files](#configuration-files)
+  - [Remembering GitHub Copilot login](#remembering-github-copilot-login)
+- [Built-in tools](#built-in-tools)
+- [Model Context Protocol (MCP) support](#model-context-protocol-mcp-support)
+  - [MCP config example](#mcp-config-example)
+- [Rulesets](#rulesets)
+- [Claude Skills](#claude-skills)
+- [Chat feedback](#chat-feedback)
+- [Documentation](#documentation)
+- [Further reading](#further-reading)
+- [Roadmap](#roadmap)
+- [License](#license)
 
-This integration brings the AI tools and features supported by Claude Code such as built-in tools, skills, MCP servers, custom commands and many more to JupyterLab.
+## Requirements
+
+- Python 3.10+
+- JupyterLab 4.x
+- Node.js — only required for [Claude mode](#claude-mode) (the Claude Code CLI) and for MCP servers that launch via `npx`.
+- A fresh virtualenv or conda env is recommended so NBI doesn't conflict with system Python.
+
+## Quick start
+
+```bash
+pip install notebook-intelligence
+jupyter lab     # restart JupyterLab if it was already running
+```
+
+After restart:
+
+1. Click the NBI icon in the left sidebar to open the chat panel.
+2. Open NBI Settings (gear icon in the chat panel, or _Settings → Notebook Intelligence Settings_).
+3. Sign into your provider — for GitHub Copilot, click _Sign in_; for an OpenAI- or LiteLLM-compatible endpoint, paste an API key; for Ollama, point at your local daemon. To use Claude, enable Claude mode (see below).
+4. Type a message in the chat panel and press Enter.
+
+If the panel stays empty or login does nothing, see [Troubleshooting](docs/troubleshooting.md).
+
+## Concepts
+
+A short glossary you'll see referenced throughout these docs.
+
+- **LLM Provider** — the service that runs the model. NBI ships with four provider adapters: GitHub Copilot, OpenAI-compatible, LiteLLM-compatible, and Ollama. Anthropic Claude is available through [Claude mode](#claude-mode), not as a top-level provider.
+- **Chat Participant** — a `@mention`-able persona inside the chat panel (`@workspace`, `@mcp`, …). Participants route the request to a specific tool surface.
+- **Default mode vs Claude mode** — _Default_ uses the configured LLM Provider for chat, inline chat, and auto-complete. _Claude mode_ uses the Claude Code CLI for the chat panel (gaining its tools, skills, MCP servers, and custom commands) and Claude models via the Anthropic API for inline chat and auto-complete. Requires the Claude Code CLI on `PATH`.
+- **Claude Code vs the Anthropic API** — the _Anthropic API_ (`api.anthropic.com`) is the HTTPS endpoint NBI calls directly for inline chat and auto-complete in Claude mode. _Claude Code_ is Anthropic's local CLI agent that NBI shells out to for the chat panel; it talks to Anthropic itself.
+- **MCP** — [Model Context Protocol](https://modelcontextprotocol.io/). A way for the LLM to call out to external tools (read files, hit APIs, run scripts).
+- **Ruleset** — markdown files in `~/.jupyter/nbi/rules/` that get injected into the system prompt to enforce conventions, coding standards, or domain rules.
+
+## Feature highlights
+
+### Claude mode
+
+NBI provides a dedicated mode for [Claude Code](https://code.claude.com/) integration. In **Claude mode**, NBI uses the Claude Code CLI for the chat panel, and Claude models (via the Anthropic API) for inline chat and auto-complete suggestions. This brings Claude Code's tools, skills, MCP servers, and custom commands into JupyterLab.
 
 <img src="media/claude-chat.png" alt="Claude mode" width=500 />
 
-#### Claude Configuration
+Configure via the NBI Settings dialog (gear icon in the chat panel, or _Settings → Notebook Intelligence Settings_). Toggle _Enable Claude mode_, then:
 
-You can configure the Claude settings in the NBI Settings dialog. You can access this dialog by using the gear icon in the NBI Chat UI or from JupyterLab Settings menu -> Notebook Intelligence Settings. Toggle the `Enable Claude mode` option to enable Claude mode. The other options are as follows:
+- **Chat model** — the Claude model used for the chat panel and inline chat.
+- **Auto-complete model** — the Claude model used for auto-complete suggestions.
+- **Chat Agent setting sources** — user, project, or both, mirroring [Claude Code's settings](https://code.claude.com/docs/en/settings).
+- **Chat Agent tools** — which tool sets to activate. _Claude Code tools_ are always on. _Jupyter UI tools_ are NBI's own (authoring notebooks, running cells, etc.).
+- **API key** and **Base URL** — point at Anthropic or a self-hosted endpoint.
 
-- **Chat model**: Select the Claude model to use for Agent Chat UI and inline chat.
-- **Auto-complete model**: Select the Claude model to use for auto-complete suggestions.
-- **Chat Agent setting sources**: Select the setting sources to use for Claude Code. You can choose to use user settings, project settings or both. These settings are the standard Claude Code settings such as tools, skills, MCP servers, custom commands and many more that are saved in the user's home directory and project directory. See [Claude Code documentation](https://code.claude.com/docs/en/settings) for more details.
-- **Chat Agent tools**: Select the tools to activate in the Agent Chat UI. `Claude Code tools` are always activated. `Jupyter UI tools` are the tools that are provided by NBI to interact with JupyterLab UI (authoring notebooks, running cells, etc.).
-- **API key**: Enter your Claude API key.
-- **Base URL**: Enter your Claude base URL.
+If the Claude Code CLI is on `PATH`, NBI launches it automatically. To override the location, set the `NBI_CLAUDE_CLI_PATH` environment variable before starting JupyterLab.
 
 <img src="media/claude-settings.png" alt="Claude settings" width=700 />
 
 #### Resuming a previous Claude session
 
-When Claude mode is enabled, the NBI chat sidebar shows a history icon next to the settings gear. Clicking it opens a picker listing Claude Code sessions recorded for the current JupyterLab working directory (the same transcripts Claude CLI stores under `~/.claude/projects/`). Selecting a session reconnects the Claude client with `resume`, so the next message you send continues that transcript with full prior context.
+When Claude mode is on, the chat sidebar shows a history icon next to the gear. Click it to list the Claude Code sessions recorded for the current working directory (the same transcripts the Claude Code CLI stores under `~/.claude/projects/`). Selecting a session reconnects via `resume`, so the next message you send continues that transcript with full prior context.
 
-### Agent Mode
+### Agent mode
 
-In Agent Mode, built-in AI agent creates, edits and executes notebooks for you interactively. It can detect issues in the cells and fix for you.
+In Agent mode, the built-in AI agent creates, edits, and executes notebooks for you interactively. It can detect issues in cells and fix them.
 
 ![Agent mode](media/agent-mode.gif)
 
 ### Code generation with inline chat
 
-Use the sparkle icon on cell toolbar or the keyboard shortcuts to show the inline chat popover.
+Use the sparkle icon on the cell toolbar or the keyboard shortcut to show the inline chat popover.
 
-Keyboard shortcuts: `Ctrl + G` / `Cmd + G` is the shortcut to show the inline chat popover and `Ctrl + Enter` / `Cmd + Enter` is the shortcut to accept the suggestion. Clicking `Escape` key closes the popover.
+`Ctrl+G` / `Cmd+G` opens the popover. `Ctrl+Enter` / `Cmd+Enter` accepts the suggestion. `Esc` closes it. The accept shortcut overrides JupyterLab's default _run cell_ binding **only while the popover is open** — outside the popover, `Ctrl+Enter` / `Cmd+Enter` still runs the active cell.
 
 ![Generate code](media/generate-code.gif)
 
 ### Auto-complete
 
-Auto-complete suggestions are shown as you type. Clicking `Tab` key accepts the suggestion. NBI provides auto-complete suggestions in code cells and Python file editors.
+Auto-complete suggestions are shown as you type. `Tab` accepts. NBI provides auto-complete in code cells and Python file editors.
 
 <img src="media/inline-completion.gif" alt="Auto-complete" width=700 />
 
@@ -53,74 +111,19 @@ Auto-complete suggestions are shown as you type. Clicking `Tab` key accepts the 
 
 <img src="media/copilot-chat.gif" alt="Chat interface" width=600 />
 
-See blog posts for more features and usage.
+## Configuration
 
-- [Introducing Notebook Intelligence!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/01/08/introducing-notebook-intelligence.html)
-- [Building AI Extensions for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/05/building-ai-extensions-for-jupyterlab.html)
-- [Building AI Agents for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/09/building-ai-agents-for-jupyterlab.html)
-- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html)
-
-## Installation
-
-NBI requires JupyterLab >= 4.0.0. To install the extension, run the command below and restart JupyterLab.
-
-```bash
-pip install notebook-intelligence
-```
-
-## Configuration options
-
-### Configuring LLM Provider and models
-
-You can configure the model provider and model options using the Notebook Intelligence Settings dialog. You can access this dialog from JupyterLab Settings menu -> Notebook Intelligence Settings, using `/settings` command in NBI Chat or by using the command palette. For more details, see the [blog post](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html).
+Configure your provider, model, and API key from NBI Settings — the gear icon in the chat panel, the `/settings` chat command, or the JupyterLab command palette. For background, see the [provider blog post](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html).
 
 <img src="media/provider-list.png" alt="Settings dialog" width=500 />
 
-Notebook Intelligence extension for JupyterLab
+### Configuration files
 
-This extension is composed of a Python package named `notebook_intelligence`
-for the server extension and a NPM package named `@notebook-intelligence/notebook-intelligence`
-for the frontend extension.
+NBI saves configuration at `~/.jupyter/nbi/config.json`. It also supports an environment-wide base configuration at `<env-prefix>/share/jupyter/nbi/config.json` — organizations can ship default configuration there, and user changes save as overrides on top.
 
-### Disabling LLM Providers
+These config files store provider, model, and MCP configuration. **API keys for custom LLM providers are also stored here in plaintext** — never commit `~/.jupyter/nbi/config.json` to git, share it, or sync it across users. If a key leaks, rotate it at the provider immediately.
 
-By default, all LLM providers can be selected by user dropdown. However, you can disable them and make them controlled by an environment variable.
-
-In order to disable any LLM provider use the `disabled_providers` config:
-
-```python
-c.NotebookIntelligence.disabled_providers = ["ollama","litellm-compatible","openai-compatible"]
-```
-
-Valid built-in provider values are `github-copilot`, `ollama`, `litellm-compatible`, `openai-compatible`.
-
-In order to disable a built-in provider by default but allow re-enabling using an environment variable use the `allow_enabling_providers_with_env` config:
-
-```python
-c.NotebookIntelligence.allow_enabling_providers_with_env = True
-```
-
-Then the environment variable `NBI_ENABLED_PROVIDERS` can be used to re-enable specific built-in tools.
-
-```bash
-export NBI_ENABLED_PROVIDERS=github-copilot,ollama
-```
-
-### Enabling Chat Feedback
-
-<img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
-
-You can enable chat feedback by setting the `enable_chat_feedback` config to `true`. You can handle feedback events in your Notebook Intelligence extension code by listening to the `telemetry` events.
-
-```python
-c.NotebookIntelligence.enable_chat_feedback = True
-```
-
-or by using the command line.
-
-```bash
-jupyter lab --NotebookIntelligence.enable_chat_feedback=true
-```
+> Manual edits to `config.json` require a JupyterLab restart to take effect. Edits via the Settings dialog are picked up live.
 
 ### Cell output features
 
@@ -152,77 +155,49 @@ When a policy is `force-on` / `force-off`, the corresponding Settings panel chec
 
 ### Remembering GitHub Copilot login
 
-Notebook Intelligence can remember your GitHub Copilot login so that you don't need to re-login after a JupyterLab or system restart. Please be aware of the security implications of using this feature.
+NBI can remember your GitHub Copilot login so you don't have to sign in again after a JupyterLab or system restart.
 
 > [!CAUTION]
-> If you configure NBI to remember your GitHub Copilot login, it will encrypt the token and store into a data file at `~/.jupyter/nbi/user-data.json`. You should never share this file with others as they can access your tokens.
-> Even though the token is encrypted, it is done so by using a default password and that's why it can be decrypted by others. In order to prevent that you can specify a custom password using the environment variable `NBI_GH_ACCESS_TOKEN_PASSWORD`.
+> If you enable this, NBI encrypts the token and stores it in `~/.jupyter/nbi/user-data.json`. Never share this file. The encryption uses a default password unless you set `NBI_GH_ACCESS_TOKEN_PASSWORD` to a custom value — on shared or multi-tenant systems, set a custom password before enabling this option.
 
 ```bash
 NBI_GH_ACCESS_TOKEN_PASSWORD=my_custom_password
 ```
 
-To let Notebook Intelligence remember your GitHub access token, go to Notebook Intelligence Settings dialog and check the option `Remember my GitHub Copilot access token` as shown below.
+To enable, check _Remember my GitHub Copilot access token_ in the Settings dialog.
 
 <img src="media/remember-gh-access-token.png" alt="Remember access token" width=500 />
 
-If your stored access token fails to login (due to expiration or other reasons), you will be prompted to relogin on the UI.
+If the stored token fails to authenticate (expired, revoked, password mismatch), NBI prompts you to sign in again.
 
-## Built-in Tools
+## Built-in tools
 
-- **Notebook Edit** (nbi-notebook-edit): Edit notebook using the JupyterLab notebook editor.
-- **Notebook Execute** (nbi-notebook-execute): Run notebooks in JupyterLab UI.
-- **Python File Edit** (nbi-python-file-edit): Edit Python files using the JupyterLab file editor.
-- **File Edit** (nbi-file-edit): Edit files in the Jupyter root directory.
-- **File Read** (nbi-file-read): Read files in the Jupyter root directory.
-- **Command Execute** (nbi-command-execute): Execute shell commands using embedded terminal in Agent UI or JupyterLab terminal.
+These tools are available in Agent mode and to MCP-enabled chats.
 
-### Disabling Built-in tools
+| Tool                                          | What it does                                                                           |
+| --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Notebook Edit** (`nbi-notebook-edit`)       | Edit notebooks via the JupyterLab notebook editor.                                     |
+| **Notebook Execute** (`nbi-notebook-execute`) | Run notebooks in the JupyterLab UI.                                                    |
+| **Python File Edit** (`nbi-python-file-edit`) | Edit Python files via the JupyterLab file editor.                                      |
+| **File Edit** (`nbi-file-edit`)               | Edit files in the Jupyter root directory.                                              |
+| **File Read** (`nbi-file-read`)               | Read files in the Jupyter root directory.                                              |
+| **Command Execute** (`nbi-command-execute`)   | Execute shell commands using the embedded terminal in Agent UI or JupyterLab terminal. |
 
-All built-in toolas are enabled by default in Agent Mode. However, you can disable them and make them controlled by an environment variable.
+In multi-tenant deployments, `nbi-command-execute` and `nbi-file-edit` are effectively arbitrary code execution as the user. See [`docs/admin-guide.md`](docs/admin-guide.md#security-model) for guidance on disabling them.
 
-In order to disable any built-in tool use the `disabled_tools` config:
+## Model Context Protocol (MCP) support
 
-```python
-c.NotebookIntelligence.disabled_tools = ["nbi-notebook-execute","nbi-python-file-edit"]
-```
+NBI integrates with [MCP](https://modelcontextprotocol.io) servers. It supports both stdio and Streamable HTTP transports. **MCP server tools are supported; resources and prompts are not yet supported.**
 
-Valid built-in tool values are `nbi-notebook-edit`, `nbi-notebook-execute`, `nbi-python-file-edit`, `nbi-file-edit`, `nbi-file-read`, `nbi-command-execute`.
-
-In order to disable a built-in tool by default but allow re-enabling using an environment variable use the `allow_enabling_tools_with_env` config:
-
-```python
-c.NotebookIntelligence.allow_enabling_tools_with_env = True
-```
-
-Then the environment variable `NBI_ENABLED_BUILTIN_TOOLS` can be used to re-enable specific built-in tools.
-
-```bash
-export NBI_ENABLED_BUILTIN_TOOLS=nbi-notebook-execute,nbi-python-file-edit
-```
-
-### Configuration files
-
-NBI saves configuration at `~/.jupyter/nbi/config.json`. It also supports environment wide base configuration at `<env-prefix>/share/jupyter/nbi/config.json`. Organizations can ship default configuration at this environment wide config path. User's changes will be stored as overrides at `~/.jupyter/nbi/config.json`.
-
-These config files are used for saving LLM provider, model and MCP configuration. Note that API keys you enter for your custom LLM providers will also be stored in these config files.
-
-> [!IMPORTANT]
-> Note that updating config.json manually requires restarting JupyterLab to take effect.
-
-### Model Context Protocol ([MCP](https://modelcontextprotocol.io)) Support
-
-NBI seamlessly integrates with MCP servers. It supports servers with both Standard Input/Output (stdio) and Server-Sent Events (SSE) transports. The MCP support is limited to server tools at the moment.
-
-You can easily add MCP servers to NBI by editing the configuration file [~/.jupyter/nbi/mcp.json](#configuration-files). Environment wide base configuration is also support using the file at `<env-prefix>/share/jupyter/nbi/mcp.json`.
+Add MCP servers by editing `~/.jupyter/nbi/mcp.json`. An environment-wide base file at `<env-prefix>/share/jupyter/nbi/mcp.json` is also supported.
 
 > [!NOTE]
-> Using MCP servers requires an LLM model with tool calling capabilities. All of the GitHub Copilot models provided in NBI support this feature. If you are using other providers make sure you choose a tool calling capable model.
+> MCP requires an LLM model with tool-calling capability. All GitHub Copilot models in NBI support this. For other providers, choose a tool-calling-capable model.
 
 > [!CAUTION]
-> Note that most MCP servers are run on the same computer as your JupyterLab installation and they can make irreversible changes to your computer and/or access private data. Make sure that you only install MCP servers from trusted sources.
+> Most MCP servers run on the same machine as JupyterLab and can make irreversible changes or access private data. Only install MCP servers from trusted sources.
 
-### MCP Config file example
+### MCP config example
 
 ```json
 {
@@ -239,9 +214,7 @@ You can easily add MCP servers to NBI by editing the configuration file [~/.jupy
 }
 ```
 
-You can use Agent mode to access tools provided by MCP servers you configured.
-
-For servers with stdio transport, you can also set additional environment variables by using the `env` key. Environment variables are specified as key value pairs.
+For stdio servers you can pass extra environment variables under `env`:
 
 ```json
 "mcpServers": {
@@ -251,200 +224,100 @@ For servers with stdio transport, you can also set additional environment variab
         "env": {
             "ENV_VAR_NAME": "ENV_VAR_VALUE"
         }
-    },
+    }
 }
 ```
 
-Below is an example of a server configuration with Streamable HTTP transport. For Streamable HTTP transport servers, you can also specify headers to be sent as part of the requests.
+For Streamable HTTP servers you can also specify request headers:
 
 ```json
 "mcpServers": {
-    "remoterservername": {
+    "remoteservername": {
         "url": "http://127.0.0.1:8080/mcp",
         "headers": {
             "Authorization": "Bearer mysecrettoken"
         }
-    },
+    }
 }
 ```
 
-If you have multiple servers configured but you would like to disable some for a while, you can do so by using the `disabled` key. `servername2` will be disabled and not available in `@mcp` chat participant.
+To temporarily disable a configured server without removing it, set `"disabled": true`:
 
 ```json
 "mcpServers": {
-    "servername1": {
-        "command": "",
-        "args": [],
-    },
     "servername2": {
         "command": "",
         "args": [],
         "disabled": true
-    },
+    }
 }
 ```
 
-### Ruleset System
+## Rulesets
 
-NBI includes a powerful ruleset system that allows you to define custom guidelines and best practices that are automatically injected into AI prompts. This helps ensure consistent coding standards, project-specific conventions, and domain knowledge across all AI interactions.
+NBI's ruleset system lets you define guidelines and best practices that get injected into AI prompts automatically — for consistent coding standards, project conventions, or domain knowledge. Rules are markdown files in `~/.jupyter/nbi/rules/` and can scope by file pattern, kernel, directory, or chat mode.
 
-#### How It Works
-
-Rules are markdown files with optional YAML frontmatter stored in `~/.jupyter/nbi/rules/`. They are automatically discovered and applied based on context (file type, notebook kernel, chat mode).
-
-#### Creating Rules
-
-**Global Rules** - Apply to all contexts:
-
-Create a file like `~/.jupyter/nbi/rules/01-coding-standards.md`:
+A two-line example:
 
 ```markdown
 ---
 priority: 10
 ---
 
-# Coding Standards
-
-- Always use type hints in Python functions
-- Prefer list comprehensions over loops when appropriate
-- Add docstrings to all public functions
+- Always use type hints in Python functions.
+- Add docstrings to all public functions.
 ```
 
-**Mode-Specific Rules** - Apply only to specific chat modes:
+For full details (frontmatter reference, mode-specific rules, auto-reload), see [`docs/rulesets.md`](docs/rulesets.md).
 
-NBI supports mode-specific rules for three modes:
+## Claude Skills
 
-- **ask** - Question/answer mode
-- **agent** - Autonomous agent mode with tool access
-- **inline-chat** - Inline code generation and editing
+When Claude mode is enabled, the Settings panel exposes a **Skills** tab for managing the skills that Claude can invoke. Skills are stored under `~/.claude/skills/` (user) or `<project>/.claude/skills/` (project). You can create and edit skills inline, duplicate, rename, delete (with undo), or import from a public GitHub repo.
 
-Create a file like `~/.jupyter/nbi/rules/modes/agent/01-testing.md`:
+For organization-wide deployments, NBI can install and keep a curated set of skills in sync from a YAML manifest pointed at by `NBI_SKILLS_MANIFEST`. Managed skills are read-only in the UI and refreshed on a schedule.
 
-```markdown
----
-priority: 20
-scope:
-  kernels: ['python3']
----
+For full details, see [`docs/skills.md`](docs/skills.md).
 
-# Testing Guidelines
+## Chat feedback
 
-When writing code in agent mode:
+Enable thumbs-up/down feedback on AI responses by setting:
 
-- Always include error handling
-- Add logging for debugging
-- Test edge cases
+```python
+c.NotebookIntelligence.enable_chat_feedback = True
 ```
 
-#### Rule Frontmatter Options
-
-```yaml
----
-apply: always # 'always', 'auto', or 'manual'
-active: true # Enable/disable the rule
-priority: 10 # Lower numbers = higher priority
-scope:
-  file_patterns: # Apply to specific file patterns
-    - '*.py'
-    - 'test_*.ipynb'
-  kernels: # Apply to specific notebook kernels
-    - 'python3'
-    - 'ir'
-  directories: # Apply to specific directories
-    - '/projects/ml'
----
-```
-
-#### Configuration
-
-**Enable/Disable Rules System:**
-
-Edit `~/.jupyter/nbi/config.json`:
-
-```json
-{
-  "rules_enabled": true
-}
-```
-
-**Auto-Reload Configuration:**
-
-Rules are automatically reloaded when changed (enabled by default). This behavior is controlled by the `NBI_RULES_AUTO_RELOAD` environment variable.
-
-To disable auto-reload:
+…or via CLI:
 
 ```bash
-export NBI_RULES_AUTO_RELOAD=false
-jupyter lab
+jupyter lab --NotebookIntelligence.enable_chat_feedback=true
 ```
 
-Or to enable (default):
+The feedback fires an in-process `telemetry` event. Nothing leaves the process by default — see the [admin guide](docs/admin-guide.md#chat-feedback-event-hook) for how to wire it into your observability stack.
 
-```bash
-export NBI_RULES_AUTO_RELOAD=true
-jupyter lab
-```
+<img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
 
-#### Managing Rules
+## Documentation
 
-Rules are automatically discovered from:
+- [`docs/admin-guide.md`](docs/admin-guide.md) — deployment, env vars, security model, air-gap, multi-tenancy.
+- [`docs/skills.md`](docs/skills.md) — Claude Skills management and the org-manifest reconciler.
+- [`docs/rulesets.md`](docs/rulesets.md) — ruleset frontmatter and discovery.
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems with copy-pasteable fixes.
+- [`PRIVACY.md`](PRIVACY.md) — what NBI sends to which provider, and the egress allowlist.
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability.
+- [`CHANGELOG.md`](CHANGELOG.md) — release history.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — building NBI from source. Skip this if you just want to use NBI.
 
-- **Global rules**: `~/.jupyter/nbi/rules/*.md`
-- **Mode-specific rules**: `~/.jupyter/nbi/rules/modes/{mode}/*.md` where `{mode}` can be:
-  - `ask` - For question/answer interactions
-  - `agent` - For autonomous agent operations
-  - `inline-chat` - For inline code generation
+## Further reading
 
-Rules are applied in priority order (lower numbers first) and can be toggled on/off without deleting the files.
+- [Introducing Notebook Intelligence!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/01/08/introducing-notebook-intelligence.html)
+- [Building AI Extensions for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/05/building-ai-extensions-for-jupyterlab.html)
+- [Building AI Agents for JupyterLab](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/02/09/building-ai-agents-for-jupyterlab.html)
+- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://notebook-intelligence.github.io/notebook-intelligence/blog/2025/03/05/support-for-any-llm-provider.html)
 
-### Managing Claude Skills
+## Roadmap
 
-When Claude mode is enabled, the NBI settings panel shows a **Skills** tab for viewing, creating, editing, and deleting the skills that Claude can invoke. Skills are Claude Agent SDK artifacts stored on disk:
+NBI 4.x is stable. New features land in minor releases (4.5, 4.6, …); breaking changes are reserved for the next major (5.x) and will be announced in the [changelog](CHANGELOG.md).
 
-- **User skills**: `~/.claude/skills/`
-- **Project skills**: `<project_root>/.claude/skills/`
+## License
 
-Skills live in a directory named `<name>/` containing a `SKILL.md` entry file (with YAML frontmatter for `name`, `description`, `allowed-tools`) plus any helper files the skill references.
-
-The Skills tab lets you:
-
-- Add new skills in either scope, editing `SKILL.md` and helper files inline
-- **Rename** a skill (updates the bundle directory and frontmatter)
-- **Duplicate** a skill into the same or opposite scope under a new name
-- **Delete** a skill, with an undo toast that restores the full bundle contents if clicked within 8 seconds
-- Open or delete additional files in the bundle (`SKILL.md` itself is protected from deletion)
-
-**Importing from GitHub.** Click **Import from GitHub** to install a skill from a public repo. Paste any `https://github.com/<owner>/<repo>` URL — or a deep link like `/tree/<ref>/<subpath>` pointing at the directory that contains `SKILL.md` — pick the target scope, and the bundle is fetched, validated, and installed. The canonical source URL is recorded in the skill's frontmatter as `source:` so you can trace where each imported skill came from.
-
-When a skill is saved, added, or removed — either through the UI or directly on disk — the Claude SDK session is transparently reloaded (preserving conversation history via the session's resume behavior), and a **"Skills reloaded"** banner briefly appears in the chat sidebar.
-
-#### Managed skills via an org manifest
-
-For organization-wide deployments (e.g., Kubeflow notebooks), NBI can install and keep a curated set of Claude skills in sync from a YAML/JSON manifest. Skills installed this way are marked **Managed** in the UI — they are read-only (edit/rename/delete disabled) and are refreshed on a schedule.
-
-Configure via environment variables (also available as traitlets on `NotebookIntelligence`):
-
-- `NBI_SKILLS_MANIFEST` — URL (`https://...`) or local filesystem path to the manifest. Empty/unset disables the feature.
-- `NBI_SKILLS_MANIFEST_INTERVAL` — seconds between reconciles. Default `86400` (24h). Reconciliation also runs once at startup.
-- `NBI_MANAGED_SKILLS_TOKEN` — optional bearer token used for **all** managed-skills GitHub operations: fetching the manifest, probing commits, and downloading skill tarballs. Lets an org deploy a minimal-privilege scoped token covering the whole managed pathway — user-initiated imports (the Import-from-GitHub dialog, `POST /skills/import`) do **not** see this token and continue to use `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth`. When unset, managed operations fall back to the same chain. If set and a managed operation fails with an auth error, it fails loudly (no retry with the fallback chain) so misconfigured or expired scoped tokens stay visible to the admin.
-
-Manifest schema:
-
-```yaml
-skills:
-  - url: https://github.com/org/repo/tree/main/skills/data-eda
-    name: data-eda # optional: override the installed skill name
-    scope: user # optional: "user" (default) or "project"
-  - url: https://github.com/org/repo/tree/main/skills/ml-recipes
-```
-
-Behavior:
-
-- The reconciler probes GitHub's commits API for each entry's `subpath`/`ref` and skips fetching the tarball when the installed `managed_ref` already matches the latest SHA. Full-SHA URLs skip the probe.
-- Managed skills present in the install but missing from the manifest are **removed**. User-authored skills are never touched; if a user-authored skill has the same name as a manifest entry, the reconciler leaves it alone and reports a per-entry error.
-- A manual **Sync managed skills** button appears in the Skills panel when any managed skill is installed, and a `POST /notebook-intelligence/skills/reconcile` endpoint is available for scripted triggers.
-- If the manifest cannot be loaded (network, bad YAML, missing `skills:` list), the reconciler logs the error and leaves all managed skills in place rather than mass-deleting on a transient failure.
-
-### Developer documentation
-
-For building locally and contributing see the [developer documentatation](CONTRIBUTING.md).
+Licensed under [GPL-3.0](LICENSE).
