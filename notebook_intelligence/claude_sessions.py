@@ -57,11 +57,13 @@ def encode_cwd(cwd: str) -> str:
     """Encode a filesystem path the way Claude Code names its project dirs.
 
     Claude Code replaces every path separator with a dash, so
-    ``/Users/me/proj`` becomes ``-Users-me-proj``. We normalize the path
-    first so trailing slashes or ``..`` segments don't produce surprising
-    directory names.
+    ``/Users/me/proj`` becomes ``-Users-me-proj``. We resolve symlinks
+    first to match Claude Code's own behavior — without this, macOS's
+    ``/tmp`` (a symlink to ``/private/tmp``) would map to ``-tmp`` here
+    while Claude Code stores transcripts under ``-private-tmp``, so the
+    picker would silently find no sessions.
     """
-    normalized = os.path.normpath(os.path.abspath(cwd))
+    normalized = os.path.realpath(cwd)
     return normalized.replace(os.sep, "-")
 
 

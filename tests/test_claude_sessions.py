@@ -66,11 +66,19 @@ class TestEncodeCwd:
     def test_normalizes_parent_segments(self):
         assert encode_cwd("/Users/me/proj/../proj") == "-Users-me-proj"
 
+    def test_resolves_symlinks(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+
+        assert encode_cwd(str(link)) == encode_cwd(str(real))
+
 
 class TestGetSessionsDir:
-    def test_composes_claude_projects_path(self, fake_claude_home):
-        result = get_sessions_dir("/tmp/foo", claude_home=str(fake_claude_home))
-        assert result == fake_claude_home / "projects" / "-tmp-foo"
+    def test_composes_claude_projects_path(self, fake_claude_home, project_cwd):
+        result = get_sessions_dir(project_cwd, claude_home=str(fake_claude_home))
+        assert result == fake_claude_home / "projects" / encode_cwd(project_cwd)
 
 
 class TestListSessions:
