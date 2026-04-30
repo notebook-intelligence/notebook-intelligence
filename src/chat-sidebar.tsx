@@ -139,7 +139,10 @@ export interface IInlinePromptWidgetOptions {
   onRequestSubmitted: (prompt: string) => void;
   onRequestCancelled: () => void;
   onContentStream: (content: string) => void;
-  onContentStreamEnd: () => void;
+  // streamError is the backend's structured nbi_stream_error field, set
+  // when ClaudeChatModel.completions interrupts mid-stream. Auto-insert
+  // callers should skip applying generated content when it is non-null.
+  onContentStreamEnd: (streamError?: string | null) => void;
   onUpdatedCodeChange: (content: string) => void;
   onUpdatedCodeAccepted: () => void;
   telemetryEmitter: ITelemetryEmitter;
@@ -173,6 +176,12 @@ export class InlinePromptWidget extends ReactWidget {
 
   _onResponse(response: any) {
     if (response.type === BackendMessageType.StreamMessage) {
+      // Backend sets nbi_stream_error alongside the [Stream interrupted]
+      // marker delta. Capture it so onContentStreamEnd can tell the
+      // auto-insert path to skip writing the partial buffer.
+      if (typeof response.data?.nbi_stream_error === 'string') {
+        this._streamError = response.data.nbi_stream_error;
+      }
       const delta = response.data['choices']?.[0]?.['delta'];
       if (!delta) {
         return;
@@ -184,7 +193,8 @@ export class InlinePromptWidget extends ReactWidget {
       }
       this._options.onContentStream(responseMessage);
     } else if (response.type === BackendMessageType.StreamEnd) {
-      this._options.onContentStreamEnd();
+      this._options.onContentStreamEnd(this._streamError);
+      this._streamError = null;
       const timeElapsed =
         (new Date().getTime() - this._requestTime.getTime()) / 1000;
       this._options.telemetryEmitter.emitTelemetryEvent({
@@ -239,6 +249,7 @@ export class InlinePromptWidget extends ReactWidget {
 
   private _options: IInlinePromptWidgetOptions;
   private _requestTime: Date;
+  private _streamError: string | null = null;
 }
 
 export class GitHubCopilotStatusBarItem extends ReactWidget {
@@ -949,6 +960,7 @@ async function submitCompletionRequest(
     }
     case RunChatCompletionType.GenerateCode:
       return NBIAPI.generateCode(
+        request.messageId,
         request.chatId,
         request.content,
         request.prefix || '',
@@ -3217,17 +3229,48 @@ function SidebarComponent(props: any) {
 function InlinePopoverComponent(props: any) {
   const [modifiedCode, setModifiedCode] = useState<string>('');
   const [promptSubmitted, setPromptSubmitted] = useState(false);
+  // Tracks the in-flight backend request so Escape / Cancel / Accept can
+  // stop it via CancelChatRequest. Cleared on StreamEnd so a stale cancel
+  // doesn't fire after the response already finished.
+  const inflightMessageIdRef = useRef<string | null>(null);
+  // Mirrors InlinePromptWidget._streamError so this component can branch
+  // on it independently. Set when the backend tags a delta with
+  // nbi_stream_error; cleared on the next submit / StreamEnd.
+  const streamErrorRef = useRef<string | null>(null);
   const originalOnRequestSubmitted = props.onRequestSubmitted;
   const originalOnResponseEmit = props.onResponseEmit;
+  const originalOnRequestCancelled = props.onRequestCancelled;
+  const originalOnUpdatedCodeAccepted = props.onUpdatedCodeAccepted;
+
+  const cancelInflightRequest = () => {
+    const messageId = inflightMessageIdRef.current;
+    if (!messageId) {
+      return;
+    }
+    // Backend matches cancellations by websocket message id (see
+    // WebsocketCopilotHandler.on_message). Without this send the request
+    // keeps streaming server-side after the popover dismisses, burning
+    // tokens and wasting an inference.
+    NBIAPI.sendWebSocketMessage(
+      messageId,
+      RequestDataType.CancelChatRequest,
+      {}
+    );
+    inflightMessageIdRef.current = null;
+  };
 
   const onRequestSubmitted = (prompt: string) => {
     setModifiedCode('');
     setPromptSubmitted(true);
+    streamErrorRef.current = null;
     originalOnRequestSubmitted(prompt);
   };
 
   const onResponseEmit = (response: any) => {
     if (response.type === BackendMessageType.StreamMessage) {
+      if (typeof response.data?.nbi_stream_error === 'string') {
+        streamErrorRef.current = response.data.nbi_stream_error;
+      }
       const delta = response.data['choices']?.[0]?.['delta'];
       if (!delta) {
         return;
@@ -3239,12 +3282,45 @@ function InlinePopoverComponent(props: any) {
       }
       setModifiedCode((modifiedCode: string) => modifiedCode + responseMessage);
     } else if (response.type === BackendMessageType.StreamEnd) {
-      setModifiedCode((modifiedCode: string) =>
-        extractLLMGeneratedCode(modifiedCode)
-      );
+      // Only fence-strip on a clean stream. On error the marker has to
+      // stay visible in the diff pane so the modify-existing user has a
+      // persistent failure signal before deciding to Accept the
+      // truncated result.
+      if (!streamErrorRef.current) {
+        setModifiedCode((modifiedCode: string) =>
+          extractLLMGeneratedCode(modifiedCode)
+        );
+      }
+      // streamErrorRef intentionally outlives StreamEnd: Accept fires
+      // afterwards and needs to know the stream errored so it can
+      // dismiss instead of writing an empty buffer over the user's
+      // selection. Cleared on the next submit (see onRequestSubmitted).
+      inflightMessageIdRef.current = null;
     }
 
     originalOnResponseEmit(response);
+  };
+
+  const onRequestCancelled = () => {
+    cancelInflightRequest();
+    originalOnRequestCancelled();
+  };
+
+  // Accept on a partial diff used to leave the backend stream running
+  // off-screen, spending tokens on output the UI no longer used. Cancel
+  // the in-flight request before applying so a mid-stream Accept
+  // releases the upstream call too. When the stream errored the buffer
+  // is at best truncated and at worst marker-only, which would write an
+  // empty string over the user's selection — extractLLMGeneratedCode
+  // strips the marker and the remainder is just whitespace. Treat
+  // Accept as cancel in that case so the selection survives.
+  const onUpdatedCodeAccepted = () => {
+    if (streamErrorRef.current) {
+      onRequestCancelled();
+      return;
+    }
+    cancelInflightRequest();
+    originalOnUpdatedCodeAccepted();
   };
 
   return (
@@ -3253,7 +3329,11 @@ function InlinePopoverComponent(props: any) {
         {...props}
         onRequestSubmitted={onRequestSubmitted}
         onResponseEmit={onResponseEmit}
-        onUpdatedCodeAccepted={props.onUpdatedCodeAccepted}
+        onRequestCancelled={onRequestCancelled}
+        onMessageIdChange={(id: string) => {
+          inflightMessageIdRef.current = id;
+        }}
+        onUpdatedCodeAccepted={onUpdatedCodeAccepted}
         limitHeight={props.existingCode !== '' && promptSubmitted}
       />
       {props.existingCode !== '' && promptSubmitted && (
@@ -3263,7 +3343,7 @@ function InlinePopoverComponent(props: any) {
             <div>
               <button
                 className="jp-Button jp-mod-accept jp-mod-styled jp-mod-small"
-                onClick={() => props.onUpdatedCodeAccepted()}
+                onClick={() => onUpdatedCodeAccepted()}
               >
                 Accept
               </button>
@@ -3271,7 +3351,7 @@ function InlinePopoverComponent(props: any) {
             <div>
               <button
                 className="jp-Button jp-mod-reject jp-mod-styled jp-mod-small"
-                onClick={() => props.onRequestCancelled()}
+                onClick={() => onRequestCancelled()}
               >
                 Cancel
               </button>
@@ -3347,9 +3427,14 @@ function InlinePromptComponent(props: any) {
       }
     }
 
+    const messageId = UUID.uuid4();
+    // Hand the id back to the popover so its cancel handler can send a
+    // CancelChatRequest with the matching id.
+    props.onMessageIdChange?.(messageId);
+
     submitCompletionRequest(
       {
-        messageId: UUID.uuid4(),
+        messageId,
         chatId: UUID.uuid4(),
         type: RunChatCompletionType.GenerateCode,
         content: prompt,

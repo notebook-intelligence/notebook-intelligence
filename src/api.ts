@@ -3,7 +3,6 @@
 import { ServerConnection } from '@jupyterlab/services';
 import { requestAPI } from './handler';
 import { URLExt } from '@jupyterlab/coreutils';
-import { UUID } from '@lumino/coreutils';
 import { Signal } from '@lumino/signaling';
 import {
   GITHUB_COPILOT_PROVIDER_ID,
@@ -750,6 +749,7 @@ export class NBIAPI {
   }
 
   static async generateCode(
+    messageId: string,
     chatId: string,
     prompt: string,
     prefix: string,
@@ -759,7 +759,6 @@ export class NBIAPI {
     filename: string,
     responseEmitter: IChatCompletionResponseEmitter
   ) {
-    const messageId = UUID.uuid4();
     this._subscribeUntilStreamEnd(messageId, responseEmitter);
     this._webSocket.send(
       JSON.stringify({

@@ -189,22 +189,57 @@ class ClaudeChatModel(ChatModel):
         return self._supports_tools
 
     def completions(self, messages: list[dict], tools: list[dict] = None, response: ChatResponse = None, cancel_token: CancelToken = None, options: dict = {}) -> Any:
-        resp = self._client.messages.create(
-            model=self._model_id,
-            max_tokens=10000,
-            messages=messages
-        )
-
-        for block in resp.content:
-            if isinstance(block, AnthropicTextBlock):
+        # Use the streaming endpoint so the inline-chat diff pane fills in
+        # progressively instead of staying empty until the whole response
+        # lands. Each text delta is forwarded as its own LLMRaw payload so the
+        # front-end accumulator (chat-sidebar.tsx InlinePopoverComponent)
+        # appends it directly to the modified-code state.
+        if cancel_token is not None and cancel_token.is_cancel_requested:
+            # A fast CancelChatRequest can flip the token before the worker
+            # thread reaches us. Bail out before opening the stream so we
+            # don't burn an Anthropic request whose output has nowhere to go.
+            response.finish()
+            return
+        try:
+            with self._client.messages.stream(
+                model=self._model_id,
+                max_tokens=10000,
+                messages=messages
+            ) as stream:
+                for chunk in stream.text_stream:
+                    if cancel_token is not None and cancel_token.is_cancel_requested:
+                        break
+                    if not chunk:
+                        continue
+                    response.stream({
+                        "choices": [{
+                            "delta": {
+                                "role": "assistant",
+                                "content": chunk
+                            }
+                        }]
+                    })
+        except Exception as e:
+            # The outer inline-chat handler reports failures as MarkdownData,
+            # but the diff pane only consumes payloads with delta.content, so
+            # that error never reaches the user — they'd see partial code
+            # silently fence-stripped on StreamEnd and assume it was final.
+            # Push a plain-text marker into the same channel so the partial
+            # output is visibly annotated, plus a structured nbi_stream_error
+            # field so the fresh-generation auto-insert path in index.ts can
+            # detect the failure and skip writing the partial buffer to the
+            # user's cell. Re-raise so the caller logs and runs finish().
+            if response is not None:
                 response.stream({
                     "choices": [{
                         "delta": {
                             "role": "assistant",
-                            "content": block.text
+                            "content": f"\n\n[Stream interrupted: {e}]"
                         }
-                    }]
+                    }],
+                    "nbi_stream_error": str(e)
                 })
+            raise
 
         response.finish()
 
