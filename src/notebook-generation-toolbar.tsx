@@ -149,7 +149,8 @@ class NotebookGenerationToolbarController {
       type: RunChatCompletionType.NotebookGeneration,
       content: prefixedPrompt,
       chatMode: '',
-      externalRequestId
+      externalRequestId,
+      hideInChat: !showInChat
     };
 
     if (!showInChat) {

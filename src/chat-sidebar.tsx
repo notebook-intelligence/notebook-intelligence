@@ -100,6 +100,10 @@ export interface IRunChatCompletionRequest {
   // Optional id used by external listeners (e.g. the notebook toolbar
   // generation popover) to track progress when the chat sidebar is hidden.
   externalRequestId?: string;
+  // When true, skip rendering this turn in the chat history. The request
+  // still streams through the backend; only the visible transcript is
+  // suppressed. Used by the notebook-generation toolbar's "silent" mode.
+  hideInChat?: boolean;
 }
 
 export interface IChatSidebarOptions {
@@ -2468,25 +2472,29 @@ function SidebarComponent(props: any) {
         );
       };
       emitProgress(true);
-      const newList = [
-        ...chatMessages,
-        {
-          id: messageId,
-          date: new Date(),
-          from: 'user',
-          contents: [
+      const hideInChat = !!request.hideInChat;
+      const newList = hideInChat
+        ? chatMessages
+        : [
+            ...chatMessages,
             {
               id: messageId,
-              type: ResponseStreamDataType.Markdown,
-              content: message,
-              created: new Date()
+              date: new Date(),
+              from: 'user',
+              contents: [
+                {
+                  id: messageId,
+                  type: ResponseStreamDataType.Markdown,
+                  content: message,
+                  created: new Date()
+                }
+              ]
             }
-          ]
-        }
-      ];
-      setChatMessages(newList);
-
-      setCopilotRequestInProgress(true);
+          ];
+      if (!hideInChat) {
+        setChatMessages(newList);
+        setCopilotRequestInProgress(true);
+      }
 
       const contents: IChatMessageContent[] = [];
 
@@ -2547,8 +2555,13 @@ function SidebarComponent(props: any) {
               });
             }
           } else if (response.type === BackendMessageType.StreamEnd) {
-            setCopilotRequestInProgress(false);
+            if (!hideInChat) {
+              setCopilotRequestInProgress(false);
+            }
             emitProgress(false);
+          }
+          if (hideInChat) {
+            return;
           }
           const messageId = UUID.uuid4();
           setChatMessages([
