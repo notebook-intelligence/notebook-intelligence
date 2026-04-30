@@ -153,6 +153,10 @@ export class NBIConfig {
     return this.capabilities.chat_model;
   }
 
+  get chatModelSupportsVision(): boolean {
+    return this.capabilities.chat_model_supports_vision === true;
+  }
+
   get inlineCompletionModel(): any {
     return this.capabilities.inline_completion_model;
   }
@@ -214,6 +218,28 @@ export class NBIConfig {
 
   get chatFeedbackEnabled(): boolean {
     return this.capabilities.chat_feedback_enabled === true;
+  }
+
+  get cellOutputFeatures(): {
+    explain_error: { enabled: boolean; locked: boolean };
+    output_followup: { enabled: boolean; locked: boolean };
+    output_toolbar: { enabled: boolean; locked: boolean };
+  } {
+    const v = this.capabilities.cell_output_features ?? {};
+    return {
+      explain_error: {
+        enabled: v.explain_error?.enabled !== false,
+        locked: v.explain_error?.locked === true
+      },
+      output_followup: {
+        enabled: v.output_followup?.enabled !== false,
+        locked: v.output_followup?.locked === true
+      },
+      output_toolbar: {
+        enabled: v.output_toolbar?.enabled !== false,
+        locked: v.output_toolbar?.locked === true
+      }
+    };
   }
 
   capabilities: any = {};

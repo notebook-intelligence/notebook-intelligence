@@ -20,9 +20,17 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 import tornado
 from tornado import websocket
-from traitlets import Bool, Int, List, Unicode
+from traitlets import Bool, Enum as TraitletEnum, Int, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
+from notebook_intelligence.cell_output import coerce_payload as _coerce_output_context, format_output_context as _format_output_context
+from notebook_intelligence.feature_flags import (
+    POLICY_FORCE_OFF,
+    POLICY_FORCE_ON,
+    POLICY_USER_CHOICE,
+    VALID_POLICIES,
+    resolve_feature_flag,
+)
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
 from notebook_intelligence.claude_sessions import list_sessions as list_claude_sessions
 import notebook_intelligence.github_copilot as github_copilot
@@ -35,6 +43,10 @@ ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
+
+
+def _token_count(text: str) -> int:
+    return len(tiktoken_encoding.encode(text))
 
 
 def _truncate_context_content(content: str, token_budget: int) -> str:
@@ -73,12 +85,72 @@ def _build_additional_context_message(
 
     return message
 
+def _build_cell_output_features_response(
+    explain_error_policy: str,
+    output_followup_policy: str,
+    output_toolbar_policy: str,
+    nbi_config,
+) -> dict:
+    explain_enabled, explain_locked = resolve_feature_flag(
+        explain_error_policy, nbi_config.enable_explain_error
+    )
+    followup_enabled, followup_locked = resolve_feature_flag(
+        output_followup_policy, nbi_config.enable_output_followup
+    )
+    toolbar_enabled, toolbar_locked = resolve_feature_flag(
+        output_toolbar_policy, nbi_config.enable_output_toolbar
+    )
+    return {
+        "explain_error": {"enabled": explain_enabled, "locked": explain_locked},
+        "output_followup": {
+            "enabled": followup_enabled,
+            "locked": followup_locked,
+        },
+        "output_toolbar": {
+            "enabled": toolbar_enabled,
+            "locked": toolbar_locked,
+        },
+    }
+
+
+def _resolve_supports_vision(ai_service_manager) -> bool:
+    """Whether the active chat model can render images.
+
+    In Claude Code mode the active model is Claude (always vision-capable),
+    not ``ai_service_manager.chat_model`` (which still reflects the user's
+    most recent non-Claude selection). Fall through to the regular chat
+    model's capability otherwise.
+    """
+    if ai_service_manager.is_claude_code_mode:
+        return True
+    chat_model = ai_service_manager.chat_model
+    return chat_model.supports_vision if chat_model is not None else False
+
+
+def _resolve_policy_with_env(env_var_name: str, traitlet_value: str) -> str:
+    """Resolve a feature policy: env var wins if valid, else traitlet."""
+    env_value = os.environ.get(env_var_name, "").strip()
+    if env_value:
+        if env_value in VALID_POLICIES:
+            return env_value
+        log.warning(
+            "Ignoring %s=%r: must be one of %s",
+            env_var_name,
+            env_value,
+            ", ".join(VALID_POLICIES),
+        )
+    return traitlet_value
+
+
 class GetCapabilitiesHandler(APIHandler):
     disabled_tools = []
     allow_enabling_tools_with_env = False
     disabled_providers = []
     allow_enabling_providers_with_env = False
     enable_chat_feedback = False
+    explain_error_policy = POLICY_USER_CHOICE
+    output_followup_policy = POLICY_USER_CHOICE
+    output_toolbar_policy = POLICY_USER_CHOICE
 
     @tornado.web.authenticated
     def get(self):
@@ -141,6 +213,9 @@ class GetCapabilitiesHandler(APIHandler):
             "inline_completion_models": ai_service_manager.inline_completion_model_ids,
             "embedding_models": ai_service_manager.embedding_model_ids,
             "chat_model": nbi_config.chat_model,
+            "chat_model_supports_vision": _resolve_supports_vision(
+                ai_service_manager
+            ),
             "inline_completion_model": nbi_config.inline_completion_model,
             "embedding_model": nbi_config.embedding_model,
             "chat_participants": [],
@@ -155,7 +230,13 @@ class GetCapabilitiesHandler(APIHandler):
             "claude_settings": nbi_config.claude_settings,
             "claude_models": ai_service_manager.claude_models,
             "default_chat_mode": nbi_config.default_chat_mode,
-            "chat_feedback_enabled": self.enable_chat_feedback
+            "chat_feedback_enabled": self.enable_chat_feedback,
+            "cell_output_features": _build_cell_output_features_response(
+                self.explain_error_policy,
+                self.output_followup_policy,
+                self.output_toolbar_policy,
+                nbi_config,
+            )
         }
         for participant_id in ai_service_manager.chat_participants:
             participant = ai_service_manager.chat_participants[participant_id]
@@ -172,13 +253,37 @@ class GetCapabilitiesHandler(APIHandler):
         self.finish(json.dumps(response))
 
 class ConfigHandler(APIHandler):
+    explain_error_policy = POLICY_USER_CHOICE
+    output_followup_policy = POLICY_USER_CHOICE
+    output_toolbar_policy = POLICY_USER_CHOICE
+
     @tornado.web.authenticated
     def post(self):
         data = json.loads(self.request.body)
-        valid_keys = set(["default_chat_mode", "chat_model", "inline_completion_model", "store_github_access_token", "inline_completion_debouncer_delay", "mcp_server_settings", "claude_settings"])
+        valid_keys = set([
+            "default_chat_mode",
+            "chat_model",
+            "inline_completion_model",
+            "store_github_access_token",
+            "inline_completion_debouncer_delay",
+            "mcp_server_settings",
+            "claude_settings",
+            "enable_explain_error",
+            "enable_output_followup",
+            "enable_output_toolbar",
+        ])
+        locked_keys = set()
+        if self.explain_error_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
+            locked_keys.add("enable_explain_error")
+        if self.output_followup_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
+            locked_keys.add("enable_output_followup")
+        if self.output_toolbar_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
+            locked_keys.add("enable_output_toolbar")
         has_model_change = "chat_model" in data or "inline_completion_model" in data
         has_claude_settings_change = False
         for key in data:
+            if key in locked_keys:
+                continue
             if key in valid_keys:
                 ai_service_manager.nbi_config.set(key, data[key])
                 if key == "store_github_access_token":
@@ -1013,6 +1118,12 @@ class MessageCallbackHandlers:
     cancel_token: CancelTokenImpl
 
 class WebsocketCopilotHandler(websocket.WebSocketHandler):
+    # Cap WS message size at 4 MiB. Largest legitimate payload is a chat
+    # request with ~10 attached output-context items (each capped at 1 MiB
+    # by `coerce_payload`) + chat history; 4 MiB covers that without
+    # leaving the default 10 MiB headroom for memory amplification.
+    max_message_size = 4 * 1024 * 1024
+
     def __init__(self, application, request, context_factory=None, **kwargs):
         super().__init__(application, request, **kwargs)
         # TODO: cleanup
@@ -1061,6 +1172,36 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
             remaining_token_budget = int(0.8 * token_limit)
 
             for context in additionalContext:
+                if remaining_token_budget <= 0:
+                    break
+
+                output_context = _coerce_output_context(context.get("outputContext"))
+                if output_context is not None:
+                    # Estimate cost without re-encoding the whole formatted
+                    # message: per-bundle token counts are precomputed by the
+                    # client (and capped by `coerce_payload`'s size limits);
+                    # `cellSource` we count once. ~50-token allowance for the
+                    # wrapper text is comfortably above the actual envelope.
+                    bundle_tokens = sum(
+                        b.get("sizeTokens", 0)
+                        for b in output_context.get("mimeBundles", [])
+                    )
+                    cell_source = output_context.get("cellSource", "")
+                    cell_source_tokens = _token_count(cell_source) if cell_source else 0
+                    estimated_tokens = bundle_tokens + cell_source_tokens + 50
+                    if estimated_tokens > remaining_token_budget:
+                        log.info(
+                            "Skipping output context: estimated %d tokens exceeds remaining budget %d",
+                            estimated_tokens,
+                            remaining_token_budget,
+                        )
+                        continue
+                    supports_vision = _resolve_supports_vision(ai_service_manager)
+                    context_message = _format_output_context(output_context, supports_vision=supports_vision)
+                    remaining_token_budget -= estimated_tokens
+                    chat_history.append({"role": "user", "content": context_message})
+                    continue
+
                 is_upload = context.get("isUpload", False)
                 file_path = context["filePath"]
                 if not is_upload:
@@ -1100,9 +1241,7 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                         context_content=context_content,
                         current_cell_context=current_cell_context
                     )
-                remaining_token_budget -= len(
-                    tiktoken_encoding.encode(context_message)
-                )
+                remaining_token_budget -= _token_count(context_message)
                 chat_history.append({"role": "user", "content": context_message})
 
             chat_history.append({"role": "user", "content": prompt})
@@ -1280,6 +1419,41 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    explain_error_policy = TraitletEnum(
+        list(VALID_POLICIES),
+        default_value=POLICY_USER_CHOICE,
+        help="""
+        Org-wide policy for the inline error-explanation feature on failed
+        cells. "user-choice" (default) lets users toggle the feature in the
+        Settings panel. "force-on" locks it enabled, "force-off" locks it
+        disabled. Overridden by the NBI_EXPLAIN_ERROR_POLICY env var.
+        """,
+        config=True,
+    )
+
+    output_followup_policy = TraitletEnum(
+        list(VALID_POLICIES),
+        default_value=POLICY_USER_CHOICE,
+        help="""
+        Org-wide policy for the "Ask about this output" affordance on cell
+        outputs. Same semantics as explain_error_policy. Overridden by the
+        NBI_OUTPUT_FOLLOWUP_POLICY env var.
+        """,
+        config=True,
+    )
+
+    output_toolbar_policy = TraitletEnum(
+        list(VALID_POLICIES),
+        default_value=POLICY_USER_CHOICE,
+        help="""
+        Org-wide policy for the hover toolbar over cell outputs that
+        surfaces Explain / Ask / Troubleshoot buttons. Same semantics as
+        explain_error_policy. Overridden by the NBI_OUTPUT_TOOLBAR_POLICY
+        env var.
+        """,
+        config=True,
+    )
+
     skills_manifest = Unicode(
         default_value="",
         help="""
@@ -1389,6 +1563,18 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.disabled_providers = self.disabled_providers
         GetCapabilitiesHandler.allow_enabling_providers_with_env = self.allow_enabling_providers_with_env
         GetCapabilitiesHandler.enable_chat_feedback = self.enable_chat_feedback
+        GetCapabilitiesHandler.explain_error_policy = _resolve_policy_with_env(
+            "NBI_EXPLAIN_ERROR_POLICY", self.explain_error_policy
+        )
+        GetCapabilitiesHandler.output_followup_policy = _resolve_policy_with_env(
+            "NBI_OUTPUT_FOLLOWUP_POLICY", self.output_followup_policy
+        )
+        GetCapabilitiesHandler.output_toolbar_policy = _resolve_policy_with_env(
+            "NBI_OUTPUT_TOOLBAR_POLICY", self.output_toolbar_policy
+        )
+        ConfigHandler.explain_error_policy = GetCapabilitiesHandler.explain_error_policy
+        ConfigHandler.output_followup_policy = GetCapabilitiesHandler.output_followup_policy
+        ConfigHandler.output_toolbar_policy = GetCapabilitiesHandler.output_toolbar_policy
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),

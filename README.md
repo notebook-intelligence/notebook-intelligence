@@ -125,6 +125,34 @@ These config files store provider, model, and MCP configuration. **API keys for 
 
 > Manual edits to `config.json` require a JupyterLab restart to take effect. Edits via the Settings dialog are picked up live.
 
+### Cell output features
+
+Two cell-output context affordances are user-toggleable in the Settings panel:
+
+- **Troubleshoot errors in output** — a context-menu entry on failed cells that sends the traceback + failing code to the chat model.
+- **Ask about this output** — a context-menu entry on cell outputs that attaches `{cell code, output payload}` to the chat sidebar as grounded context.
+
+Per-user preferences (default on):
+
+```python
+c.NBIConfig.enable_explain_error = True
+c.NBIConfig.enable_output_followup = True
+```
+
+Org-wide policy traitlets (override the user preference when set to `force-on` or `force-off`):
+
+```python
+c.NotebookIntelligence.explain_error_policy = "user-choice"   # default
+c.NotebookIntelligence.output_followup_policy = "user-choice"
+```
+
+Equivalent environment-variable overrides:
+
+- `NBI_EXPLAIN_ERROR_POLICY` — `user-choice` | `force-on` | `force-off`
+- `NBI_OUTPUT_FOLLOWUP_POLICY` — `user-choice` | `force-on` | `force-off`
+
+When a policy is `force-on` / `force-off`, the corresponding Settings panel checkbox is greyed out with a "Locked by your administrator" tooltip and any client-side write is ignored.
+
 ### Remembering GitHub Copilot login
 
 NBI can remember your GitHub Copilot login so you don't have to sign in again after a JupyterLab or system restart.

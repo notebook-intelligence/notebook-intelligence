@@ -80,6 +80,8 @@
     },
     "devDependencies": {
         "@jupyterlab/builder": "^4.0.0",
+        "@testing-library/jest-dom": "^6.4.0",
+        "@testing-library/react": "^14.2.0",
         "@types/jest": "^29.5.12",
         "@types/json-schema": "^7.0.11",
         "@types/react": "^18.0.26",

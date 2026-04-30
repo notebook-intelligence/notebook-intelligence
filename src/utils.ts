@@ -101,6 +101,14 @@ export function markdownToComment(source: string): string {
     .join('\n');
 }
 
+export function formatJupyterError(output: any): string {
+  const head = `${output.ename ?? 'Error'}: ${output.evalue ?? ''}`.trim();
+  const tb = Array.isArray(output.traceback)
+    ? output.traceback.map((line: string) => removeAnsiChars(line)).join('\n')
+    : '';
+  return tb ? `${head}\n${tb}` : head;
+}
+
 export function cellOutputAsText(cell: CodeCell): string {
   let content = '';
   const outputs = cell.outputArea.model.toJSON();
@@ -113,12 +121,10 @@ export function cellOutputAsText(cell: CodeCell): string {
     } else if (output.output_type === 'stream') {
       content += output.text + '\n';
     } else if (output.output_type === 'error') {
+      // Preserve the existing behavior of skipping errors without a
+      // traceback array; the bundle formatter does include the head alone.
       if (Array.isArray(output.traceback)) {
-        content += output.ename + ': ' + output.evalue + '\n';
-        content +=
-          output.traceback
-            .map(item => removeAnsiChars(item as string))
-            .join('\n') + '\n';
+        content += formatJupyterError(output) + '\n';
       }
     }
   }
@@ -129,6 +135,25 @@ export function cellOutputAsText(cell: CodeCell): string {
 export function getTokenCount(source: string): number {
   const tokens = tiktoken_encoding.encode(source);
   return tokens.length;
+}
+
+// Encode once, slice the token array, decode back. Avoids the O(log n)
+// re-encoding a binary search would do on every truncation.
+export function truncateToTokenCount(
+  text: string,
+  maxTokens: number
+): { text: string; size: number } {
+  if (maxTokens <= 0 || text.length === 0) {
+    return { text: '', size: 0 };
+  }
+  const tokens = tiktoken_encoding.encode(text);
+  if (tokens.length <= maxTokens) {
+    return { text, size: tokens.length };
+  }
+  const sliced = tokens.slice(0, maxTokens);
+  const bytes = tiktoken_encoding.decode(sliced);
+  const decoded = new TextDecoder('utf-8').decode(bytes);
+  return { text: decoded, size: sliced.length };
 }
 
 export function compareSelectionPoints(

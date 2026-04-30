@@ -51,6 +51,7 @@ import {
   RunChatCompletionType
 } from './chat-sidebar';
 import { NBIAPI, GitHubCopilotLoginStatus } from './api';
+import { CellOutputHoverToolbar } from './cell-output-toolbar';
 import {
   BackendMessageType,
   GITHUB_COPILOT_PROVIDER_ID,
@@ -80,6 +81,7 @@ import {
   markdownToComment,
   waitForDuration
 } from './utils';
+import { cellOutputAsContextBundle } from './cell-output-bundle';
 import { UUID } from '@lumino/coreutils';
 
 import * as path from 'path';
@@ -107,6 +109,8 @@ namespace CommandIDs {
     'notebook-intelligence:editor-explain-this-output';
   export const editorTroubleshootThisOutput =
     'notebook-intelligence:editor-troubleshoot-this-output';
+  export const editorAskAboutThisOutput =
+    'notebook-intelligence:editor-ask-about-this-output';
   export const openGitHubCopilotLoginDialog =
     'notebook-intelligence:open-github-copilot-login-dialog';
   export const openConfigurationDialog =
@@ -1776,103 +1780,103 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       label: 'Fix code',
       isEnabled: () => isChatEnabled() && isActiveCellCodeCell()
     });
-    copilotMenuCommands.addCommand(CommandIDs.editorExplainThisOutput, {
-      execute: () => {
-        const np = app.shell.currentWidget as NotebookPanel;
-        const activeCell = np.content.activeCell;
-        if (!(activeCell instanceof CodeCell)) {
-          return;
-        }
-        const content = cellOutputAsText(activeCell as CodeCell);
-        document.dispatchEvent(
-          new CustomEvent('copilotSidebar:runPrompt', {
-            detail: {
-              type: RunChatCompletionType.ExplainThisOutput,
-              content,
-              language: ActiveDocumentWatcher.activeDocumentInfo.language,
-              filename: ActiveDocumentWatcher.activeDocumentInfo.filename
-            }
-          })
-        );
+    type OutputContextFlag = 'explain_error' | 'output_followup';
+    const registerOutputContextCommand = (opts: {
+      commandId: string;
+      label: string;
+      telemetryType: TelemetryEventType;
+      autoSubmitPrompt?: string;
+      featureFlag?: OutputContextFlag;
+      requireError?: boolean;
+    }) => {
+      const isFlagOn = () =>
+        !opts.featureFlag ||
+        NBIAPI.config.cellOutputFeatures[opts.featureFlag].enabled;
 
-        app.commands.execute('tabsmenu:activate-by-id', { id: panel.id });
-
-        telemetryEmitter.emitTelemetryEvent({
-          type: TelemetryEventType.ExplainThisOutputRequest,
-          data: {
-            chatModel: {
-              provider: NBIAPI.config.chatModel.provider,
-              model: NBIAPI.config.chatModel.model
-            }
+      copilotMenuCommands.addCommand(opts.commandId, {
+        execute: () => {
+          const np = app.shell.currentWidget as NotebookPanel;
+          const activeCell = np.content.activeCell;
+          if (!(activeCell instanceof CodeCell)) {
+            return;
           }
-        });
-      },
+          const outputContext = cellOutputAsContextBundle(
+            activeCell as CodeCell,
+            { supportsVision: NBIAPI.config.chatModelSupportsVision }
+          );
+          document.dispatchEvent(
+            new CustomEvent('copilotSidebar:addOutputContext', {
+              detail: {
+                outputContext,
+                cellIndex: np.content.activeCellIndex,
+                notebookFilename: np.sessionContext.name,
+                cellId: activeCell.model.id,
+                autoSubmitPrompt: opts.autoSubmitPrompt
+              }
+            })
+          );
+          app.commands.execute('tabsmenu:activate-by-id', { id: panel.id });
+          telemetryEmitter.emitTelemetryEvent({
+            type: opts.telemetryType,
+            data: {
+              chatModel: {
+                provider: NBIAPI.config.chatModel.provider,
+                model: NBIAPI.config.chatModel.model
+              }
+            }
+          });
+        },
+        label: opts.label,
+        isEnabled: () => {
+          if (
+            !(
+              isChatEnabled() &&
+              app.shell.currentWidget instanceof NotebookPanel
+            )
+          ) {
+            return false;
+          }
+          if (!isFlagOn()) {
+            return false;
+          }
+          const np = app.shell.currentWidget as NotebookPanel;
+          const activeCell = np.content.activeCell;
+          if (!(activeCell instanceof CodeCell)) {
+            return false;
+          }
+          const outputs = activeCell.outputArea.model.toJSON();
+          if (!Array.isArray(outputs) || outputs.length === 0) {
+            return false;
+          }
+          if (opts.requireError) {
+            return outputs.some(o => o.output_type === 'error');
+          }
+          return true;
+        },
+        isVisible: opts.featureFlag ? isFlagOn : undefined
+      });
+    };
+
+    registerOutputContextCommand({
+      commandId: CommandIDs.editorExplainThisOutput,
       label: 'Explain output',
-      isEnabled: () => {
-        if (
-          !(isChatEnabled() && app.shell.currentWidget instanceof NotebookPanel)
-        ) {
-          return false;
-        }
-        const np = app.shell.currentWidget as NotebookPanel;
-        const activeCell = np.content.activeCell;
-        if (!(activeCell instanceof CodeCell)) {
-          return false;
-        }
-        const outputs = activeCell.outputArea.model.toJSON();
-        return Array.isArray(outputs) && outputs.length > 0;
-      }
+      telemetryType: TelemetryEventType.ExplainThisOutputRequest,
+      autoSubmitPrompt: "Explain this cell's output.",
+      featureFlag: 'output_followup'
     });
-    copilotMenuCommands.addCommand(CommandIDs.editorTroubleshootThisOutput, {
-      execute: () => {
-        const np = app.shell.currentWidget as NotebookPanel;
-        const activeCell = np.content.activeCell;
-        if (!(activeCell instanceof CodeCell)) {
-          return;
-        }
-        const content = cellOutputAsText(activeCell as CodeCell);
-        document.dispatchEvent(
-          new CustomEvent('copilotSidebar:runPrompt', {
-            detail: {
-              type: RunChatCompletionType.TroubleshootThisOutput,
-              content,
-              language: ActiveDocumentWatcher.activeDocumentInfo.language,
-              filename: ActiveDocumentWatcher.activeDocumentInfo.filename
-            }
-          })
-        );
-
-        app.commands.execute('tabsmenu:activate-by-id', { id: panel.id });
-
-        telemetryEmitter.emitTelemetryEvent({
-          type: TelemetryEventType.TroubleshootThisOutputRequest,
-          data: {
-            chatModel: {
-              provider: NBIAPI.config.chatModel.provider,
-              model: NBIAPI.config.chatModel.model
-            }
-          }
-        });
-      },
+    registerOutputContextCommand({
+      commandId: CommandIDs.editorAskAboutThisOutput,
+      label: 'Ask about this output',
+      telemetryType: TelemetryEventType.OutputFollowUpRequest,
+      featureFlag: 'output_followup'
+    });
+    registerOutputContextCommand({
+      commandId: CommandIDs.editorTroubleshootThisOutput,
       label: 'Troubleshoot errors in output',
-      isEnabled: () => {
-        if (
-          !(isChatEnabled() && app.shell.currentWidget instanceof NotebookPanel)
-        ) {
-          return false;
-        }
-        const np = app.shell.currentWidget as NotebookPanel;
-        const activeCell = np.content.activeCell;
-        if (!(activeCell instanceof CodeCell)) {
-          return false;
-        }
-        const outputs = activeCell.outputArea.model.toJSON();
-        return (
-          Array.isArray(outputs) &&
-          outputs.length > 0 &&
-          outputs.some(output => output.output_type === 'error')
-        );
-      }
+      telemetryType: TelemetryEventType.TroubleshootThisOutputRequest,
+      autoSubmitPrompt: "Troubleshoot the error in this cell's output.",
+      featureFlag: 'explain_error',
+      requireError: true
     });
 
     const copilotContextMenu = new Menu({ commands: copilotMenuCommands });
@@ -1883,6 +1887,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorFixThisCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisOutput });
+    copilotContextMenu.addItem({
+      command: CommandIDs.editorAskAboutThisOutput
+    });
     copilotContextMenu.addItem({
       command: CommandIDs.editorTroubleshootThisOutput
     });
@@ -1900,6 +1907,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       selector: '.jp-OutputArea-child',
       rank: 1
     });
+
+    new CellOutputHoverToolbar(app, copilotMenuCommands);
 
     if (statusBar) {
       const githubCopilotStatusBarItem = new GitHubCopilotStatusBarItem({

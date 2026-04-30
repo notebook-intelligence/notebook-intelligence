@@ -139,6 +139,21 @@ class NBIConfig:
         return self.get('rules_enabled', True)
 
     @property
+    def enable_explain_error(self) -> bool:
+        """User preference for the inline error-explanation pill (default on)."""
+        return bool(self.get('enable_explain_error', True))
+
+    @property
+    def enable_output_followup(self) -> bool:
+        """User preference for the cell output follow-up affordance (default on)."""
+        return bool(self.get('enable_output_followup', True))
+
+    @property
+    def enable_output_toolbar(self) -> bool:
+        """User preference for the hover toolbar over cell outputs (default on)."""
+        return bool(self.get('enable_output_toolbar', True))
+
+    @property
     def rules_directory(self) -> str:
         """Get the rules directory path."""
         return os.path.join(self.nbi_user_dir, 'rules')
