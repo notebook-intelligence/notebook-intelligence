@@ -296,9 +296,14 @@ class ClaudeCodeClient():
         self._status = ClaudeAgentClientStatus.NotConnected
         self._server_info: dict[str, Any] | None = None
         self._server_info_lock = threading.Lock()
+        self._connect_lock = threading.Lock()
         self._reconnect_required = False
         self._continue_conversation: bool | None = None
-        self.connect()
+        # Connect on a background thread so JupyterLab's startup path isn't
+        # blocked by the synchronous SDK handshake (#163). Callers that need
+        # to wait for readiness (e.g. _ensure_connected from a chat request)
+        # still call connect() directly and get the blocking behavior.
+        self.connect_in_background()
 
     @property
     def client_options(self) -> ClaudeAgentOptions:
@@ -349,39 +354,78 @@ class ClaudeCodeClient():
             asyncio.set_event_loop(None)
             loop.close()
 
-    def connect(self):
+    def _start_worker_thread(self) -> bool:
+        """Spawn the worker thread without waiting for the handshake to resolve.
+
+        Returns True if a thread was started (or was already running), False if
+        spawning raised. Must be called with ``_connect_lock`` held to prevent
+        two callers from racing and double-spawning the worker.
+        """
         if self.is_connected():
-            return
+            return True
 
         self._set_status(ClaudeAgentClientStatus.Connecting)
 
         self._reconnect_required = False
         self._client_queue = Queue()
-        self._client_thread_signal: SignalImpl = SignalImpl()
+        self._client_thread_signal = SignalImpl()
         self._connect_resolved.clear()
         try:
-            self._client_thread = threading.Thread(
+            thread = threading.Thread(
                 name="Claude Agent Client Thread",
                 target=self._run_client_thread,
                 daemon=True,
                 args=(self._client_thread_func(),),
             )
-            self._client_thread.start()
-            # Block until the worker has either finished the SDK handshake or
-            # failed — otherwise callers that check is_connected() afterwards
-            # see a momentarily-alive thread that's about to die on spawn
-            # failure, and never reach the "not connected" error branch (#147).
-            if not self._connect_resolved.wait(timeout=CLAUDE_AGENT_CONNECT_TIMEOUT):
-                log.warning(
-                    f"Claude agent did not reach a terminal connect state within "
-                    f"{CLAUDE_AGENT_CONNECT_TIMEOUT}s"
-                )
-            if self.is_connected():
-                self._update_server_info_async()
+            thread.start()
+            # Only publish the thread after start() succeeds so observers
+            # (including test cleanup) never see an un-started Thread object.
+            self._client_thread = thread
+            return True
         except Exception as e:
             self._client_thread = None
             log.error(f"Error occurred while connecting to Claude agent client: {str(e)}")
             self._set_status(ClaudeAgentClientStatus.FailedToConnect)
+            self._connect_resolved.set()
+            return False
+
+    def connect(self):
+        # Serialise concurrent connects so a chat handler hitting
+        # _ensure_connected() while the background __init__ connect is still
+        # in flight doesn't double-spawn the worker thread.
+        with self._connect_lock:
+            if self.is_connected() and self._connect_resolved.is_set():
+                return
+            started = self._start_worker_thread()
+        if not started:
+            return
+        # Block until the worker has either finished the SDK handshake or
+        # failed — otherwise callers that check is_connected() afterwards
+        # see a momentarily-alive thread that's about to die on spawn
+        # failure, and never reach the "not connected" error branch (#147).
+        if not self._connect_resolved.wait(timeout=CLAUDE_AGENT_CONNECT_TIMEOUT):
+            log.warning(
+                f"Claude agent did not reach a terminal connect state within "
+                f"{CLAUDE_AGENT_CONNECT_TIMEOUT}s"
+            )
+        if self.is_connected():
+            self._update_server_info_async()
+
+    def connect_in_background(self):
+        """Kick off ``connect()`` on a daemon thread and return immediately.
+
+        Used from ``__init__`` so JupyterLab's server startup isn't blocked by
+        the SDK handshake (#163). The status reflects ``Connecting`` until the
+        background thread resolves, and any caller that needs the synchronous
+        guarantee can call ``connect()`` directly — the lock makes them wait
+        for the in-flight handshake instead of double-spawning.
+        """
+        thread = threading.Thread(
+            name="Claude Agent Connect Thread",
+            target=self.connect,
+            daemon=True,
+        )
+        thread.start()
 
     def disconnect(self):
         if not self.is_connected():

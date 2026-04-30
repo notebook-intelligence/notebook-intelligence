@@ -43,6 +43,7 @@ def _make_client():
     client._status = ClaudeAgentClientStatus.NotConnected
     client._server_info = None
     client._server_info_lock = threading.Lock()
+    client._connect_lock = threading.Lock()
     client._reconnect_required = False
     client._continue_conversation = None
     return client
@@ -394,6 +395,161 @@ class TestConnectWaitsForReadiness:
 
         assert "not connected" in result
         assert "server log" in result
+
+
+class TestConnectInBackground:
+    """``__init__`` must return promptly even when the SDK handshake is slow,
+    so JupyterLab's server startup isn't blocked for the
+    ``CLAUDE_AGENT_CONNECT_TIMEOUT`` window (#163). The synchronous
+    ``connect()`` is preserved for chat-request callers that need readiness
+    state before issuing a query.
+    """
+
+    def test_connect_in_background_returns_immediately_when_worker_slow(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 5
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        stop_worker = threading.Event()
+
+        async def slow_worker():
+            # Worker takes 0.3s to "handshake" — far longer than the budget
+            # we'd accept on the JupyterLab startup path.
+            await asyncio.sleep(0.3)
+            client._status = ClaudeAgentClientStatus.Connected
+            client._connect_resolved.set()
+            while not stop_worker.is_set():
+                await asyncio.sleep(0.01)
+
+        client._client_thread_func = slow_worker
+
+        try:
+            start = time.monotonic()
+            client.connect_in_background()
+            elapsed = time.monotonic() - start
+            # The connect dispatch should return well under the worker's own
+            # delay. 100ms is generous for a thread-spawn and lock-acquire.
+            assert elapsed < 0.1, (
+                f"connect_in_background blocked for {elapsed:.3f}s; expected "
+                f"non-blocking dispatch"
+            )
+        finally:
+            stop_worker.set()
+            if client._client_thread is not None:
+                client._client_thread.join(timeout=1)
+
+    def test_init_returns_quickly_even_when_handshake_hangs(self, monkeypatch):
+        """End-to-end of the #163 fix: constructing a ``ClaudeCodeClient`` no
+        longer blocks the caller for the full connect timeout when the
+        worker takes longer than expected."""
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 5
+        )
+
+        # Replace the worker entrypoint with a slow stub before constructing
+        # the client. _start_worker_thread reads
+        # ``self._client_thread_func`` lazily via ``self._client_thread_func()``,
+        # so monkey-patching the bound name on the instance is enough.
+        original_init = ClaudeCodeClient.__init__
+        slow_func_holders = {}
+
+        def patched_init(self, host, options):
+            stop = threading.Event()
+            slow_func_holders[id(self)] = stop
+
+            async def slow():
+                # Check the stop flag frequently so cleanup doesn't have to
+                # wait the full 2-second handshake delay.
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline and not stop.is_set():
+                    await asyncio.sleep(0.05)
+                while not stop.is_set():
+                    await asyncio.sleep(0.05)
+
+            # Stub out the bits that touch real infrastructure.
+            self._client_thread_func = slow
+            original_init(self, host, options)
+
+        monkeypatch.setattr(ClaudeCodeClient, "__init__", patched_init)
+
+        host = MagicMock()
+        host.websocket_connector = None
+        options = MagicMock()
+
+        start = time.monotonic()
+        client = ClaudeCodeClient(host, options)
+        elapsed = time.monotonic() - start
+
+        try:
+            # 500ms is the budget called out in the issue: well under the
+            # 15s default timeout, generous enough to absorb thread-start
+            # overhead on a loaded CI runner.
+            assert elapsed < 0.5, (
+                f"__init__ blocked for {elapsed:.3f}s; should dispatch the "
+                f"handshake to a background thread"
+            )
+            # Status reflects the in-flight connect, not a completed one.
+            assert client._status in (
+                ClaudeAgentClientStatus.Connecting,
+                ClaudeAgentClientStatus.NotConnected,
+            )
+        finally:
+            stop = slow_func_holders.get(id(client))
+            if stop is not None:
+                stop.set()
+            # Give the background connect dispatcher a beat to finish spawning
+            # the worker before we try to join it.
+            for _ in range(50):
+                if client._client_thread is not None:
+                    break
+                time.sleep(0.05)
+            if client._client_thread is not None:
+                client._client_thread.join(timeout=5)
+
+    def test_concurrent_connect_does_not_double_spawn(self, monkeypatch):
+        """If a chat handler hits ``_ensure_connected()`` while the background
+        ``__init__`` connect is mid-handshake, the lock must serialise them
+        so we don't end up with two worker threads racing on ``self._client``.
+        """
+        monkeypatch.setattr(
+            "notebook_intelligence.claude.CLAUDE_AGENT_CONNECT_TIMEOUT", 5
+        )
+        client = _make_client()
+        client._update_server_info_async = Mock()
+
+        spawn_count = {"n": 0}
+        stop_worker = threading.Event()
+
+        async def counting_worker():
+            spawn_count["n"] += 1
+            await asyncio.sleep(0.05)
+            client._status = ClaudeAgentClientStatus.Connected
+            client._connect_resolved.set()
+            while not stop_worker.is_set():
+                await asyncio.sleep(0.01)
+
+        client._client_thread_func = counting_worker
+
+        try:
+            t1 = threading.Thread(target=client.connect)
+            t2 = threading.Thread(target=client.connect)
+            t1.start()
+            t2.start()
+            t1.join(timeout=3)
+            t2.join(timeout=3)
+
+            assert spawn_count["n"] == 1, (
+                f"expected 1 worker thread, got {spawn_count['n']}"
+            )
+            assert client.is_connected()
+        finally:
+            stop_worker.set()
+            if client._client_thread is not None:
+                client._client_thread.join(timeout=1)
 
 
 class TestOtherCallersEnsureConnected:
