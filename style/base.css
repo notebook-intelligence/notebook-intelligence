@@ -2068,6 +2068,7 @@ svg.access-token-warning {
   list-style: none;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
 }
 
 .claude-session-picker-item {
