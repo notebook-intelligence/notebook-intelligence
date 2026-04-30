@@ -68,6 +68,10 @@ import claudeSvgStr from '../style/icons/claude.svg';
 import { AskUserQuestion } from './components/ask-user-question';
 import { ClaudeSessionPicker } from './components/claude-session-picker';
 import { IClaudeSessionInfo } from './api';
+import {
+  NOTEBOOK_GENERATION_PROGRESS_EVENT,
+  type INotebookGenerationProgressDetail
+} from './notebook-generation';
 
 export enum RunChatCompletionType {
   Chat,
@@ -75,7 +79,8 @@ export enum RunChatCompletionType {
   FixThis,
   GenerateCode,
   ExplainThisOutput,
-  TroubleshootThisOutput
+  TroubleshootThisOutput,
+  NotebookGeneration
 }
 
 export interface IRunChatCompletionRequest {
@@ -92,6 +97,9 @@ export interface IRunChatCompletionRequest {
   additionalContext?: IContextItem[];
   chatMode: string;
   toolSelections?: IToolSelections;
+  // Optional id used by external listeners (e.g. the notebook toolbar
+  // generation popover) to track progress when the chat sidebar is hidden.
+  externalRequestId?: string;
 }
 
 export interface IChatSidebarOptions {
@@ -918,6 +926,7 @@ async function submitCompletionRequest(
 ): Promise<any> {
   switch (request.type) {
     case RunChatCompletionType.Chat:
+    case RunChatCompletionType.NotebookGeneration:
       return NBIAPI.chatRequest(
         request.messageId,
         request.chatId,
@@ -2427,10 +2436,38 @@ function SidebarComponent(props: any) {
         case RunChatCompletionType.TroubleshootThisOutput:
           message = `Troubleshoot errors reported in the notebook cell output: \n\`\`\`\n${request.content}\n\`\`\`\n`;
           break;
+        case RunChatCompletionType.NotebookGeneration:
+          // The notebook-toolbar popover already prefixed the prompt; pass it
+          // through verbatim so the message displayed in chat matches what
+          // was sent to the backend.
+          message = request.content;
+          // Default to the user's preferred chat mode if the dispatcher did
+          // not set one explicitly.
+          if (!request.chatMode) {
+            request.chatMode = chatMode;
+          }
+          break;
       }
       const messageId = UUID.uuid4();
       request.messageId = messageId;
       request.content = message;
+      const externalRequestId = request.externalRequestId;
+      const emitProgress = (inProgress: boolean, error?: string) => {
+        if (!externalRequestId) {
+          return;
+        }
+        const detail: INotebookGenerationProgressDetail = {
+          requestId: externalRequestId,
+          inProgress
+        };
+        if (error) {
+          detail.error = error;
+        }
+        document.dispatchEvent(
+          new CustomEvent(NOTEBOOK_GENERATION_PROGRESS_EVENT, { detail })
+        );
+      };
+      emitProgress(true);
       const newList = [
         ...chatMessages,
         {
@@ -2511,6 +2548,7 @@ function SidebarComponent(props: any) {
             }
           } else if (response.type === BackendMessageType.StreamEnd) {
             setCopilotRequestInProgress(false);
+            emitProgress(false);
           }
           const messageId = UUID.uuid4();
           setChatMessages([
@@ -2529,7 +2567,7 @@ function SidebarComponent(props: any) {
         }
       });
     },
-    [chatMessages]
+    [chatMessages, chatMode]
   );
 
   useEffect(() => {

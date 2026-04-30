@@ -85,6 +85,7 @@ import { UUID } from '@lumino/coreutils';
 import * as path from 'path';
 import { SettingsPanel } from './components/settings-panel';
 import { ITerminalConnection } from '@jupyterlab/services/lib/terminal/terminal';
+import { NotebookGenerationToolbarExtension } from './notebook-generation-toolbar';
 
 namespace CommandIDs {
   export const chatuserInput = 'notebook-intelligence:chat-user-input';
@@ -775,6 +776,15 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     panel.addWidget(sidebar);
     app.shell.add(panel, 'left', { rank: 1000 });
     app.shell.activateById(panel.id);
+
+    app.docRegistry.addWidgetExtension(
+      'Notebook',
+      new NotebookGenerationToolbarExtension({
+        app,
+        icon: sparkleIcon,
+        chatSidebarId: panel.id
+      })
+    );
 
     const updateSidebarIcon = () => {
       if (NBIAPI.getChatEnabled()) {

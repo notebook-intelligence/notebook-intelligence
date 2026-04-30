@@ -2108,3 +2108,135 @@ svg.access-token-warning {
 .claude-session-picker-item-id {
   font-family: var(--jp-code-font-family);
 }
+
+/* Notebook generation toolbar button + popover */
+.nbi-notebook-generation-toolbar-button .jp-ToolbarButtonComponent {
+  background-color: transparent;
+}
+
+.nbi-notebook-generation-toolbar-button .jp-icon3[fill] {
+  fill: var(--jp-brand-color1);
+}
+
+.nbi-notebook-generation-popover-host {
+  display: block;
+  pointer-events: auto;
+}
+
+.notebook-generation-popover {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color1);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.notebook-generation-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 2px 6px;
+  background-color: var(--jp-layout-color2);
+  border-bottom: 1px solid var(--jp-border-color2);
+}
+
+.notebook-generation-popover-header-icon {
+  display: flex;
+  align-items: center;
+  color: var(--jp-brand-color1);
+}
+
+.notebook-generation-popover .notebook-generation-popover-header-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notebook-generation-popover-title {
+  font-weight: bold;
+  color: var(--jp-ui-font-color1);
+}
+
+.notebook-generation-popover-close-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  color: var(--jp-ui-font-color2);
+}
+
+.notebook-generation-popover-close-button:hover {
+  color: var(--jp-ui-font-color0);
+  background-color: var(--jp-layout-color3);
+  border-radius: 2px;
+}
+
+.notebook-generation-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.notebook-generation-popover-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--jp-layout-color0);
+  color: var(--jp-ui-font-color1);
+  border: 1px solid var(--jp-border-color1);
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
+  padding: 6px 8px;
+  outline: none;
+  resize: vertical;
+  min-height: 64px;
+}
+
+.notebook-generation-popover-input:focus {
+  border-color: var(--jp-brand-color1);
+}
+
+.notebook-generation-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.notebook-generation-popover-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: var(--jp-brand-color1);
+  color: white;
+  border: none;
+  border-radius: 2px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.notebook-generation-popover-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notebook-generation-popover .notebook-generation-popover-submit svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nbi-notebook-generation-status {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background-color: var(--jp-brand-color3);
+  color: var(--jp-brand-color0);
+  font-size: var(--jp-ui-font-size0);
+  white-space: nowrap;
+}
