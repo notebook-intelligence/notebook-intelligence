@@ -1,9 +1,16 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-import React, { KeyboardEvent, useEffect, useState } from 'react';
-import { VscClose, VscHistory } from 'react-icons/vsc';
+import React, {
+  KeyboardEvent,
+  MouseEvent,
+  useEffect,
+  useRef,
+  useState
+} from 'react';
+import { VscCheck, VscClose, VscCopy, VscHistory } from 'react-icons/vsc';
 
 import { IClaudeSessionInfo, NBIAPI } from '../api';
+import { writeTextToClipboard } from '../clipboard';
 
 export interface IClaudeSessionPickerProps {
   onResume: (session: IClaudeSessionInfo) => void;
@@ -28,6 +35,19 @@ export function ClaudeSessionPicker(
   const [loading, setLoading] = useState(true);
   const [resuming, setResuming] = useState(false);
   const [error, setError] = useState('');
+  const [copyFeedback, setCopyFeedback] = useState<{
+    sessionId: string;
+    status: 'copied' | 'failed';
+  } | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +70,26 @@ export function ClaudeSessionPicker(
       cancelled = true;
     };
   }, []);
+
+  const handleCopySessionId = async (
+    event: MouseEvent<HTMLButtonElement>,
+    session: IClaudeSessionInfo
+  ) => {
+    event.stopPropagation();
+    event.preventDefault();
+    const ok = await writeTextToClipboard(session.session_id);
+    setCopyFeedback({
+      sessionId: session.session_id,
+      status: ok ? 'copied' : 'failed'
+    });
+    if (copyTimerRef.current !== null) {
+      clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = setTimeout(() => {
+      setCopyFeedback(null);
+      copyTimerRef.current = null;
+    }, 1500);
+  };
 
   const handleResume = async (session: IClaudeSessionInfo) => {
     if (resuming) {
@@ -106,27 +146,50 @@ export function ClaudeSessionPicker(
           </div>
         ) : (
           <ul className="claude-session-picker-list">
-            {sessions.map(session => (
-              <li
-                key={session.session_id}
-                className={`claude-session-picker-item${resuming ? ' busy' : ''}`}
-                onClick={() => handleResume(session)}
-              >
-                <div className="claude-session-picker-item-preview">
-                  {session.preview || '(no preview available)'}
-                </div>
-                <div className="claude-session-picker-item-meta">
-                  <span>{formatTimestamp(session.modified_at)}</span>
-                  <span>&middot;</span>
-                  <span
-                    className="claude-session-picker-item-id"
-                    title={session.session_id}
-                  >
-                    {session.session_id.slice(0, 8)}
-                  </span>
-                </div>
-              </li>
-            ))}
+            {sessions.map(session => {
+              const feedback =
+                copyFeedback && copyFeedback.sessionId === session.session_id
+                  ? copyFeedback.status
+                  : null;
+              const buttonLabel =
+                feedback === 'copied'
+                  ? 'Session ID copied'
+                  : feedback === 'failed'
+                    ? 'Failed to copy session ID'
+                    : 'Copy session ID';
+              return (
+                <li
+                  key={session.session_id}
+                  className={`claude-session-picker-item${resuming ? ' busy' : ''}`}
+                  onClick={() => handleResume(session)}
+                >
+                  <div className="claude-session-picker-item-preview">
+                    {session.preview || '(no preview available)'}
+                  </div>
+                  <div className="claude-session-picker-item-meta">
+                    <span>{formatTimestamp(session.modified_at)}</span>
+                    <span>&middot;</span>
+                    <span
+                      className="claude-session-picker-item-id"
+                      title={session.session_id}
+                    >
+                      {session.session_id.slice(0, 8)}
+                    </span>
+                    <button
+                      type="button"
+                      className={`claude-session-picker-item-copy${
+                        feedback ? ` ${feedback}` : ''
+                      }`}
+                      title={buttonLabel}
+                      aria-label={buttonLabel}
+                      onClick={event => handleCopySessionId(event, session)}
+                    >
+                      {feedback === 'copied' ? <VscCheck /> : <VscCopy />}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
