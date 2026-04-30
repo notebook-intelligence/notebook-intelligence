@@ -2101,10 +2101,41 @@ svg.access-token-warning {
   color: var(--jp-ui-font-color2);
   font-size: var(--jp-ui-font-size0);
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
 
 .claude-session-picker-item-id {
   font-family: var(--jp-code-font-family);
+}
+
+.claude-session-picker-item-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--jp-ui-font-color2);
+  cursor: pointer;
+  padding: 2px 4px;
+  margin-left: 2px;
+  line-height: 1;
+}
+
+.claude-session-picker-item-copy:hover,
+.claude-session-picker-item-copy:focus-visible {
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  border-color: var(--jp-border-color2);
+  outline: none;
+}
+
+.claude-session-picker-item-copy.copied {
+  color: var(--jp-success-color1, var(--jp-ui-font-color1));
+}
+
+.claude-session-picker-item-copy.failed {
+  color: var(--jp-error-color1, var(--jp-ui-font-color1));
 }
