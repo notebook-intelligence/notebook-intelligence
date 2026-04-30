@@ -88,6 +88,7 @@ def _build_additional_context_message(
 def _build_cell_output_features_response(
     explain_error_policy: str,
     output_followup_policy: str,
+    output_toolbar_policy: str,
     nbi_config,
 ) -> dict:
     explain_enabled, explain_locked = resolve_feature_flag(
@@ -96,11 +97,18 @@ def _build_cell_output_features_response(
     followup_enabled, followup_locked = resolve_feature_flag(
         output_followup_policy, nbi_config.enable_output_followup
     )
+    toolbar_enabled, toolbar_locked = resolve_feature_flag(
+        output_toolbar_policy, nbi_config.enable_output_toolbar
+    )
     return {
         "explain_error": {"enabled": explain_enabled, "locked": explain_locked},
         "output_followup": {
             "enabled": followup_enabled,
             "locked": followup_locked,
+        },
+        "output_toolbar": {
+            "enabled": toolbar_enabled,
+            "locked": toolbar_locked,
         },
     }
 
@@ -142,6 +150,7 @@ class GetCapabilitiesHandler(APIHandler):
     enable_chat_feedback = False
     explain_error_policy = POLICY_USER_CHOICE
     output_followup_policy = POLICY_USER_CHOICE
+    output_toolbar_policy = POLICY_USER_CHOICE
 
     @tornado.web.authenticated
     def get(self):
@@ -225,6 +234,7 @@ class GetCapabilitiesHandler(APIHandler):
             "cell_output_features": _build_cell_output_features_response(
                 self.explain_error_policy,
                 self.output_followup_policy,
+                self.output_toolbar_policy,
                 nbi_config,
             )
         }
@@ -245,6 +255,7 @@ class GetCapabilitiesHandler(APIHandler):
 class ConfigHandler(APIHandler):
     explain_error_policy = POLICY_USER_CHOICE
     output_followup_policy = POLICY_USER_CHOICE
+    output_toolbar_policy = POLICY_USER_CHOICE
 
     @tornado.web.authenticated
     def post(self):
@@ -259,12 +270,15 @@ class ConfigHandler(APIHandler):
             "claude_settings",
             "enable_explain_error",
             "enable_output_followup",
+            "enable_output_toolbar",
         ])
         locked_keys = set()
         if self.explain_error_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
             locked_keys.add("enable_explain_error")
         if self.output_followup_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
             locked_keys.add("enable_output_followup")
+        if self.output_toolbar_policy in (POLICY_FORCE_ON, POLICY_FORCE_OFF):
+            locked_keys.add("enable_output_toolbar")
         has_model_change = "chat_model" in data or "inline_completion_model" in data
         has_claude_settings_change = False
         for key in data:
@@ -1428,6 +1442,18 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    output_toolbar_policy = TraitletEnum(
+        list(VALID_POLICIES),
+        default_value=POLICY_USER_CHOICE,
+        help="""
+        Org-wide policy for the hover toolbar over cell outputs that
+        surfaces Explain / Ask / Troubleshoot buttons. Same semantics as
+        explain_error_policy. Overridden by the NBI_OUTPUT_TOOLBAR_POLICY
+        env var.
+        """,
+        config=True,
+    )
+
     skills_manifest = Unicode(
         default_value="",
         help="""
@@ -1543,8 +1569,12 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.output_followup_policy = _resolve_policy_with_env(
             "NBI_OUTPUT_FOLLOWUP_POLICY", self.output_followup_policy
         )
+        GetCapabilitiesHandler.output_toolbar_policy = _resolve_policy_with_env(
+            "NBI_OUTPUT_TOOLBAR_POLICY", self.output_toolbar_policy
+        )
         ConfigHandler.explain_error_policy = GetCapabilitiesHandler.explain_error_policy
         ConfigHandler.output_followup_policy = GetCapabilitiesHandler.output_followup_policy
+        ConfigHandler.output_toolbar_policy = GetCapabilitiesHandler.output_toolbar_policy
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),

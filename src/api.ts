@@ -223,6 +223,7 @@ export class NBIConfig {
   get cellOutputFeatures(): {
     explain_error: { enabled: boolean; locked: boolean };
     output_followup: { enabled: boolean; locked: boolean };
+    output_toolbar: { enabled: boolean; locked: boolean };
   } {
     const v = this.capabilities.cell_output_features ?? {};
     return {
@@ -233,6 +234,10 @@ export class NBIConfig {
       output_followup: {
         enabled: v.output_followup?.enabled !== false,
         locked: v.output_followup?.locked === true
+      },
+      output_toolbar: {
+        enabled: v.output_toolbar?.enabled !== false,
+        locked: v.output_toolbar?.locked === true
       }
     };
   }

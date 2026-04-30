@@ -227,6 +227,12 @@ function SettingsPanelComponentGeneral(props: any) {
     });
   };
 
+  const toggleOutputToolbar = () => {
+    NBIAPI.setConfig({
+      enable_output_toolbar: !cellOutputFeatures.output_toolbar.enabled
+    });
+  };
+
   const updateModelOptionsForProvider = (
     providerId: string,
     modelType: 'chat' | 'inline-completion'
@@ -668,6 +674,22 @@ function SettingsPanelComponentGeneral(props: any) {
                       : ''
                   }
                   onClick={toggleOutputFollowup}
+                />
+              </div>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <CheckBoxItem
+                  label="Show output toolbar"
+                  title="Show a hover toolbar over cell outputs with Explain / Ask / Troubleshoot buttons"
+                  checked={cellOutputFeatures.output_toolbar.enabled}
+                  disabled={cellOutputFeatures.output_toolbar.locked}
+                  tooltip={
+                    cellOutputFeatures.output_toolbar.locked
+                      ? 'Locked by your administrator'
+                      : ''
+                  }
+                  onClick={toggleOutputToolbar}
                 />
               </div>
             </div>

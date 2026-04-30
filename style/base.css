@@ -2108,3 +2108,55 @@ svg.access-token-warning {
 .claude-session-picker-item-id {
   font-family: var(--jp-code-font-family);
 }
+
+/* Hover toolbar over notebook cell outputs (Explain / Ask / Troubleshoot). */
+.jp-Cell-outputArea {
+  position: relative;
+}
+
+.nbi-cell-output-toolbar {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background-color: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color2);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+  z-index: 10;
+}
+
+.nbi-cell-output-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  font-family: var(--jp-ui-font-family);
+  cursor: pointer;
+}
+
+.nbi-cell-output-toolbar-button:hover {
+  background-color: var(--jp-layout-color2);
+}
+
+.nbi-cell-output-toolbar-button:focus-visible {
+  outline: 1px solid var(--jp-brand-color1);
+  outline-offset: 1px;
+}
+
+.nbi-cell-output-toolbar .nbi-cell-output-toolbar-button svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.nbi-cell-output-toolbar-button-label {
+  white-space: nowrap;
+}

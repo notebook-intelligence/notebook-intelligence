@@ -7,7 +7,8 @@ describe('NBIConfig.cellOutputFeatures', () => {
     const config = new NBIConfig();
     expect(config.cellOutputFeatures).toEqual({
       explain_error: { enabled: true, locked: false },
-      output_followup: { enabled: true, locked: false }
+      output_followup: { enabled: true, locked: false },
+      output_toolbar: { enabled: true, locked: false }
     });
   });
 
@@ -16,7 +17,8 @@ describe('NBIConfig.cellOutputFeatures', () => {
     config.capabilities = {
       cell_output_features: {
         explain_error: { enabled: false, locked: true },
-        output_followup: { enabled: true, locked: false }
+        output_followup: { enabled: true, locked: false },
+        output_toolbar: { enabled: false, locked: true }
       }
     };
     expect(config.cellOutputFeatures.explain_error).toEqual({
@@ -27,6 +29,10 @@ describe('NBIConfig.cellOutputFeatures', () => {
       enabled: true,
       locked: false
     });
+    expect(config.cellOutputFeatures.output_toolbar).toEqual({
+      enabled: false,
+      locked: true
+    });
   });
 
   it('treats missing per-feature data as enabled+unlocked', () => {
@@ -34,7 +40,8 @@ describe('NBIConfig.cellOutputFeatures', () => {
     config.capabilities = { cell_output_features: {} };
     expect(config.cellOutputFeatures).toEqual({
       explain_error: { enabled: true, locked: false },
-      output_followup: { enabled: true, locked: false }
+      output_followup: { enabled: true, locked: false },
+      output_toolbar: { enabled: true, locked: false }
     });
   });
 });

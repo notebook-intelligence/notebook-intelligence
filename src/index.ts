@@ -51,6 +51,7 @@ import {
   RunChatCompletionType
 } from './chat-sidebar';
 import { NBIAPI, GitHubCopilotLoginStatus } from './api';
+import { CellOutputHoverToolbar } from './cell-output-toolbar';
 import {
   BackendMessageType,
   GITHUB_COPILOT_PROVIDER_ID,
@@ -1906,6 +1907,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       selector: '.jp-OutputArea-child',
       rank: 1
     });
+
+    new CellOutputHoverToolbar(app, copilotMenuCommands);
 
     if (statusBar) {
       const githubCopilotStatusBarItem = new GitHubCopilotStatusBarItem({

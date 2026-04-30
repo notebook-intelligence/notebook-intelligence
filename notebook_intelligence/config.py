@@ -149,6 +149,11 @@ class NBIConfig:
         return bool(self.get('enable_output_followup', True))
 
     @property
+    def enable_output_toolbar(self) -> bool:
+        """User preference for the hover toolbar over cell outputs (default on)."""
+        return bool(self.get('enable_output_toolbar', True))
+
+    @property
     def rules_directory(self) -> str:
         """Get the rules directory path."""
         return os.path.join(self.nbi_user_dir, 'rules')
