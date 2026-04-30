@@ -187,13 +187,33 @@ export function applyCodeToSelectionInEditor(
   code: string
 ) {
   const selection = editor.getSelection();
-  const startOffset = editor.getOffsetAt(selection.start);
-  const endOffset = editor.getOffsetAt(selection.end);
+  const selectionStartOffset = editor.getOffsetAt(selection.start);
+  const selectionEndOffset = editor.getOffsetAt(selection.end);
+  const startOffset = Math.min(selectionStartOffset, selectionEndOffset);
+  const endOffset = Math.max(selectionStartOffset, selectionEndOffset);
+  const cursorOffset = startOffset + code.length;
+  const codeMirrorEditor = editor as CodeEditor.IEditor & {
+    editor?: {
+      dispatch: (spec: {
+        changes: { from: number; to: number; insert: string };
+        selection: { anchor: number };
+        scrollIntoView: boolean;
+      }) => void;
+    };
+  };
 
-  editor.model.sharedModel.updateSource(startOffset, endOffset, code);
-  const numAddedLines = code.split('\n').length;
+  if (codeMirrorEditor.editor?.dispatch) {
+    codeMirrorEditor.editor.dispatch({
+      changes: { from: startOffset, to: endOffset, insert: code },
+      selection: { anchor: cursorOffset },
+      scrollIntoView: true
+    });
+  } else {
+    editor.model.sharedModel.updateSource(startOffset, endOffset, code);
+  }
+
   const cursorLine = Math.min(
-    selection.start.line + numAddedLines - 1,
+    editor.getPositionAt(cursorOffset).line,
     editor.lineCount - 1
   );
   const cursorColumn = editor.getLine(cursorLine)?.length || 0;

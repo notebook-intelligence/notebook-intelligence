@@ -10,7 +10,8 @@ import {
   isSelectionEmpty,
   isDarkTheme,
   getTokenCount,
-  cellOutputAsText
+  cellOutputAsText,
+  applyCodeToSelectionInEditor
 } from '../../src/utils';
 
 describe('removeAnsiChars', () => {
@@ -179,6 +180,59 @@ describe('isSelectionEmpty', () => {
         end: { line: 4, column: 5 }
       })
     ).toBe(false);
+  });
+});
+
+describe('applyCodeToSelectionInEditor', () => {
+  const makeEditor = (dispatch?: jest.Mock) => {
+    const updateSource = jest.fn();
+    const setCursorPosition = jest.fn();
+    const editor: any = {
+      getSelection: jest.fn(() => ({
+        start: { line: 0, column: 1 },
+        end: { line: 0, column: 4 }
+      })),
+      getOffsetAt: jest.fn(position => position.column),
+      getPositionAt: jest.fn(offset => ({ line: 0, column: offset })),
+      lineCount: 1,
+      getLine: jest.fn(() => 'abcXYZdef'),
+      setCursorPosition,
+      model: {
+        sharedModel: {
+          updateSource
+        }
+      }
+    };
+    if (dispatch) {
+      editor.editor = { dispatch };
+    }
+    return { editor, updateSource, setCursorPosition };
+  };
+
+  it('uses CodeMirror dispatch when available so edits enter the undo path', () => {
+    const dispatch = jest.fn();
+    const { editor, updateSource, setCursorPosition } = makeEditor(dispatch);
+
+    applyCodeToSelectionInEditor(editor, 'XYZ');
+
+    expect(dispatch).toHaveBeenCalledWith({
+      changes: { from: 1, to: 4, insert: 'XYZ' },
+      selection: { anchor: 4 },
+      scrollIntoView: true
+    });
+    expect(updateSource).not.toHaveBeenCalled();
+    expect(setCursorPosition).toHaveBeenCalledWith({
+      line: 0,
+      column: 'abcXYZdef'.length
+    });
+  });
+
+  it('falls back to shared model updates for non-CodeMirror editors', () => {
+    const { editor, updateSource } = makeEditor();
+
+    applyCodeToSelectionInEditor(editor, 'XYZ');
+
+    expect(updateSource).toHaveBeenCalledWith(1, 4, 'XYZ');
   });
 });
 
