@@ -1069,21 +1069,28 @@ class WebsocketCopilotHandler(websocket.WebSocketHandler):
                     file_path = path.join(NotebookIntelligence.root_dir, file_path)
                 context_filename = path.basename(file_path)
 
-                # Use OpenAI vision format so the model sees the image, not just a file-path hint.
                 if is_image and is_upload:
-                    mime_type = context.get("mimeType", "image/png")
-                    try:
-                        with open(file_path, "rb") as img_f:
-                            b64_data = base64.b64encode(img_f.read()).decode("utf-8")
+                    if is_claude_code_mode:
+                        # Claude Code CLI takes text only; pass file path so agent can read the image
                         chat_history.append({
                             "role": "user",
-                            "content": [
-                                {"type": "text", "text": f"The user pasted an image '{context_filename}':"},
-                                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}}
-                            ]
+                            "content": f"The user pasted an image. It is saved at this path: '{file_path}'. Please read and analyze it."
                         })
-                    except Exception as e:
-                        log.warning(f"Failed to read pasted image '{file_path}': {e}")
+                    else:
+                        # Use OpenAI vision format for non-Claude-Code providers
+                        mime_type = context.get("mimeType", "image/png")
+                        try:
+                            with open(file_path, "rb") as img_f:
+                                b64_data = base64.b64encode(img_f.read()).decode("utf-8")
+                            chat_history.append({
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": f"The user pasted an image '{context_filename}':"},
+                                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}}
+                                ]
+                            })
+                        except Exception as e:
+                            log.warning(f"Failed to read pasted image '{file_path}': {e}")
                     continue
 
                 start_line = context["startLine"]
