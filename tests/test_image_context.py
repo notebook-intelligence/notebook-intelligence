@@ -211,3 +211,34 @@ class TestImageContextInChatHistory:
         ])
 
         assert len(history) == 3
+
+    def test_claude_code_mode_sends_file_path_not_base64(self, _thread, mock_nbi, mock_ai, tmp_path):
+        mock_nbi.root_dir = str(tmp_path)
+        mock_ai.chat_model = None
+        mock_ai.is_claude_code_mode = True
+
+        img_file = tmp_path / "screenshot.png"
+        img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+        handler = _make_handler()
+        history = _on_message(handler, [_image_context(img_file)])
+
+        image_msg = history[0]
+        assert isinstance(image_msg["content"], str), "Claude Code mode should send plain text, not multimodal list"
+        assert str(img_file) in image_msg["content"]
+        assert "base64" not in image_msg["content"]
+
+    def test_claude_code_mode_missing_file_still_adds_path_message(self, _thread, mock_nbi, mock_ai, tmp_path):
+        mock_nbi.root_dir = str(tmp_path)
+        mock_ai.chat_model = None
+        mock_ai.is_claude_code_mode = True
+
+        missing = tmp_path / "does_not_exist.png"
+
+        handler = _make_handler()
+        history = _on_message(handler, [_image_context(missing)])
+
+        # Claude Code mode passes the path without reading the file, so no error even if missing
+        image_msg = history[0]
+        assert isinstance(image_msg["content"], str)
+        assert str(missing) in image_msg["content"]
