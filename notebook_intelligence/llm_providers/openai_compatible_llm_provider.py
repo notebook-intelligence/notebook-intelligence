@@ -10,6 +10,21 @@ INLINE_COMPLETION_SYSTEM_PROMPT = """You are a code completion assistant. Your t
 
 DEFAULT_CONTEXT_WINDOW = 4096
 
+
+def _parse_temperature(prop: LLMProviderProperty | None):
+    if prop is None:
+        return omit
+
+    value = prop.value
+    if value is None:
+        return omit
+
+    value = str(value).strip()
+    if value == "":
+        return omit
+
+    return float(value)
+
 class OpenAICompatibleChatModel(ChatModel):
     def __init__(self, provider: "OpenAICompatibleLLMProvider"):
         super().__init__(provider)
@@ -19,6 +34,7 @@ class OpenAICompatibleChatModel(ChatModel):
             LLMProviderProperty("model_id", "Model", "Model (must support streaming)", "", False),
             LLMProviderProperty("base_url", "Base URL", "Base URL", "", True),
             LLMProviderProperty("context_window", "Context window", "Context window length", "", True),
+            LLMProviderProperty("temperature", "Temperature", "Sampling temperature", "", True),
         ]
 
     @property
@@ -46,6 +62,7 @@ class OpenAICompatibleChatModel(ChatModel):
         base_url = base_url_prop.value if base_url_prop is not None else None
         base_url = base_url if base_url.strip() != "" else None
         api_key = self.get_property("api_key").value
+        temperature = _parse_temperature(self.get_property("temperature"))
 
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
@@ -53,6 +70,7 @@ class OpenAICompatibleChatModel(ChatModel):
             messages=messages.copy(),
             tools=tools or omit,
             tool_choice=options.get("tool_choice", omit),
+            temperature=temperature,
             stream=stream,
         )
 
@@ -94,6 +112,7 @@ class OpenAICompatibleInlineCompletionModel(InlineCompletionModel):
             LLMProviderProperty("model_id", "Model", "Model", "", False),
             LLMProviderProperty("base_url", "Base URL", "Base URL", "", True),
             LLMProviderProperty("context_window", "Context window", "Context window length", "", True),
+            LLMProviderProperty("temperature", "Temperature", "Sampling temperature", "", True),
         ]
 
     @property
@@ -142,6 +161,7 @@ class OpenAICompatibleInlineCompletionModel(InlineCompletionModel):
         base_url = base_url_prop.value if base_url_prop is not None else None
         base_url = base_url if base_url and base_url.strip() != "" else None
         api_key = self.get_property("api_key").value
+        temperature = _parse_temperature(self.get_property("temperature"))
 
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
@@ -154,6 +174,7 @@ class OpenAICompatibleInlineCompletionModel(InlineCompletionModel):
 """}
             ],
             max_tokens=1000,
+            temperature=temperature,
             stream=False,
         )
 
