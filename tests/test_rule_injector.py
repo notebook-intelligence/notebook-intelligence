@@ -1,8 +1,8 @@
-import pytest
-from unittest.mock import Mock, MagicMock
-from notebook_intelligence.rule_injector import RuleInjector
+from unittest.mock import Mock, patch
+
 from notebook_intelligence.api import ChatRequest
-from notebook_intelligence.ruleset import RuleContext, Rule, RuleScope
+from notebook_intelligence.rule_injector import RuleInjector
+from notebook_intelligence.ruleset import Rule, RuleContext
 
 
 class TestRuleInjector:
@@ -104,3 +104,39 @@ class TestRuleInjector:
         
         expected = "\n\n# Additional Guidelines\n# Test Rules\n- Be helpful"
         assert result == expected
+
+    def test_inject_rules_with_agents_md_only(self, tmp_path):
+        injector = RuleInjector()
+        request = Mock(spec=ChatRequest)
+        request.rule_context = None
+
+        agents_path = tmp_path / 'AGENTS.md'
+        agents_path.write_text('# Repo Rules\n- Keep notebooks tidy\n', encoding='utf-8')
+
+        with patch('notebook_intelligence.rule_injector.get_jupyter_root_dir', return_value=str(tmp_path)):
+            result = injector.inject_rules('You are a helpful assistant.', request)
+
+        assert 'Repository Instructions (AGENTS.md)' in result
+        assert 'Keep notebooks tidy' in result
+
+    def test_inject_rules_combines_agents_md_and_rules(self, tmp_path):
+        injector = RuleInjector()
+        request = Mock(spec=ChatRequest)
+        request.rule_context = Mock(spec=RuleContext)
+
+        (tmp_path / 'AGENTS.md').write_text('# Repo Rules\n- Prefer small changes\n', encoding='utf-8')
+
+        rule_manager = Mock()
+        rule_manager.get_applicable_rules.return_value = [Mock(spec=Rule)]
+        rule_manager.format_rules_for_llm.return_value = '# Test Rules\n- Add tests'
+
+        request.host.get_rule_manager.return_value = rule_manager
+        request.host.nbi_config.rules_enabled = True
+
+        with patch('notebook_intelligence.rule_injector.get_jupyter_root_dir', return_value=str(tmp_path)):
+            result = injector.inject_rules('You are a helpful assistant.', request)
+
+        assert 'Repository Instructions (AGENTS.md)' in result
+        assert 'Prefer small changes' in result
+        assert '# Test Rules' in result
+        assert 'Add tests' in result
