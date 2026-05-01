@@ -310,6 +310,9 @@ interface ISelectedContextFile {
   type: string;
   source?: 'workspace' | 'upload';
   serverPath?: string;
+  isImage?: boolean;
+  imageDataUrl?: string;
+  mimeType?: string;
 }
 
 const MAX_ATTACHED_FILES = 10;
@@ -379,6 +382,15 @@ function readFileAsText(file: File): Promise<string> {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(reader.error);
     reader.readAsText(file);
+  });
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
   });
 }
 
@@ -1253,6 +1265,24 @@ function SidebarComponent(props: any) {
       };
     }
 
+    if (file.type.startsWith('image/')) {
+      const [imageDataUrl, { serverPath, filename }] = await Promise.all([
+        readFileAsDataURL(file),
+        NBIAPI.uploadFile(file)
+      ]);
+      return {
+        content: '',
+        lineCount: 0,
+        path: filename,
+        type: 'file',
+        source: 'upload',
+        serverPath,
+        isImage: true,
+        imageDataUrl,
+        mimeType: file.type
+      };
+    }
+
     const { serverPath, filename } = await NBIAPI.uploadFile(file);
     return {
       content: '',
@@ -1375,6 +1405,27 @@ function SidebarComponent(props: any) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
     await processAndAttachFiles(files);
+  };
+
+  const handlePaste = async (
+    event: React.ClipboardEvent<HTMLTextAreaElement>
+  ) => {
+    const items = Array.from(event.clipboardData.items);
+    const imageItem = items.find(item => item.type.startsWith('image/'));
+    if (!imageItem || !chatEnabled) {
+      return;
+    }
+    const file = imageItem.getAsFile();
+    if (!file) {
+      return;
+    }
+    event.preventDefault();
+    const ext = (imageItem.type.split('/')[1] ?? 'png').split('+')[0];
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const namedFile = new File([file], `screenshot-${timestamp}.${ext}`, {
+      type: imageItem.type
+    });
+    await processAndAttachFiles([namedFile]);
   };
 
   const cleanupRemovedToolsFromToolSelections = () => {
@@ -2050,6 +2101,10 @@ function SidebarComponent(props: any) {
       };
       if (file.source === 'upload') {
         contextItem.isUpload = true;
+      }
+      if (file.isImage) {
+        contextItem.isImage = true;
+        contextItem.mimeType = file.mimeType ?? 'image/png';
       }
       additionalContext.push(contextItem);
     }
@@ -2767,6 +2822,7 @@ function SidebarComponent(props: any) {
             rows={3}
             onChange={onPromptChange}
             onKeyDown={onPromptKeyDown}
+            onPaste={handlePaste}
             placeholder="Ask Notebook Intelligence..."
             spellCheck={false}
             value={prompt}
@@ -2800,7 +2856,7 @@ function SidebarComponent(props: any) {
               {selectedContextFiles.map(file => (
                 <div
                   key={file.serverPath ?? file.path}
-                  className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}`}
+                  className={`user-input-context user-input-context-selected-file on${file.source === 'upload' ? ' uploaded-file' : ''}${file.isImage ? ' image-file' : ''}`}
                   title={
                     file.source === 'upload'
                       ? `Uploaded: ${file.path}`
@@ -2808,7 +2864,16 @@ function SidebarComponent(props: any) {
                   }
                 >
                   <div>
-                    {file.source === 'upload' ? (
+                    {file.isImage && file.imageDataUrl ? (
+                      <>
+                        <img
+                          src={file.imageDataUrl}
+                          className="context-pill-thumbnail"
+                          alt={file.path}
+                        />
+                        {file.path}
+                      </>
+                    ) : file.source === 'upload' ? (
                       <>
                         <VscCloudUpload /> {file.path}
                       </>

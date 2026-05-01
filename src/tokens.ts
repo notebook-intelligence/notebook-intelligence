@@ -76,6 +76,8 @@ export interface IContextItem {
   cellIndex?: number;
   startLine?: number;
   endLine?: number;
+  isImage?: boolean;
+  mimeType?: string;
 }
 
 export interface ICellContents {

@@ -26,6 +26,7 @@ from notebook_intelligence.claude import (
     ClaudeCodeClient,
     SignalImpl,
     _normalize_anthropic_credential,
+    _extract_text_from_content,
 )
 
 
@@ -541,3 +542,37 @@ class TestNormalizeAnthropicCredential:
         assert _normalize_anthropic_credential(1.5) is None
         assert _normalize_anthropic_credential([]) is None
         assert _normalize_anthropic_credential({"key": "x"}) is None
+
+
+class TestExtractTextFromContent:
+    def test_string_passthrough(self):
+        assert _extract_text_from_content("hello world") == "hello world"
+
+    def test_list_with_text_block(self):
+        content = [{"type": "text", "text": "describe this image"}]
+        assert _extract_text_from_content(content) == "describe this image"
+
+    def test_list_strips_image_blocks(self):
+        content = [
+            {"type": "text", "text": "The user pasted an image 'shot.png':"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+        ]
+        result = _extract_text_from_content(content)
+        assert result == "The user pasted an image 'shot.png':"
+        assert "base64" not in result
+
+    def test_list_with_multiple_text_blocks(self):
+        content = [
+            {"type": "text", "text": "first"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xyz"}},
+            {"type": "text", "text": "second"},
+        ]
+        assert _extract_text_from_content(content) == "first\nsecond"
+
+    def test_list_with_only_image_returns_empty(self):
+        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
+        assert _extract_text_from_content(content) == ""
+
+    def test_list_with_non_dict_entries_skipped(self):
+        content = [{"type": "text", "text": "valid"}, "raw string", None]
+        assert _extract_text_from_content(content) == "valid"

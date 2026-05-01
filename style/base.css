@@ -38,6 +38,19 @@
   border-style: dashed;
 }
 
+.user-input-context.image-file {
+  border-style: dashed;
+}
+
+.context-pill-thumbnail {
+  max-height: 36px;
+  max-width: 54px;
+  object-fit: contain;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
 .user-input-context.uploading-indicator {
   border: none;
   font-size: 11px;
