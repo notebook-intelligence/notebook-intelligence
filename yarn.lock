@@ -2329,6 +2329,7 @@ __metadata:
     "@jupyterlab/settingregistry": ^4.0.0
     "@types/jest": ^29.5.12
     "@types/json-schema": ^7.0.11
+    "@types/node": ~20.0.0
     "@types/react": ^18.0.26
     "@types/react-addons-linked-state-mixin": ^0.14.22
     "@types/react-syntax-highlighter": ^15.5.13
@@ -2924,6 +2925,13 @@ __metadata:
   dependencies:
     undici-types: ~7.19.0
   checksum: 98945eb59909a08868ccac203022f122b5549448ef8628de9eac3fe20481467cd6ec32af819fd432695f67ac21ebbbc69c8a141de6c6455edaf6e717e2cb89c9
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:~20.0.0":
+  version: 20.0.0
+  resolution: "@types/node@npm:20.0.0"
+  checksum: 7dadc41081eee634fd0b19e46dfb0a74f8296ee562533118f7c2f2b54dcaba7124961d506db425fff74d8e8288610b93939cd06fa723f053c72b1a7e87aa4ddc
   languageName: node
   linkType: hard
 

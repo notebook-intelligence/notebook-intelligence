@@ -58,6 +58,13 @@ export function ClaudeSessionPicker(
       return;
     }
     setResuming(true);
+    // When a custom fetchSessions is provided the caller owns the resume
+    // lifecycle (e.g. the launcher tile opens a terminal directly), so skip
+    // the NBI sidebar API call which requires Claude Code mode to be active.
+    if (props.fetchSessions) {
+      props.onResume(session);
+      return;
+    }
     try {
       await NBIAPI.resumeClaudeSession(session.session_id);
       props.onResume(session);
