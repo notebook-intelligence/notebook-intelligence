@@ -24,7 +24,7 @@ from traitlets import Bool, Int, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
 from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.claude import ClaudeCodeChatParticipant, fetch_claude_models
-from notebook_intelligence.claude_sessions import list_sessions as list_claude_sessions
+from notebook_intelligence.claude_sessions import list_sessions as list_claude_sessions, list_all_sessions as list_all_claude_sessions
 import notebook_intelligence.github_copilot as github_copilot
 from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_jupyter_root_dir, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env
@@ -680,6 +680,22 @@ class ClaudeSessionsListHandler(APIHandler):
             log.exception("Failed to list Claude sessions")
             self.set_status(500)
             self.finish(json.dumps({"error": str(e)}))
+
+class ClaudeSessionsAllHandler(APIHandler):
+    """Lists all Claude Code sessions across all projects via history.jsonl."""
+
+    @tornado.web.authenticated
+    def get(self):
+        try:
+            sessions = list_all_claude_sessions()
+            self.finish(json.dumps({
+                "sessions": [asdict(s) for s in sessions],
+            }))
+        except Exception as e:
+            log.exception("Failed to list all Claude sessions")
+            self.set_status(500)
+            self.finish(json.dumps({"error": str(e)}))
+
 
 class ClaudeSessionsResumeHandler(APIHandler):
     """Reconnects the Claude client so the next query resumes a session."""
@@ -1383,6 +1399,7 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_skill_bundle_file_rename = url_path_join(base_url, "notebook-intelligence", "skills", r"(user|project)", skill_name, "files", "rename")
         route_pattern_upload_file = url_path_join(base_url, "notebook-intelligence", "upload-file")
         route_pattern_claude_sessions = url_path_join(base_url, "notebook-intelligence", "claude-sessions")
+        route_pattern_claude_sessions_all = url_path_join(base_url, "notebook-intelligence", "claude-sessions", "all")
         route_pattern_claude_sessions_resume = url_path_join(base_url, "notebook-intelligence", "claude-sessions", "resume")
         GetCapabilitiesHandler.disabled_tools = self.disabled_tools
         GetCapabilitiesHandler.allow_enabling_tools_with_env = self.allow_enabling_tools_with_env
@@ -1416,6 +1433,7 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_skill_detail, SkillDetailHandler),
             (route_pattern_upload_file, FileUploadHandler),
             (route_pattern_claude_sessions_resume, ClaudeSessionsResumeHandler),
+            (route_pattern_claude_sessions_all, ClaudeSessionsAllHandler),
             (route_pattern_claude_sessions, ClaudeSessionsListHandler),
             (route_pattern_copilot, WebsocketCopilotHandler),
         ]

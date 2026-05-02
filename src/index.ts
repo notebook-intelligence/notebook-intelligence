@@ -41,6 +41,10 @@ import { LabIcon } from '@jupyterlab/ui-components';
 import { Menu, Panel, Widget } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { IStatusBar } from '@jupyterlab/statusbar';
+import { ILauncher } from '@jupyterlab/launcher';
+import React from 'react';
+import { ReactWidget } from '@jupyterlab/apputils';
+import { ClaudeSessionPicker } from './components/claude-session-picker';
 import stripAnsi from 'strip-ansi';
 import {
   ChatSidebar,
@@ -134,6 +138,8 @@ namespace CommandIDs {
     'notebook-intelligence:show-form-input-dialog';
   export const runCommandInTerminal =
     'notebook-intelligence:run-command-in-terminal';
+  export const openClaudeCodeLauncher =
+    'notebook-intelligence:open-claude-code-launcher';
 }
 
 const DOCUMENT_WATCH_INTERVAL = 1000;
@@ -647,7 +653,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     ICommandPalette,
     IMainMenu
   ],
-  optional: [ISettingRegistry, IStatusBar],
+  optional: [ISettingRegistry, IStatusBar, ILauncher],
   provides: INotebookIntelligence,
   activate: async (
     app: JupyterFrontEnd,
@@ -658,7 +664,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     palette: ICommandPalette,
     mainMenu: IMainMenu,
     settingRegistry: ISettingRegistry | null,
-    statusBar: IStatusBar | null
+    statusBar: IStatusBar | null,
+    launcher: ILauncher | null
   ) => {
     console.log(
       'JupyterLab extension @notebook-intelligence/notebook-intelligence is activated!'
@@ -1036,6 +1043,54 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         });
       }
     });
+
+    // Claude Code launcher tile: shows a session picker backed by history.jsonl
+    // (all projects), then opens a terminal at the session's project directory.
+    const claudeIcon = new LabIcon({
+      name: 'notebook-intelligence:claude-icon',
+      svgstr: claudeSvgstr
+    });
+
+    app.commands.addCommand(CommandIDs.openClaudeCodeLauncher, {
+      label: 'Claude Code',
+      caption: 'Resume or start a Claude Code session',
+      icon: claudeIcon,
+      execute: () => {
+        class PickerWidget extends ReactWidget {
+          getValue(): void { return; }
+          render() {
+            return React.createElement(ClaudeSessionPicker, {
+              fetchSessions: () => NBIAPI.listAllClaudeSessions(),
+              onResume: (session: any) => {
+                dialog.close();
+                app.commands.execute(CommandIDs.runCommandInTerminal, {
+                  command: `claude --resume ${session.session_id}`,
+                  cwd: session.cwd || undefined
+                });
+              },
+              onClose: () => dialog.close()
+            });
+          }
+        }
+
+        const picker = new PickerWidget();
+        const dialog = new Dialog({
+          title: '',
+          body: picker,
+          buttons: [],
+          hasClose: false
+        });
+        dialog.launch();
+      }
+    });
+
+    if (launcher) {
+      launcher.add({
+        command: CommandIDs.openClaudeCodeLauncher,
+        category: 'Claude Code',
+        rank: 0
+      });
+    }
 
     const isNewEmptyNotebook = (model: ISharedNotebook) => {
       return (
