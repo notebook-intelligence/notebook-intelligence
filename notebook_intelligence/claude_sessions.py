@@ -51,6 +51,7 @@ class ClaudeSessionInfo:
     modified_at: float
     created_at: float
     preview: str
+    cwd: str = ""
 
 
 def encode_cwd(cwd: str) -> str:
@@ -187,3 +188,95 @@ def _extract_preview(obj: dict) -> str:
     if len(text) > _PREVIEW_MAX_CHARS:
         text = text[: _PREVIEW_MAX_CHARS - 1].rstrip() + "\u2026"
     return text
+
+
+def list_all_sessions(
+    claude_home: Optional[str] = None,
+) -> list[ClaudeSessionInfo]:
+    """List all resumable Claude sessions across all projects, newest first.
+
+    Reads ``~/.claude/history.jsonl`` \u2014 Claude Code writes one entry per
+    prompt, so every session that appears there can actually be resumed.
+    Each session is enriched with its ``cwd`` (project path) so callers
+    can run ``claude --resume <id>`` from the correct directory.
+
+    Sessions are de-duplicated by session ID and sorted by most recent
+    activity. Only sessions whose ``.jsonl`` transcript file still exists
+    in ``~/.claude/projects/`` are returned.
+    """
+    home = Path(claude_home) if claude_home else Path.home() / ".claude"
+    history_path = home / "history.jsonl"
+
+    if not history_path.exists():
+        return []
+
+    # Build index: session_id -> .jsonl path for existence check.
+    projects_dir = home / "projects"
+    session_to_jsonl: dict[str, Path] = {}
+    if projects_dir.is_dir():
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for jsonl_file in project_dir.glob("*.jsonl"):
+                session_to_jsonl[jsonl_file.stem] = jsonl_file
+
+    # Read history.jsonl: group entries by session_id, track first/last timestamps.
+    # Structure: {session_id: {"project": str, "first_ts": int, "last_ts": int, "preview": str}}
+    seen: dict[str, dict] = {}
+    try:
+        with history_path.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                session_id = obj.get("sessionId")
+                if not session_id:
+                    continue
+                project = obj.get("project", "")
+                ts = int(obj.get("timestamp", 0))
+                display = obj.get("display", "")
+                if session_id not in seen:
+                    seen[session_id] = {
+                        "project": project,
+                        "first_ts": ts,
+                        "last_ts": ts,
+                        "preview": display,
+                    }
+                else:
+                    if ts < seen[session_id]["first_ts"]:
+                        seen[session_id]["first_ts"] = ts
+                        seen[session_id]["preview"] = display
+                    if ts > seen[session_id]["last_ts"]:
+                        seen[session_id]["last_ts"] = ts
+    except OSError as exc:
+        log.warning("Could not read Claude history file %s: %s", history_path, exc)
+        return []
+
+    sessions: list[ClaudeSessionInfo] = []
+    for session_id, data in seen.items():
+        # Only include sessions whose transcript file still exists.
+        if session_id not in session_to_jsonl:
+            continue
+        jsonl_path = session_to_jsonl[session_id]
+        try:
+            stat = jsonl_path.stat()
+        except OSError:
+            continue
+        preview = data["preview"]
+        if len(preview) > _PREVIEW_MAX_CHARS:
+            preview = preview[: _PREVIEW_MAX_CHARS - 1].rstrip() + "\u2026"
+        sessions.append(ClaudeSessionInfo(
+            session_id=session_id,
+            path=str(jsonl_path),
+            modified_at=data["last_ts"] / 1000.0,
+            created_at=stat.st_ctime,
+            preview=preview,
+            cwd=data["project"],
+        ))
+
+    sessions.sort(key=lambda s: s.modified_at, reverse=True)
+    return sessions
