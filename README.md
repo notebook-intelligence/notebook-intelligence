@@ -184,7 +184,7 @@ NBI reloads open document tabs when their files change on disk, so edits an AI a
 
 ## Configuration
 
-Configure your provider, model, and API key from NBI Settings — the gear icon in the chat panel, the `/settings` chat command, or the JupyterLab command palette. For background, see the [provider blog post](https://plmbr.dev/blog/archive/support-for-any-llm-provider/).
+Configure your provider, model, and API key from NBI Settings — the gear icon in the chat panel, the `/settings` chat command, or the JupyterLab command palette. For background, see the [provider blog post](https://nbi.plmbr.dev/blog/archive/support-for-any-llm-provider/).
 
 <img src="media/provider-list.png" alt="Settings dialog" width=500 />
 
@@ -430,10 +430,10 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 
 ## Further reading
 
-- [Introducing Notebook Intelligence!](https://plmbr.dev/blog/archive/introducing-notebook-intelligence/)
-- [Building AI Extensions for JupyterLab](https://plmbr.dev/blog/archive/building-ai-extensions-for-jupyterlab/)
-- [Building AI Agents for JupyterLab](https://plmbr.dev/blog/archive/building-ai-agents-for-jupyterlab/)
-- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://plmbr.dev/blog/archive/support-for-any-llm-provider/)
+- [Introducing Notebook Intelligence!](https://nbi.plmbr.dev/blog/archive/introducing-notebook-intelligence/)
+- [Building AI Extensions for JupyterLab](https://nbi.plmbr.dev/blog/archive/building-ai-extensions-for-jupyterlab/)
+- [Building AI Agents for JupyterLab](https://nbi.plmbr.dev/blog/archive/building-ai-agents-for-jupyterlab/)
+- [Notebook Intelligence now supports any LLM Provider and AI Model!](https://nbi.plmbr.dev/blog/archive/support-for-any-llm-provider/)
 
 ## Roadmap
 
