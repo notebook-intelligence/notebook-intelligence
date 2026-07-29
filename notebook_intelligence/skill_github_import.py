@@ -308,24 +308,40 @@ def _extract_skill(
         # GitHub tarballs wrap every entry in a single `{repo}-{sha}/` top-level directory.
         # The first member is that directory itself, so its name is our wrapper prefix.
         top_dir = members[0].name.split("/")[0]
+        # The tarball is always the whole repo, but only the skill's subtree
+        # gets installed. Scope both the size cap and the extraction to that
+        # subtree: otherwise any skill hosted in a monorepo whose *total*
+        # content exceeds the cap fails to install regardless of the skill's
+        # own size, and unrelated repo content gets written to the temp dir.
+        subtree_prefix = (
+            f"{top_dir}/{subpath}".rstrip("/") if subpath else top_dir
+        )
         safe_members = []
         for m in members:
             if m.issym() or m.islnk():
                 # Skip symlinks for safety — they can escape the extraction dir.
                 continue
             # Tar names are POSIX by spec, so use PurePosixPath to keep the
-            # absolute-path check platform-independent.
+            # absolute-path check platform-independent. Checked for every
+            # member, not just the subtree: a hostile name anywhere in the
+            # archive fails the import loudly rather than being skipped.
             path = PurePosixPath(m.name)
             if path.is_absolute() or any(p == ".." for p in path.parts):
                 raise ValueError(f"Unsafe path in archive: {m.name}")
+            if m.name != subtree_prefix and not m.name.startswith(
+                subtree_prefix + "/"
+            ):
+                continue
             if m.isfile():
                 total_bytes += m.size
                 if total_bytes > MAX_EXTRACTED_BYTES:
                     raise ValueError(
-                        "Extracted archive exceeds size limit "
+                        "Extracted skill exceeds size limit "
                         f"({MAX_EXTRACTED_BYTES // (1024 * 1024)} MB)"
                     )
             safe_members.append(m)
+        if subpath and not safe_members:
+            raise ValueError(f"Path '{subpath}' not found in repo")
         # `filter="data"` (PEP 706, available on Python 3.12+ and patch-level
         # backports of 3.10/3.11) blocks absolute paths, traversal, device
         # files, and unsafe permission bits at the tarfile layer. Our explicit

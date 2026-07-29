@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from notebook_intelligence.skill_github_import import (
+    MAX_EXTRACTED_BYTES,
     _derive_name,
     _extract_skill,
     _fetch_tarball,
@@ -135,6 +136,83 @@ class TestExtractSkill:
             tar.addfile(info, io.BytesIO(data))
         with pytest.raises(ValueError, match="Unsafe path"):
             _extract_skill(buf.getvalue(), "", tmp_path)
+
+    def test_unsafe_path_outside_the_subtree_still_rejected(self, tmp_path):
+        """The unsafe-path check runs over every member before the subtree
+        filter: a hostile name anywhere in the archive fails the import
+        loudly even when it would never be extracted."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            skill_data = b"---\nname: foo\n---\n"
+            info = tarfile.TarInfo(name="repo-abc/skills/foo/SKILL.md")
+            info.size = len(skill_data)
+            tar.addfile(info, io.BytesIO(skill_data))
+            evil = b"evil"
+            info = tarfile.TarInfo(name="repo-abc/../escape.txt")
+            info.size = len(evil)
+            tar.addfile(info, io.BytesIO(evil))
+        with pytest.raises(ValueError, match="Unsafe path"):
+            _extract_skill(buf.getvalue(), "skills/foo", tmp_path)
+
+    def test_monorepo_sibling_content_does_not_count_against_the_cap(self, tmp_path):
+        """The size cap applies to the skill being installed, not the whole
+        repo tarball. A small skill in a large monorepo used to fail with
+        "Extracted archive exceeds size limit" because every repo file was
+        counted (the production failure reported against a skills monorepo
+        where all skills failed identically regardless of their own size)."""
+        big = "0" * (MAX_EXTRACTED_BYTES + 1)
+        tar_bytes = build_tarball({
+            "repo-abc/models/weights.bin": big,
+            "repo-abc/skills/foo/SKILL.md": "---\nname: foo\ndescription: d\n---\nb",
+        })
+        skill_root = _extract_skill(tar_bytes, "skills/foo", tmp_path)
+        assert (skill_root / "SKILL.md").exists()
+        # Non-subtree repo content is not written to the temp dir at all.
+        assert not (tmp_path / "repo-abc" / "models").exists()
+
+    def test_sibling_dir_sharing_the_subpath_prefix_is_not_confused(self, tmp_path):
+        """The subtree guard must match 'skills/foo' exactly or 'skills/foo/'
+        as a prefix, never 'skills/foobar'. A bare startswith(prefix) check
+        would both count foobar's size against foo's cap and extract foobar's
+        files alongside foo's."""
+        big = "0" * (MAX_EXTRACTED_BYTES + 1)
+        tar_bytes = build_tarball({
+            "repo-abc/skills/foobar/huge.bin": big,
+            "repo-abc/skills/foo/SKILL.md": "---\nname: foo\ndescription: d\n---\nb",
+        })
+        skill_root = _extract_skill(tar_bytes, "skills/foo", tmp_path)
+        assert (skill_root / "SKILL.md").exists()
+        assert not (tmp_path / "repo-abc" / "skills" / "foobar").exists()
+
+    def test_oversized_skill_subtree_still_rejected(self, tmp_path):
+        big = "0" * (MAX_EXTRACTED_BYTES + 1)
+        tar_bytes = build_tarball({
+            "repo-abc/skills/foo/SKILL.md": "---\nname: foo\n---\n",
+            "repo-abc/skills/foo/weights.bin": big,
+        })
+        with pytest.raises(ValueError, match="size limit"):
+            _extract_skill(tar_bytes, "skills/foo", tmp_path)
+
+    def test_subpath_pointing_at_a_file_raises_not_found(self, tmp_path):
+        # The exact-match arm of the subtree filter lets a file-valued
+        # subpath through extraction; the skill-root directory check then
+        # rejects it. Pin that it surfaces as a not-found error rather
+        # than something stranger downstream.
+        tar_bytes = build_tarball({
+            "repo-abc/skills/foo": "just a file, not a skill dir",
+        })
+        with pytest.raises(ValueError, match="not found"):
+            _extract_skill(tar_bytes, "skills/foo", tmp_path)
+
+    def test_oversized_whole_repo_skill_still_rejected(self, tmp_path):
+        # No subpath: the skill is the repo, so the cap covers everything.
+        big = "0" * (MAX_EXTRACTED_BYTES + 1)
+        tar_bytes = build_tarball({
+            "repo-abc/SKILL.md": "---\nname: foo\n---\n",
+            "repo-abc/data.bin": big,
+        })
+        with pytest.raises(ValueError, match="size limit"):
+            _extract_skill(tar_bytes, "", tmp_path)
 
     def test_skips_symlinks(self, tmp_path):
         buf = io.BytesIO()
