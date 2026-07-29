@@ -3,6 +3,7 @@
 import React from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { Prism as SyntaxHighlighterBase } from 'react-syntax-highlighter';
 const SyntaxHighlighter =
   SyntaxHighlighterBase as unknown as React.ComponentType<any>;
@@ -46,7 +47,7 @@ export function MarkdownRenderer({
     // node handled by `SafeAnchor` below. Any future change that enables
     // raw HTML needs to add a rehype-sanitize pass alongside.
     <Markdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
       components={{
         // CommonMark `<https://...>` autolinks, `[text](url)`, and
         // reference-style links all normalize to the same `a` node.

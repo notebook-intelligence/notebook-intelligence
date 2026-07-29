@@ -893,12 +893,7 @@ function ChatResponse(props: any) {
                     getApp={props.getApp}
                     getActiveDocumentInfo={props.getActiveDocumentInfo}
                   >
-                    {/* fix for newlines in user input; scoped to user
-                        messages only so it doesn't inject trailing
-                        whitespace into AI-streamed fenced code blocks */}
-                    {msg.from === 'user'
-                      ? item.content.replace(/\n/gi, '  \n')
-                      : item.content}
+                    {item.content}
                   </MarkdownRenderer>
                   {item.contentDetail ? (
                     <div className="expandable-content expanded">
