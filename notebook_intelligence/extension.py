@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import base64
+import hmac
 from dataclasses import asdict, dataclass
 import json
 from os import path
@@ -60,6 +61,9 @@ from notebook_intelligence.claude import (
     claude_bypass_disabled_by_managed_settings,
     claude_managed_default_permission_mode,
     fetch_claude_models,
+    get_ui_tools_manifest,
+    get_ui_tools_secret,
+    invoke_ui_tool,
     model_info_from_id,
     resolve_permission_mode,
 )
@@ -2241,6 +2245,70 @@ class CancelTokenImpl(CancelToken):
         self._cancellation_requested = True
         self._cancellation_signal.emit()
 
+
+class UIToolsHandler(APIHandler):
+    """Bridges the Jupyter-UI tools to an external stdio MCP server
+    (notebook_intelligence.mcp_ui_proxy), so they work under a managed/enterprise
+    MCP config that forbids dynamically configured (in-process) servers.
+
+    GET  -> the tool manifest (name/description/inputSchema).
+    POST {"name", "arguments"} -> run the tool against the active chat turn's UI
+    bridge and return its MCP tool-result ({"content": [...], "is_error"?: bool}).
+    """
+
+    def check_xsrf_cookie(self):
+        # mcp_ui_proxy authenticates with a per-process bearer secret
+        # (claude.get_ui_tools_secret), sent as Authorization: token <secret>. A
+        # bearer secret is not cookie-based and so is XSRF-immune; exempt those
+        # requests from the XSRF check exactly as jupyter_server exempts
+        # token-authenticated ones. Every other caller still gets the normal check.
+        auth = self.request.headers.get("Authorization", "")
+        parts = auth.split(None, 1)
+        provided = parts[1].strip() if len(parts) == 2 and parts[0].lower() in ("token", "bearer") else ""
+        expected = get_ui_tools_secret()
+        if expected and provided and hmac.compare_digest(provided, expected):
+            return
+        return super().check_xsrf_cookie()
+
+    @tornado.web.authenticated
+    async def get(self):
+        tools = get_ui_tools_manifest()
+        log.debug(f"UI tools relay: served manifest ({len(tools)} tools)")
+        self.finish(json.dumps({"tools": tools}))
+
+    @tornado.web.authenticated
+    async def post(self):
+        try:
+            data = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError as exc:
+            self.set_status(400)
+            self.finish(json.dumps({"error": f"Invalid JSON: {exc}"}))
+            return
+        name = data.get("name")
+        if not isinstance(name, str) or not name:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "name is required"}))
+            return
+        # Run as a cancellable task so a client disconnect (turn cancelled / tab
+        # closed) tears down the pending run_ui_command instead of polling for the
+        # full timeout window.
+        log.info(f"UI tools relay: invoking '{name}'")
+        self._invoke_task = asyncio.ensure_future(
+            invoke_ui_tool(name, data.get("arguments") or {})
+        )
+        try:
+            result = await self._invoke_task
+        except asyncio.CancelledError:
+            return
+        self.finish(json.dumps(result))
+
+    def on_connection_close(self):
+        task = getattr(self, "_invoke_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        super().on_connection_close()
+
+
 @dataclass
 class MessageCallbackHandlers:
     response_emitter: WebsocketCopilotResponseEmitter
@@ -3268,6 +3336,7 @@ class NotebookIntelligence(ExtensionApp):
         base_url = web_app.settings["base_url"]
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
+        route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
         route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
@@ -3411,6 +3480,7 @@ class NotebookIntelligence(ExtensionApp):
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
+            (route_pattern_ui_tools, UIToolsHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),

@@ -389,11 +389,13 @@ class ChatResponse:
 
         response.run_ui_command_response_signal.connect(_on_ui_command_response)
 
-        while True:
-            if resp["result"] is not None:
-                response.run_ui_command_response_signal.disconnect(_on_ui_command_response)
-                return resp["result"]
-            await asyncio.sleep(0.1)
+        try:
+            while True:
+                if resp["result"] is not None:
+                    return resp["result"]
+                await asyncio.sleep(0.1)
+        finally:
+            response.run_ui_command_response_signal.disconnect(_on_ui_command_response)
 
 @dataclass
 class ToolPreInvokeResponse:
