@@ -114,3 +114,46 @@ def codex_approval_args(full_access: bool) -> list[str]:
     """
     policy = "never" if full_access else "untrusted"
     return ["-c", f'approval_policy="{policy}"']
+
+
+def _codex_setting_value(value: Optional[str]) -> str:
+    """A settings string reduced to what can ride in a ``-c key="..."`` override.
+
+    Control characters are dropped rather than escaped: they are never
+    legitimate in a URL or model name, an embedded NUL would make the
+    subprocess launch raise outright, and a paste artifact (interior newline)
+    would otherwise fail the codex launch with an opaque TOML parse error.
+    Surrounding whitespace goes too, so a value that was only padding reads
+    as unset.
+    """
+    cleaned = "".join(c for c in (value or "") if ord(c) >= 0x20 and c != "\x7f")
+    return cleaned.strip()
+
+
+def _codex_toml_string(value: str) -> str:
+    """Quote an already-cleaned ``value`` as a TOML basic string."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def codex_model_args(acp_settings: dict) -> list[str]:
+    """Codex config overrides carrying NBI's model and base-URL settings.
+
+    Codex ignores the OPENAI_BASE_URL env var (its documented mechanism is
+    the ``openai_base_url`` config key), so a custom OpenAI-compatible
+    endpoint configured in NBI's ACP settings never reached the agent and
+    every request went to api.openai.com (issue observed on PR #380). The
+    same launch is the only place the configured chat model can be applied.
+
+    A setting that is empty once cleaned yields no flag at all: an empty
+    override is not neutral, it would blank out whatever the config file or
+    codex default supplies.
+    """
+    args: list[str] = []
+    model = _codex_setting_value(acp_settings.get("chat_model"))
+    if model:
+        args += ["-c", f"model={_codex_toml_string(model)}"]
+    base_url = _codex_setting_value(acp_settings.get("base_url"))
+    if base_url:
+        args += ["-c", f"openai_base_url={_codex_toml_string(base_url)}"]
+    return args

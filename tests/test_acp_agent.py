@@ -227,6 +227,96 @@ class TestApprovalArgs:
         assert codex_approval_args(True) == ["-c", 'approval_policy="never"']
 
 
+class TestCodexModelArgs:
+    """Model and base-URL settings pinned onto the codex-acp command line.
+
+    Codex ignores the OPENAI_BASE_URL env var, so the -c openai_base_url
+    override is the only path that gets a custom endpoint to the agent
+    (the PR #380 regression: a proxy user's key was sent to api.openai.com
+    and 401ed).
+    """
+
+    def test_empty_settings_add_nothing(self):
+        from notebook_intelligence.acp_registry import codex_model_args
+        assert codex_model_args({}) == []
+        assert codex_model_args({"chat_model": "", "base_url": "  "}) == []
+
+    def test_base_url_becomes_openai_base_url_override(self):
+        from notebook_intelligence.acp_registry import codex_model_args
+        args = codex_model_args({"base_url": "http://127.0.0.1:8901/v1"})
+        assert args == ["-c", 'openai_base_url="http://127.0.0.1:8901/v1"']
+
+    def test_chat_model_becomes_model_override(self):
+        from notebook_intelligence.acp_registry import codex_model_args
+        assert codex_model_args({"chat_model": "gpt-5.2-codex"}) == [
+            "-c", 'model="gpt-5.2-codex"'
+        ]
+
+    def test_both_settings_yield_both_overrides(self):
+        from notebook_intelligence.acp_registry import codex_model_args
+        args = codex_model_args(
+            {"chat_model": "gpt-5.2-codex", "base_url": "https://llm.corp/v1"}
+        )
+        assert args == [
+            "-c", 'model="gpt-5.2-codex"',
+            "-c", 'openai_base_url="https://llm.corp/v1"',
+        ]
+
+    def test_values_are_quoted_as_toml_strings(self):
+        from notebook_intelligence.acp_registry import codex_model_args
+        args = codex_model_args({"base_url": 'https://x/v1?a="b"\\c'})
+        assert args == ["-c", 'openai_base_url="https://x/v1?a=\\"b\\"\\\\c"']
+
+    def test_control_chars_are_dropped(self):
+        """Control chars cannot ride in a TOML basic string; an interior
+        newline from a paste artifact must not break the codex launch."""
+        from notebook_intelligence.acp_registry import codex_model_args
+        args = codex_model_args({"base_url": "https://proxy\n.corp/v1\x01"})
+        assert args == ["-c", 'openai_base_url="https://proxy.corp/v1"']
+
+    def test_value_left_empty_by_cleaning_adds_no_flag(self):
+        """An empty override is not neutral: it would blank out the model
+        codex would otherwise take from its config file or default."""
+        from notebook_intelligence.acp_registry import codex_model_args
+        assert codex_model_args({"chat_model": "\x08", "base_url": "\x01\x02"}) == []
+
+    def test_serve_appends_overrides_to_launch_cmd(self, tmp_path):
+        """Pin the delivery, not just the mapping: the original bug was
+        settings that never reached the launch command at all."""
+        import notebook_intelligence.acp_agent as mod
+
+        host = SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(
+                acp_settings={
+                    "enabled": True, "agent": "codex",
+                    "chat_model": "m1", "base_url": "http://proxy/v1",
+                    "full_access": False,
+                },
+                nbi_user_dir=str(tmp_path),
+            ),
+        )
+        client = mod.AcpAgentClient(host)
+        captured = {}
+
+        async def fake_exec(*cmd, **kw):
+            captured["cmd"] = list(cmd)
+            raise RuntimeError("captured; abort launch")
+
+        orig = mod.asyncio.create_subprocess_exec
+        mod.asyncio.create_subprocess_exec = fake_exec
+        try:
+            asyncio.run(client._serve())
+        finally:
+            mod.asyncio.create_subprocess_exec = orig
+
+        assert captured["cmd"][-6:] == [
+            "-c", 'approval_policy="untrusted"',
+            "-c", 'model="m1"',
+            "-c", 'openai_base_url="http://proxy/v1"',
+        ]
+
+
 class TestAssembleQuery:
     """The turn's context lines (attachments, current-file pointer, output
     context) ride along with the prompt — sending only ``request.prompt``

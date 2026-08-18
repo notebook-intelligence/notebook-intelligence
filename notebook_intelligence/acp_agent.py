@@ -51,6 +51,7 @@ from notebook_intelligence.api import (
 from notebook_intelligence.acp_registry import (
     AcpAgentSpec,
     codex_approval_args,
+    codex_model_args,
     resolve_acp_agent,
     resolve_acp_agent_command,
 )
@@ -394,6 +395,10 @@ class AcpAgentClient:
             cmd += codex_approval_args(
                 bool(self.acp_settings.get("full_access", False))
             )
+            # acp_settings already folds in the OPENAI_BASE_URL /
+            # NBI_ACP_CHAT_MODEL env overrides (ACP_SETTINGS_OVERRIDES),
+            # so these -c flags are the single delivery path to codex.
+            cmd += codex_model_args(self.acp_settings)
         log.info("Starting ACP agent (%s): %s", spec.id, " ".join(cmd))
         try:
             self._proc = await asyncio.create_subprocess_exec(
