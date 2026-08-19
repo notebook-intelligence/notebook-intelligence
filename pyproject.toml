@@ -53,7 +53,12 @@ dependencies = [
     # is already in the dep tree via ``claude-agent-sdk``. Track
     # BerriAI/litellm#25231 for the upstream fix. 1.28.1 picks up the
     # CVE-2026-59950 fix.
-    "mcp>=1.28.1",
+    # Capped below 2.0: it moved the FastMCP server out of the SDK, so
+    # ``mcp.server.fastmcp.tools`` (api.py) no longer exists there and the
+    # extension fails to load. Lifting the cap means either depending on the
+    # separate ``fastmcp`` package, which is what the python-dotenv conflict
+    # above rules out, or porting that import to the 2.x server API.
+    "mcp>=1.28.1,<2",
     "claude-agent-sdk",
     "anthropic>=0.22.1",
     # Used to tear down an agent subprocess and its descendants (shells, MCP
