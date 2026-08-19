@@ -14,6 +14,7 @@ from notebook_intelligence.mcp_client import (
     Client,
     StdioTransport,
     StreamableHttpTransport,
+    tool_input_schema,
 )
 from mcp import StdioServerParameters
 import mcp
@@ -685,7 +686,7 @@ class MCPServerImpl(MCPServer):
 
     # TODO: optimize this
     def get_tools(self) -> list[Tool]:
-        return [MCPTool(self, tool.name, tool.description, tool.inputSchema, auto_approve=(tool.name in self._auto_approve_tools)) for tool in self._mcp_tools]
+        return [MCPTool(self, tool.name, tool.description, tool_input_schema(tool), auto_approve=(tool.name in self._auto_approve_tools)) for tool in self._mcp_tools]
 
     def get_tool(self, tool_name: str) -> Tool:
         for tool in self.get_tools():

@@ -10,7 +10,12 @@ import uuid
 from fuzzy_json import loads as fuzzy_json_loads
 import logging
 import threading
-from mcp.server.fastmcp.tools import Tool as MCPToolClass
+
+try:
+    # mcp 2.0 renamed FastMCP to MCPServer and dropped mcp.server.fastmcp.
+    from mcp.server.mcpserver.tools import Tool as MCPToolClass
+except ImportError:  # mcp < 2.0
+    from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.ruleset import RuleContext

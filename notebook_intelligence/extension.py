@@ -691,6 +691,8 @@ class GetCapabilitiesHandler(APIHandler):
             "codex_cli_available": resolve_codex_cli_path() is not None,
             "disabled_coding_agent_launchers": effective_disabled_launchers,
             "default_chat_mode": nbi_config.default_chat_mode,
+            "chatbook_nui_url": nbi_config.chatbook_nui_url,
+            "chatbook_agent_type": nbi_config.chatbook_agent_type,
             "chat_feedback_enabled": self.enable_chat_feedback,
             "chat_feedback_always_visible": self.enable_chat_feedback_always_visible,
             # Single source of truth lives on each domain's base handler so
@@ -758,6 +760,8 @@ class ConfigHandler(APIHandler):
             "enable_output_followup",
             "enable_output_toolbar",
             "refresh_open_files_on_disk_change",
+            "chatbook_nui_url",
+            "chatbook_agent_type",
         ])
         # Top-level keys whose write is rejected outright when locked.
         locked_keys = set()

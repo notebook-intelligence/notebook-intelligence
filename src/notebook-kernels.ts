@@ -31,6 +31,12 @@ export const DEFAULT_NOTEBOOK_KERNEL: INotebookKernelProfile = Object.freeze({
   displayName: 'Python 3 (ipykernel)'
 });
 
+export const CHATBOOK_KERNEL: INotebookKernelProfile = Object.freeze({
+  language: 'chatbook',
+  kernelName: 'chatbook',
+  displayName: 'Chatbook'
+});
+
 export function normalizeNotebookLanguage(raw: string | undefined): string {
   const language = (raw ?? '').trim().toLowerCase();
   if (!language) {

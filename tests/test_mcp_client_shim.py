@@ -33,77 +33,99 @@ from notebook_intelligence.mcp_client import (
     Client,
     StdioTransport,
     StreamableHttpTransport,
+    tool_input_schema,
 )
 
 
 _SERVER_SCRIPT = textwrap.dedent(
     """
     import asyncio
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import (
-        Tool,
-        TextContent,
-        Prompt,
-        PromptArgument,
-        PromptMessage,
-        GetPromptResult,
-    )
 
-    server = Server("nbi-shim-test")
+    try:
+        from mcp.server import MCPServer
+    except ImportError:
+        MCPServer = None
 
-    @server.list_tools()
-    async def list_tools():
-        return [
-            Tool(
-                name="echo",
-                description="Echo input back as text.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
-                },
-            )
-        ]
+    if MCPServer is not None:
+        # mcp 2.0: FastMCP moved to MCPServer; the low-level Server no
+        # longer has @list_tools / @call_tool decorators.
+        server = MCPServer("nbi-shim-test")
 
-    @server.call_tool()
-    async def call_tool(name, args):
-        return [TextContent(type="text", text=f"You said: {args['text']}")]
+        @server.tool(description="Echo input back as text.")
+        def echo(text: str) -> str:
+            return f"You said: {text}"
 
-    @server.list_prompts()
-    async def list_prompts():
-        return [
-            Prompt(
-                name="greet",
-                title="Greet",
-                description="Greet someone by name.",
-                arguments=[
-                    PromptArgument(
-                        name="who",
-                        description="Person to greet.",
-                        required=True,
+        @server.prompt(title="Greet", description="Greet someone by name.")
+        def greet(who: str) -> str:
+            return f"Hello, {who}!"
+
+        asyncio.run(server.run_stdio_async())
+    else:
+        from mcp.server import Server
+        from mcp.server.stdio import stdio_server
+        from mcp.types import (
+            Tool,
+            TextContent,
+            Prompt,
+            PromptArgument,
+            PromptMessage,
+            GetPromptResult,
+        )
+
+        server = Server("nbi-shim-test")
+
+        @server.list_tools()
+        async def list_tools():
+            return [
+                Tool(
+                    name="echo",
+                    description="Echo input back as text.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}},
+                        "required": ["text"],
+                    },
+                )
+            ]
+
+        @server.call_tool()
+        async def call_tool(name, args):
+            return [TextContent(type="text", text=f"You said: {args['text']}")]
+
+        @server.list_prompts()
+        async def list_prompts():
+            return [
+                Prompt(
+                    name="greet",
+                    title="Greet",
+                    description="Greet someone by name.",
+                    arguments=[
+                        PromptArgument(
+                            name="who",
+                            description="Person to greet.",
+                            required=True,
+                        )
+                    ],
+                )
+            ]
+
+        @server.get_prompt()
+        async def get_prompt(name, args):
+            return GetPromptResult(
+                description="Greeting.",
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(type="text", text=f"Hello, {args['who']}!"),
                     )
                 ],
             )
-        ]
 
-    @server.get_prompt()
-    async def get_prompt(name, args):
-        return GetPromptResult(
-            description="Greeting.",
-            messages=[
-                PromptMessage(
-                    role="user",
-                    content=TextContent(type="text", text=f"Hello, {args['who']}!"),
-                )
-            ],
-        )
+        async def main():
+            async with stdio_server() as (read, write):
+                await server.run(read, write, server.create_initialization_options())
 
-    async def main():
-        async with stdio_server() as (read, write):
-            await server.run(read, write, server.create_initialization_options())
-
-    asyncio.run(main())
+        asyncio.run(main())
     """
 )
 
@@ -198,11 +220,11 @@ def test_end_to_end_against_real_stdio_server(server_script_path):
 
             tools = await client.list_tools()
             # mcp_manager.get_tools() reads tool.name / tool.description
-            # / tool.inputSchema. Pin them.
+            # / tool_input_schema(tool). Pin them.
             assert len(tools) == 1
             assert tools[0].name == "echo"
             assert tools[0].description == "Echo input back as text."
-            assert tools[0].inputSchema["properties"]["text"]["type"] == "string"
+            assert tool_input_schema(tools[0])["properties"]["text"]["type"] == "string"
 
             # mcp_manager.handle_tool_call inspects result.content and
             # iterates TextContent / ImageContent entries.

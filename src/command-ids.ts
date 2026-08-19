@@ -65,4 +65,8 @@ export namespace CommandIDs {
   export const openCodexLauncher = 'notebook-intelligence:open-codex-launcher';
   export const showTour = 'notebook-intelligence:show-tour';
   export const focusChatInput = 'notebook-intelligence:focus-chat-input';
+  export const createChatbookNotebook =
+    'notebook-intelligence:create-chatbook-notebook';
+  export const showChatbookGeneratedCode =
+    'notebook-intelligence:show-chatbook-generated-code';
 }

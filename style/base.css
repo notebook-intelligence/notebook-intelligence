@@ -3532,3 +3532,12 @@ svg.access-token-warning {
   color: var(--jp-ui-font-color1);
   outline: none;
 }
+
+.nbi-chatbook-generated-code {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-code-font-size);
+}

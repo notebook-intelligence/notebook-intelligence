@@ -32,8 +32,17 @@ from typing import Any, Dict, List, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Implementation
+
+try:
+    # mcp 2.0 renamed this helper and dropped the session-id third yield.
+    from mcp.client.streamable_http import streamable_http_client as _streamable_http_client
+
+    _MCP_STREAMABLE_HTTP_V2 = True
+except ImportError:  # mcp < 2.0
+    from mcp.client.streamable_http import streamablehttp_client as _streamable_http_client
+
+    _MCP_STREAMABLE_HTTP_V2 = False
 
 
 @dataclass
@@ -51,6 +60,30 @@ class StreamableHttpTransport:
 
     url: str
     headers: Dict[str, str] = field(default_factory=dict)
+
+
+async def _open_streamable_http(stack: AsyncExitStack, url: str, headers: Optional[Dict[str, str]]):
+    """Open the streamable-http transport across mcp 1.x and 2.0 APIs.
+
+    mcp 1.x: ``streamablehttp_client(url, headers=...)`` yields
+    ``(read, write, get_session_id)``. mcp 2.0: ``streamable_http_client``
+    yields ``(read, write)`` and takes headers via a caller-owned httpx
+    client instead of a ``headers=`` kwarg.
+    """
+    if _MCP_STREAMABLE_HTTP_V2:
+        kwargs: Dict[str, Any] = {}
+        if headers:
+            from mcp.shared._httpx_utils import create_mcp_http_client
+
+            http_client = create_mcp_http_client(headers=headers)
+            await stack.enter_async_context(http_client)
+            kwargs["http_client"] = http_client
+        streams = await stack.enter_async_context(_streamable_http_client(url, **kwargs))
+    else:
+        streams = await stack.enter_async_context(
+            _streamable_http_client(url, headers=headers)
+        )
+    return streams[0], streams[1]
 
 
 class Client:
@@ -86,13 +119,10 @@ class Client:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             elif isinstance(self._transport, StreamableHttpTransport):
-                # The streamable-http transport yields three values; the
-                # third is a session-id callable we don't use.
-                read, write, _ = await stack.enter_async_context(
-                    streamablehttp_client(
-                        self._transport.url,
-                        headers=dict(self._transport.headers) if self._transport.headers else None,
-                    )
+                read, write = await _open_streamable_http(
+                    stack,
+                    self._transport.url,
+                    dict(self._transport.headers) if self._transport.headers else None,
                 )
             else:
                 raise TypeError(
@@ -169,3 +199,17 @@ class Client:
     async def get_prompt(self, name: str, arguments: dict):
         """Return ``mcp.types.GetPromptResult`` (has ``.messages``)."""
         return await self._require_session().get_prompt(name, arguments)
+
+
+def tool_input_schema(tool: Any) -> dict:
+    """JSON Schema for a tool's arguments.
+
+    mcp 1.x exposed this as ``tool.inputSchema`` (wire-name attribute).
+    mcp 2.0's pydantic model uses the Python field ``input_schema`` with
+    alias ``inputSchema``. NBI's MCP manager historically read the
+    camelCase attribute.
+    """
+    schema = getattr(tool, "inputSchema", None)
+    if schema is None:
+        schema = getattr(tool, "input_schema", None)
+    return schema or {}

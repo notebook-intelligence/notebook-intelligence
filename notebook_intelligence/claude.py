@@ -749,6 +749,94 @@ def tool_text_response(
         result["is_error"] = True
     return result
 
+
+def _sdk_tool_input_json_schema(input_schema: Any) -> dict[str, Any]:
+    """Convert an SdkMcpTool.input_schema to a JSON Schema object."""
+    if not isinstance(input_schema, dict):
+        return {"type": "object", "properties": {}}
+    if "type" in input_schema and "properties" in input_schema:
+        return input_schema
+    properties = {}
+    type_map = {str: "string", int: "integer", float: "number", bool: "boolean"}
+    for param_name, param_type in input_schema.items():
+        properties[param_name] = {"type": type_map.get(param_type, "string")}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties.keys()),
+    }
+
+
+def create_compatible_sdk_mcp_server(
+    name: str, version: str = "1.0.0", tools: Optional[list] = None
+):
+    """Build an in-process SDK MCP server that works on mcp 1.x and 2.0.
+
+    ``claude_agent_sdk.create_sdk_mcp_server`` registers tools with
+    ``@server.list_tools()`` / ``@server.call_tool()``. Those decorators
+    were removed in mcp 2.0, which crashes NBI at startup and leaves the
+    JupyterLab sidebar empty. mcp 1.x still uses the decorator API, so we
+    keep calling the SDK helper there.
+
+    mcp 2.0 path: a duck-typed server whose ``request_handlers`` match
+    what ``claude_agent_sdk._internal.query.Query._handle_sdk_mcp_request``
+    looks up (``ListToolsRequest`` / ``CallToolRequest`` keys, results
+    with ``.root.tools`` / ``.root.content``).
+    """
+    from mcp.server import Server
+
+    if hasattr(Server, "list_tools"):
+        return create_sdk_mcp_server(name=name, version=version, tools=tools)
+
+    from types import SimpleNamespace
+
+    from mcp.types import CallToolRequest, ListToolsRequest
+
+    tool_list = tools or []
+    tool_map = {tool_def.name: tool_def for tool_def in tool_list}
+
+    async def list_tools(_request):
+        listed = []
+        for tool_def in tool_list:
+            listed.append(
+                SimpleNamespace(
+                    name=tool_def.name,
+                    description=tool_def.description,
+                    inputSchema=_sdk_tool_input_json_schema(tool_def.input_schema),
+                )
+            )
+        return SimpleNamespace(root=SimpleNamespace(tools=listed))
+
+    async def call_tool(request):
+        tool_name = request.params.name
+        arguments = request.params.arguments or {}
+        if tool_name not in tool_map:
+            raise ValueError(f"Tool '{tool_name}' not found")
+        result = await tool_map[tool_name].handler(arguments)
+        content = []
+        for item in result.get("content", []):
+            if item.get("type") == "text":
+                content.append(SimpleNamespace(text=item["text"]))
+            elif item.get("type") == "image":
+                content.append(
+                    SimpleNamespace(data=item["data"], mimeType=item["mimeType"])
+                )
+        return SimpleNamespace(
+            root=SimpleNamespace(
+                content=content, is_error=bool(result.get("is_error", False))
+            )
+        )
+
+    server = SimpleNamespace(
+        name=name,
+        version=version,
+        request_handlers={
+            ListToolsRequest: list_tools,
+            CallToolRequest: call_tool,
+        },
+    )
+    return {"type": "sdk", "name": name, "instance": server}
+
 def model_info_from_id(model_id: str) -> dict:
     """Get model info, checking cached models first then falling back to defaults."""
     for model in _claude_models_cache:

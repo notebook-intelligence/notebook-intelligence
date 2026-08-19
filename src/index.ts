@@ -45,7 +45,11 @@ import {
   IInlineCompleterFactory
 } from '@jupyterlab/completer';
 
-import { NotebookActions, NotebookPanel } from '@jupyterlab/notebook';
+import {
+  INotebookTracker,
+  NotebookActions,
+  NotebookPanel
+} from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
@@ -140,6 +144,13 @@ import {
 } from './notebook-kernels';
 
 import { CommandIDs } from './command-ids';
+import {
+  CHATBOOK_KERNEL_NAME,
+  attachChatbookNotebooks,
+  getChatbookCellMeta,
+  patchCodeCellExecute,
+  registerChatbookLanguage
+} from './chatbook';
 
 const addInlinePromptEffect = StateEffect.define<{
   pos: number;
@@ -863,7 +874,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     IDefaultFileBrowser,
     IEditorLanguageRegistry,
     ICommandPalette,
-    IMainMenu
+    IMainMenu,
+    INotebookTracker
   ],
   // @jupyterlab/terminal nests its own @lumino/coreutils copy, so its
   // Token class is structurally identical but nominally distinct from
@@ -884,6 +896,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     languageRegistry: IEditorLanguageRegistry,
     palette: ICommandPalette,
     mainMenu: IMainMenu,
+    notebookTracker: INotebookTracker,
     statusBar: IStatusBar | null,
     launcher: ILauncher | null,
     terminalTracker: ITerminalTracker | null,
@@ -912,6 +925,10 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     };
 
     await NBIAPI.initialize();
+
+    registerChatbookLanguage(languageRegistry);
+    patchCodeCellExecute();
+    attachChatbookNotebooks(notebookTracker);
 
     if (terminalTracker) {
       attachTerminalDragDrop({
@@ -1335,6 +1352,63 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
+    app.commands.addCommand(CommandIDs.createChatbookNotebook, {
+      label: 'Chatbook',
+      caption: 'Create a notebook whose cells are natural-language prompts',
+      icon: () => sidebarIcon,
+      execute: async () => {
+        return app.commands.execute(CommandIDs.createNewNotebook, {
+          kernelName: CHATBOOK_KERNEL_NAME
+        });
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.showChatbookGeneratedCode, {
+      label: 'Show generated code',
+      caption: 'Show the hidden Python nui generated for this Chatbook cell',
+      isEnabled: () => {
+        const current = app.shell.currentWidget;
+        if (!(current instanceof NotebookPanel)) {
+          return false;
+        }
+        if (
+          current.sessionContext.session?.kernel?.name !== CHATBOOK_KERNEL_NAME
+        ) {
+          return false;
+        }
+        const cell = current.content.activeCell;
+        if (!(cell instanceof CodeCell)) {
+          return false;
+        }
+        return Boolean(getChatbookCellMeta(cell.model.metadata).generatedCode);
+      },
+      execute: async () => {
+        const current = app.shell.currentWidget;
+        if (!(current instanceof NotebookPanel)) {
+          return;
+        }
+        const cell = current.content.activeCell;
+        if (!(cell instanceof CodeCell)) {
+          return;
+        }
+        const code =
+          getChatbookCellMeta(cell.model.metadata).generatedCode || '';
+        const body = document.createElement('pre');
+        body.className = 'nbi-chatbook-generated-code';
+        body.textContent = code;
+        const dialog = new Dialog({
+          title: 'Generated code',
+          body: new (class extends Widget {
+            constructor() {
+              super({ node: body });
+            }
+          })(),
+          buttons: [Dialog.okButton({ label: 'Close' })]
+        });
+        await dialog.launch();
+      }
+    });
+
     app.commands.addCommand(CommandIDs.listAvailableNotebookKernels, {
       execute: async () => {
         const kernels = new KernelSpecManager();
@@ -1546,6 +1620,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       sync();
       NBIAPI.configChanged.connect(sync);
     };
+
+    // Chatbook is a real kernelspec, so JupyterLab already adds a Notebook
+    // launcher tile from kernel.json. Do not add a second tile here.
 
     syncLauncherEntry(
       CommandIDs.openClaudeCodeLauncher,
@@ -2046,6 +2123,14 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     palette.addItem({
       command: CommandIDs.openConfigurationDialog,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.createChatbookNotebook,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.showChatbookGeneratedCode,
       category: 'Notebook Intelligence'
     });
     palette.addItem({
@@ -2651,6 +2736,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     copilotContextMenu.addItem({ command: CommandIDs.editorGenerateCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorFixThisCode });
+    copilotContextMenu.addItem({
+      command: CommandIDs.showChatbookGeneratedCode
+    });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisOutput });
     copilotContextMenu.addItem({
       command: CommandIDs.editorAskAboutThisOutput

@@ -114,6 +114,19 @@ class NBIConfig:
         return self.get('default_chat_mode', 'ask')
 
     @property
+    def chatbook_nui_url(self) -> str:
+        configured = self.get('chatbook_nui_url', '')
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+        env = os.environ.get('NUI_URL', '').strip()
+        return env or 'http://127.0.0.1:8080'
+
+    @property
+    def chatbook_agent_type(self) -> str:
+        value = self.get('chatbook_agent_type', '')
+        return value.strip() if isinstance(value, str) else ''
+
+    @property
     def embedding_model(self):
         return self.get('embedding_model', {})
 

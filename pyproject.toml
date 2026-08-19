@@ -27,6 +27,7 @@ dependencies = [
     # CVE-2026-40934 fixes from upstream jupyter_server; 2.20.0 adds the
     # PYSEC-2026-366 fix.
     "jupyter_server>=2.20.0,<3",
+    "ipykernel>=6.0",
     "sseclient-py",
     "fuzy-jon==0.1.0",
     "tiktoken",
@@ -141,6 +142,7 @@ exclude = [".github", "binder", "src", "style", "media"]
 "notebook_intelligence/labextension" = "share/jupyter/labextensions/@plmbr/notebook-intelligence"
 "install.json" = "share/jupyter/labextensions/@plmbr/notebook-intelligence/install.json"
 "jupyter-config/server-config" = "etc/jupyter/jupyter_server_config.d"
+"notebook_intelligence/chatbook_kernel/kernelspec" = "share/jupyter/kernels/chatbook"
 
 [tool.hatch.build.hooks.version]
 path = "notebook_intelligence/_version.py"
