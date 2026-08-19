@@ -2,7 +2,7 @@
 
 import { CodeCell } from '@jupyterlab/cells';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
-import { ISessionContext } from '@jupyterlab/apputils';
+import { ISessionContext, Notification } from '@jupyterlab/apputils';
 import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 import { Contents, Kernel } from '@jupyterlab/services';
@@ -16,6 +16,7 @@ import {
   applySourceViewToCell,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
+  getChatbookCellMode,
   getChatbookCellMeta,
   getNotebookSourceView,
   isChatbookKernelName,
@@ -23,13 +24,17 @@ import {
   mergeNotebookChatbookMeta,
   pythonExportNotebookPath,
   resolveChatbookPrompt,
+  resolveChatbookPython,
   sha256Hex,
   snapshotChatbookContextCell,
   splitNotebookContext,
+  switchChatbookCellMode,
+  type ChatbookCellMode,
   type ChatbookSourceView,
   type IChatbookCellMeta,
   type IChatbookNotebookContext
 } from './chatbook-core';
+import { NBIAPI } from './api';
 import { cellOutputAsText } from './utils';
 
 export {
@@ -38,6 +43,7 @@ export {
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
   getChatbookCellMeta,
+  getChatbookCellMode,
   getNotebookSourceView,
   isChatbookConvertTargetId,
   isChatbookKernelName,
@@ -112,6 +118,32 @@ export function patchCodeCellExecute(): void {
     const notebookMeta = notebook?.model?.metadata;
     const sourceView = getNotebookSourceView(notebookMeta);
     const source = cell.model.sharedModel.getSource();
+    const mode = getChatbookCellMode(cellMeta);
+    if (mode === 'python') {
+      const python = resolveChatbookPython(source, cellMeta, sourceView);
+      writeChatbookCellMeta(cell, {
+        mode: 'python',
+        pythonSource: python,
+        generatedCode: python
+      });
+      const execution = await original(cell, sessionContext, {
+        ...(metadata || {}),
+        cellId:
+          (typeof metadata?.cellId === 'string' && metadata.cellId) ||
+          cell.model.id,
+        nbi_chatbook: {
+          cellId: cell.model.id,
+          executeMode: 'python'
+        }
+      });
+      const status = (
+        execution as unknown as { content?: { status?: string } } | undefined
+      )?.content?.status;
+      if (status !== 'error' && python.trim()) {
+        void summarizePythonCell(cell, python);
+      }
+      return execution;
+    }
     const prompt = resolveChatbookPrompt(source, cellMeta, sourceView);
     if (sourceView === 'prompt') {
       writeChatbookCellMeta(cell, { prompt });
@@ -140,6 +172,105 @@ export function patchCodeCellExecute(): void {
   };
 }
 
+export async function summarizePythonCell(
+  cell: IChatbookEditableCell,
+  python?: string,
+  notifyOnError = false
+): Promise<string | undefined> {
+  const source = python ?? cell.model.sharedModel.getSource();
+  if (!source.trim()) {
+    return '';
+  }
+  const codeHash = await sha256Hex(source);
+  const meta = getChatbookCellMeta(cell.model.metadata);
+  if (
+    meta.prompt &&
+    meta.summarizedCodeHash === codeHash &&
+    !meta.summaryError
+  ) {
+    return meta.prompt;
+  }
+  writeChatbookCellMeta(cell, {
+    mode: 'python',
+    pythonSource: source,
+    generatedCode: source,
+    codeHash,
+    summaryError: undefined
+  });
+  try {
+    const prompt = await NBIAPI.summarizeChatbookCell(source);
+    const latestSource = cell.model.sharedModel.getSource();
+    const latestHash = await sha256Hex(latestSource);
+    if (
+      latestHash !== codeHash ||
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) !== 'python'
+    ) {
+      return undefined;
+    }
+    writeChatbookCellMeta(cell, {
+      prompt,
+      codeHash,
+      summarizedCodeHash: codeHash,
+      summaryError: undefined
+    });
+    return prompt;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    writeChatbookCellMeta(cell, { codeHash, summaryError: message });
+    if (notifyOnError) {
+      Notification.warning(
+        `Could not generate English representation: ${message}`
+      );
+    }
+    return undefined;
+  }
+}
+
+export async function setChatbookCellMode(
+  panel: NotebookPanel,
+  cell: IChatbookEditableCell,
+  nextMode: ChatbookCellMode
+): Promise<void> {
+  const sourceView = getNotebookSourceView(panel.model?.metadata);
+  let meta = getChatbookCellMeta(cell.model.metadata);
+  const currentMode = getChatbookCellMode(meta);
+  if (currentMode === nextMode) {
+    return;
+  }
+  if (currentMode === 'python' && nextMode === 'prompt') {
+    await summarizePythonCell(cell, cell.model.sharedModel.getSource(), true);
+    meta = getChatbookCellMeta(cell.model.metadata);
+    if (!meta.prompt) {
+      return;
+    }
+  }
+  const result = switchChatbookCellMode({
+    source: cell.model.sharedModel.getSource(),
+    meta,
+    sourceView,
+    nextMode
+  });
+  writeChatbookCellMeta(cell, result.meta);
+  if (result.source !== cell.model.sharedModel.getSource()) {
+    cell.model.sharedModel.setSource(result.source);
+  }
+}
+
+export async function toggleActiveChatbookCellMode(
+  panel: NotebookPanel
+): Promise<void> {
+  const cell = panel.content.activeCell;
+  if (!cell || cell.model.type !== 'code') {
+    return;
+  }
+  const mode = getChatbookCellMode(getChatbookCellMeta(cell.model.metadata));
+  await setChatbookCellMode(
+    panel,
+    cell,
+    mode === 'python' ? 'prompt' : 'python'
+  );
+}
+
 export function attachChatbookNotebooks(
   tracker: INotebookTracker
 ): IDisposable {
@@ -151,6 +282,65 @@ export function attachChatbookNotebooks(
     }
     attached.add(panel);
     let kernelConnection: Kernel.IKernelConnection | null = null;
+    const syncCellBadges = () => {
+      const isChatbook = isChatbookSession(panel.sessionContext);
+      for (const widget of panel.content.widgets) {
+        const existing = widget.node.querySelector<HTMLButtonElement>(
+          ':scope > .nbi-chatbook-cell-mode'
+        );
+        if (!isChatbook || widget.model.type !== 'code') {
+          existing?.remove();
+          widget.node.classList.remove(
+            'nbi-chatbook-cell-prompt',
+            'nbi-chatbook-cell-python'
+          );
+          continue;
+        }
+        const mode = getChatbookCellMode(
+          getChatbookCellMeta(widget.model.metadata)
+        );
+        const desiredMime =
+          mode === 'python' ? 'text/x-python' : 'text/x-chatbook';
+        const cellModel = widget.model as unknown as { mimeType: string };
+        if (cellModel.mimeType !== desiredMime) {
+          cellModel.mimeType = desiredMime;
+        }
+        widget.node.classList.toggle(
+          'nbi-chatbook-cell-prompt',
+          mode === 'prompt'
+        );
+        widget.node.classList.toggle(
+          'nbi-chatbook-cell-python',
+          mode === 'python'
+        );
+        const button = existing || document.createElement('button');
+        button.className = 'nbi-chatbook-cell-mode';
+        button.type = 'button';
+        button.textContent = mode === 'python' ? 'Py' : 'NL';
+        button.title =
+          mode === 'python'
+            ? 'Python cell — switch to its English representation'
+            : 'Natural-language cell — switch to Python';
+        button.setAttribute('aria-label', button.title);
+        if (!existing) {
+          button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            panel.content.activeCellIndex =
+              panel.content.widgets.indexOf(widget);
+            const currentMode = getChatbookCellMode(
+              getChatbookCellMeta(widget.model.metadata)
+            );
+            void setChatbookCellMode(
+              panel,
+              widget,
+              currentMode === 'python' ? 'prompt' : 'python'
+            ).finally(syncCellBadges);
+          });
+          widget.node.appendChild(button);
+        }
+      }
+    };
     const onAnyMessage = (
       _sender: Kernel.IKernelConnection,
       args: Kernel.IAnyMessageArgs
@@ -175,14 +365,20 @@ export function attachChatbookNotebooks(
       }
       kernelConnection = kernel;
       kernel.anyMessage.connect(onAnyMessage);
+      syncCellBadges();
     };
     panel.sessionContext.kernelChanged.connect(connectKernel);
+    panel.model?.contentChanged.connect(syncCellBadges);
+    panel.content.activeCellChanged.connect(syncCellBadges);
     void panel.sessionContext.ready.then(connectKernel);
+    syncCellBadges();
     panel.disposed.connect(() => {
       if (kernelConnection) {
         kernelConnection.anyMessage.disconnect(onAnyMessage);
         kernelConnection = null;
       }
+      panel.model?.contentChanged.disconnect(syncCellBadges);
+      panel.content.activeCellChanged.disconnect(syncCellBadges);
     });
   };
 
@@ -256,6 +452,11 @@ function applyChatbookPayload(
     ? cells.find(widget => widget.model.id === cellId)
     : panel.content.activeCell;
   if (cell) {
+    if (
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'python'
+    ) {
+      return;
+    }
     writeChatbookCellMeta(cell, patch);
     if (
       patch.generatedCode &&

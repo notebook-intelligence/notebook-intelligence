@@ -84,7 +84,10 @@ from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_claude_config_dir, get_jupyter_root_dir, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env, VALID_CODING_AGENT_LAUNCHERS, compute_effective_disabled_launchers, validate_coding_agent_launcher_ids, resolve_claude_cli_path, resolve_opencode_cli_path, resolve_pi_cli_path, resolve_copilot_cli_path, resolve_codex_cli_path, safe_anchor_uri, has_dangerous_text_codepoints, split_csv
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
-from notebook_intelligence.chatbook_generate import generate_chatbook_python
+from notebook_intelligence.chatbook_generate import (
+    generate_chatbook_python,
+    summarize_chatbook_python,
+)
 from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
 ai_service_manager: AIServiceManager = None
@@ -741,7 +744,7 @@ class GetCapabilitiesHandler(APIHandler):
         self.finish(json.dumps(response))
 
 class ChatbookGenerateHandler(APIHandler):
-    """Turn a Chatbook prompt into Python using the configured NBI chat model."""
+    """Generate either Python or an English representation for Chatbook."""
 
     @tornado.web.authenticated
     async def post(self):
@@ -751,10 +754,18 @@ class ChatbookGenerateHandler(APIHandler):
             self.set_status(400)
             self.finish(json.dumps({"error": "Invalid JSON body"}))
             return
+        operation = (
+            data.get("operation", "generate")
+            if isinstance(data, dict)
+            else "generate"
+        )
         prompt = data.get("prompt") if isinstance(data, dict) else None
-        if not str(prompt).strip():
+        code_source = data.get("code") if isinstance(data, dict) else None
+        required_value = code_source if operation == "summarize" else prompt
+        if not str(required_value).strip():
             self.set_status(400)
-            self.finish(json.dumps({"error": "prompt is required"}))
+            field = "code" if operation == "summarize" else "prompt"
+            self.finish(json.dumps({"error": f"{field} is required"}))
             return
         notebook_context = None
         if isinstance(data, dict):
@@ -764,6 +775,15 @@ class ChatbookGenerateHandler(APIHandler):
             if not isinstance(notebook_context, dict):
                 notebook_context = None
         try:
+            if operation == "summarize":
+                english = await tornado.ioloop.IOLoop.current().run_in_executor(
+                    None,
+                    lambda: summarize_chatbook_python(
+                        ai_service_manager, str(code_source)
+                    ),
+                )
+                self.finish(json.dumps({"prompt": english}))
+                return
             code = await tornado.ioloop.IOLoop.current().run_in_executor(
                 None,
                 lambda: generate_chatbook_python(
@@ -777,7 +797,12 @@ class ChatbookGenerateHandler(APIHandler):
         except Exception as exc:
             log.error("Chatbook generate failed: %s", exc)
             self.set_status(500)
-            self.finish(json.dumps({"error": "Chatbook code generation failed"}))
+            message = (
+                "Chatbook English generation failed"
+                if operation == "summarize"
+                else "Chatbook code generation failed"
+            )
+            self.finish(json.dumps({"error": message}))
             return
         self.finish(json.dumps({"generatedCode": code}))
 

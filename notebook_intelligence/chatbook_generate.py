@@ -14,6 +14,14 @@ from notebook_intelligence.chatbook_kernel.codegen import (
     extract_python_cell,
 )
 
+CELL_SUMMARY_INSTRUCTIONS = """You convert a Python notebook cell into a concise natural-language Chatbook prompt.
+
+Return only the prompt text, with no title, explanation, markdown fence, or code.
+Describe what the cell does as an instruction a user could give to regenerate equivalent Python.
+Preserve important literal values, variable names, function names, and intended outputs.
+Use English unless the surrounding notebook context is clearly in another natural language.
+"""
+
 
 class CollectingChatResponse(ChatResponse):
     """ChatResponse that concatenates streamed text for a single completion."""
@@ -83,7 +91,9 @@ def _truncate(text: str, max_chars: int) -> str:
 def _format_context_cell(cell: dict, *, is_cursor: bool) -> str:
     index = cell.get("index", "?")
     cell_type = cell.get("cellType") or "code"
-    header = f"### Cell {index} ({cell_type})"
+    mode = cell.get("mode")
+    mode_label = f", {mode}-authored" if mode in {"prompt", "python"} else ""
+    header = f"### Cell {index} ({cell_type}{mode_label})"
     if is_cursor:
         header += " — generate this cell"
     lines = [header]
@@ -191,6 +201,38 @@ def generate_python_with_chat_model(
         ) from None
 
 
+def generate_prompt_with_chat_model(
+    chat_model: Any,
+    code: str,
+    cancel_token: Optional[Any] = None,
+) -> str:
+    collector = CollectingChatResponse()
+    messages = [
+        {"role": "system", "content": CELL_SUMMARY_INSTRUCTIONS},
+        {
+            "role": "user",
+            "content": f"Convert this Python cell into a Chatbook prompt:\n\n```python\n{code.strip()}\n```",
+        },
+    ]
+    result = chat_model.completions(
+        messages, response=collector, cancel_token=cancel_token
+    )
+    text = collector.text
+    if not text and isinstance(result, dict):
+        choices = result.get("choices") or []
+        message = (choices[0].get("message") if choices else {}) or {}
+        text = message.get("content") or ""
+    value = str(text or "").strip()
+    if value.startswith("```") and value.endswith("```"):
+        lines = value.splitlines()
+        value = "\n".join(lines[1:-1]).strip()
+    if not value:
+        raise ChatbookCodegenError(
+            "Notebook Intelligence produced no English representation"
+        )
+    return value
+
+
 def generate_chatbook_python(
     manager: Any,
     prompt: str,
@@ -204,3 +246,12 @@ def generate_chatbook_python(
     return generate_python_with_chat_model(
         model, prompt, notebook_context=notebook_context
     )
+
+
+def summarize_chatbook_python(manager: Any, code: str) -> str:
+    model = resolve_chatbook_chat_model(manager)
+    if model is None:
+        raise ChatbookCodegenError(
+            "No chat model configured in Notebook Intelligence"
+        )
+    return generate_prompt_with_chat_model(model, code)

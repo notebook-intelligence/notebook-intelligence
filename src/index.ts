@@ -152,12 +152,15 @@ import {
   CHATBOOK_KERNEL_NAME,
   CHATBOOK_LANGUAGE,
   attachChatbookNotebooks,
+  getChatbookCellMode,
   getChatbookCellMeta,
   getNotebookSourceView,
   isChatbookPromptInlineCompletion,
   isChatbookSession,
   patchCodeCellExecute,
   registerChatbookLanguage,
+  summarizePythonCell,
+  toggleActiveChatbookCellMode,
   toggleChatbookSourceView
 } from './chatbook';
 
@@ -601,15 +604,25 @@ class NBIInlineCompletionProvider
     if (context.widget instanceof NotebookPanel) {
       editorType = 'notebook';
       const panel = context.widget;
+      const activeCell = panel.content.activeCell;
+      const activeMode = activeCell
+        ? getChatbookCellMode(getChatbookCellMeta(activeCell.model.metadata))
+        : 'prompt';
       const chatbookPromptMode = isChatbookPromptInlineCompletion(
         panel.sessionContext.session?.kernel?.name ||
           panel.sessionContext.kernelPreference?.name,
-        getNotebookSourceView(panel.model?.metadata)
+        getNotebookSourceView(panel.model?.metadata),
+        activeMode
       );
-      const activeCell = panel.content.activeCell;
       if (chatbookPromptMode) {
         language = CHATBOOK_LANGUAGE;
-      } else if (activeCell.model.sharedModel.cell_type === 'markdown') {
+      } else if (
+        isChatbookSession(panel.sessionContext) &&
+        (activeMode === 'python' ||
+          getNotebookSourceView(panel.model?.metadata) === 'code')
+      ) {
+        language = 'python';
+      } else if (activeCell?.model.sharedModel.cell_type === 'markdown') {
         language = 'markdown';
       }
       let activeCellReached = false;
@@ -1442,6 +1455,52 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       return isChatbookSession(current.sessionContext) ? current : null;
     };
 
+    app.commands.addCommand(CommandIDs.toggleChatbookCellMode, {
+      label: () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        const mode = cell
+          ? getChatbookCellMode(getChatbookCellMeta(cell.model.metadata))
+          : 'prompt';
+        return mode === 'python'
+          ? 'Switch cell to natural language'
+          : 'Switch cell to Python';
+      },
+      caption:
+        'Switch the active Chatbook cell between natural language and Python',
+      isEnabled: () =>
+        currentChatbookNotebook()?.content.activeCell?.model.type === 'code',
+      execute: async () => {
+        const panel = currentChatbookNotebook();
+        if (panel) {
+          await toggleActiveChatbookCellMode(panel);
+        }
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.refreshChatbookEnglish, {
+      label: 'Refresh English representation',
+      caption: 'Regenerate the English representation of this Python cell',
+      isEnabled: () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        return Boolean(
+          cell &&
+            cell.model.type === 'code' &&
+            getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) ===
+              'python'
+        );
+      },
+      execute: async () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        if (cell?.model.type === 'code') {
+          await summarizePythonCell(
+            cell,
+            cell.model.sharedModel.getSource(),
+            true
+          );
+        }
+      }
+    });
+
     app.commands.addCommand(CommandIDs.toggleChatbookSourceView, {
       label: () =>
         getNotebookSourceView(currentChatbookNotebook()?.model?.metadata) ===
@@ -2202,6 +2261,14 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       category: 'Notebook Intelligence'
     });
     palette.addItem({
+      command: CommandIDs.toggleChatbookCellMode,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.refreshChatbookEnglish,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
       command: CommandIDs.toggleChatbookSourceView,
       category: 'Notebook Intelligence'
     });
@@ -2814,6 +2881,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     copilotContextMenu.addItem({ command: CommandIDs.editorFixThisCode });
     copilotContextMenu.addItem({
       command: CommandIDs.showChatbookGeneratedCode
+    });
+    copilotContextMenu.addItem({
+      command: CommandIDs.toggleChatbookCellMode
+    });
+    copilotContextMenu.addItem({
+      command: CommandIDs.refreshChatbookEnglish
     });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisOutput });
     copilotContextMenu.addItem({

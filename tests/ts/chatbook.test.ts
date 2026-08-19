@@ -8,6 +8,7 @@ import {
   splitNotebookContext,
   convertChatbookCellToPython,
   getChatbookCellMeta,
+  getChatbookCellMode,
   getNotebookSourceView,
   isChatbookConvertTargetId,
   isChatbookKernelName,
@@ -17,7 +18,8 @@ import {
   promptAsHashComment,
   pythonExportNotebookPath,
   resolveChatbookPrompt,
-  sha256Hex
+  sha256Hex,
+  switchChatbookCellMode
 } from '../../src/chatbook-core';
 
 describe('chatbook-core', () => {
@@ -39,6 +41,34 @@ describe('chatbook-core', () => {
     expect(merged.trusted).toBe(true);
     expect((merged.nbi as any).chatbook.generatedCode).toBe('print(1)');
     expect(getChatbookCellMeta(merged).promptHash).toBe('abc');
+    expect(getChatbookCellMode({})).toBe('prompt');
+    expect(getChatbookCellMode({ mode: 'python' })).toBe('python');
+  });
+
+  it('switches between natural language and Python representations', () => {
+    const python = switchChatbookCellMode({
+      source: 'calculate a total',
+      meta: { generatedCode: 'total = sum(values)' },
+      sourceView: 'prompt',
+      nextMode: 'python'
+    });
+    expect(python.source).toBe('total = sum(values)');
+    expect(python.meta.mode).toBe('python');
+    expect(python.meta.prompt).toBe('calculate a total');
+
+    const prompt = switchChatbookCellMode({
+      source: 'total = sum(values)',
+      meta: {
+        mode: 'python',
+        prompt: 'calculate a total',
+        pythonSource: 'total = sum(values)'
+      },
+      sourceView: 'prompt',
+      nextMode: 'prompt'
+    });
+    expect(prompt.source).toBe('calculate a total');
+    expect(prompt.meta.mode).toBe('prompt');
+    expect(prompt.meta.generatedCode).toBe('total = sum(values)');
   });
 
   it('stores nui session id on the notebook', () => {
@@ -135,6 +165,35 @@ describe('chatbook-core', () => {
     );
   });
 
+  it('exports Python-authored cells without rewriting their source', () => {
+    const source = {
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: 'code',
+          source: 'value = 42',
+          metadata: {
+            nbi: {
+              chatbook: {
+                mode: 'python',
+                prompt: 'Set value to 42',
+                pythonSource: 'value = 42'
+              }
+            }
+          },
+          outputs: []
+        }
+      ],
+      metadata: {}
+    };
+    const out = buildPythonNotebookFromChatbook(source, {
+      name: 'python3',
+      display_name: 'Python 3',
+      language: 'python'
+    });
+    expect((out.cells as any)[0].source).toBe('value = 42');
+  });
+
   it('passes cachedCode only when the prompt hash matches', () => {
     const hit = buildExecuteChatbookMeta({
       cellId: 'c1',
@@ -151,6 +210,22 @@ describe('chatbook-core', () => {
       cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
     });
     expect(miss.cachedCode).toBeUndefined();
+  });
+
+  it('marks direct Python execution without a codegen cache', () => {
+    const meta = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: '',
+      promptHash: '',
+      executeMode: 'python',
+      cellMeta: {
+        mode: 'python',
+        generatedCode: 'value = 42',
+        promptHash: 'old'
+      }
+    });
+    expect(meta.executeMode).toBe('python');
+    expect(meta.cachedCode).toBeUndefined();
   });
 
   it('skips cache when notebook context hash changed', () => {

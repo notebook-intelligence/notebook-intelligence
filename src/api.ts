@@ -1349,6 +1349,23 @@ export class NBIAPI {
     return code;
   }
 
+  static async summarizeChatbookCell(code: string): Promise<string> {
+    const data = await requestAPI<{ prompt?: string; error?: string }>(
+      'chatbook/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'summarize', code })
+      }
+    );
+    const prompt = (data?.prompt || '').trim();
+    if (!prompt) {
+      throw new Error(
+        data?.error || 'Chatbook summary produced no English representation'
+      );
+    }
+    return prompt;
+  }
+
   static async generateCode(
     messageId: string,
     chatId: string,

@@ -2,6 +2,7 @@
 
 from notebook_intelligence.chatbook_generate import (
     format_chatbook_user_message,
+    generate_prompt_with_chat_model,
     generate_python_with_chat_model,
     resolve_chatbook_chat_model,
 )
@@ -14,6 +15,7 @@ from notebook_intelligence.chatbook_kernel.codegen import (
     stub_python,
 )
 from notebook_intelligence.chatbook_kernel.nbi_client import resolve_generate_url
+from notebook_intelligence.chatbook_kernel.kernel import is_python_execute
 
 
 def test_prompt_hash_is_sha256():
@@ -114,6 +116,32 @@ def test_generate_python_with_chat_model_extracts_fence():
     assert generate_python_with_chat_model(_FakeChatModel(), 'make x') == 'x = 1'
 
 
+def test_generate_prompt_with_chat_model_returns_plain_english():
+    class SummaryModel:
+        def completions(
+            self, messages, tools=None, response=None, cancel_token=None, options=None
+        ):
+            assert 'Python notebook cell' in messages[0]['content']
+            response.stream({
+                'choices': [{
+                    'delta': {
+                        'content': 'Calculate the total of values and store it in total.'
+                    }
+                }]
+            })
+            response.finish()
+
+    assert generate_prompt_with_chat_model(
+        SummaryModel(), 'total = sum(values)'
+    ) == 'Calculate the total of values and store it in total.'
+
+
+def test_python_execute_mode_bypasses_codegen():
+    assert is_python_execute({'executeMode': 'python'})
+    assert not is_python_execute({'executeMode': 'prompt'})
+    assert not is_python_execute({})
+
+
 def test_format_chatbook_user_message_marks_prefix_cursor_suffix():
     text = format_chatbook_user_message(
         'what did I ask?',
@@ -122,6 +150,7 @@ def test_format_chatbook_user_message_marks_prefix_cursor_suffix():
                 {
                     'index': 0,
                     'cellType': 'code',
+                    'mode': 'python',
                     'prompt': 'what is 2+2?',
                     'generatedCode': 'print(4)',
                     'output': '4',
@@ -147,6 +176,7 @@ def test_format_chatbook_user_message_marks_prefix_cursor_suffix():
     assert 'generate this cell' in text
     assert '<SUFFIX>' in text
     assert 'what is 2+2?' in text
+    assert 'python-authored' in text
     assert 'print(4)' in text
     assert 'Output:\n4' in text
     assert '# later' in text

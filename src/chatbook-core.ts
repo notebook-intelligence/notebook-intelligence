@@ -5,15 +5,21 @@ export const CHATBOOK_MSG_TYPE = 'nbi_chatbook_code';
 export const CHATBOOK_LANGUAGE = 'chatbook';
 
 export type ChatbookSourceView = 'prompt' | 'code';
+export type ChatbookCellMode = 'prompt' | 'python';
 export type ChatbookConvertTargetId = 'python';
 
 export const CHATBOOK_CONTEXT_MAX_FIELD_CHARS = 8000;
 export const CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS = 4000;
 
 export interface IChatbookCellMeta {
+  mode?: ChatbookCellMode;
   prompt?: string;
   promptHash?: string;
   generatedCode?: string;
+  pythonSource?: string;
+  codeHash?: string;
+  summarizedCodeHash?: string;
+  summaryError?: string;
   contextHash?: string;
   nuiSessionId?: string;
   nuiRunId?: string;
@@ -24,6 +30,7 @@ export interface IChatbookCellMeta {
 export interface IChatbookContextCell {
   index: number;
   cellType: string;
+  mode?: ChatbookCellMode;
   prompt?: string;
   generatedCode?: string;
   source?: string;
@@ -62,6 +69,7 @@ export const CHATBOOK_CONVERT_TARGETS: Record<
 
 export interface IChatbookExecuteMeta {
   cellId?: string;
+  executeMode?: ChatbookCellMode;
   promptHash?: string;
   contextHash?: string;
   cachedCode?: string;
@@ -76,9 +84,18 @@ export function isChatbookKernelName(name: string | undefined | null): boolean {
 
 export function isChatbookPromptInlineCompletion(
   kernelName: string | undefined | null,
-  sourceView: ChatbookSourceView
+  sourceView: ChatbookSourceView,
+  cellMode: ChatbookCellMode = 'prompt'
 ): boolean {
-  return isChatbookKernelName(kernelName) && sourceView !== 'code';
+  return (
+    isChatbookKernelName(kernelName) &&
+    sourceView !== 'code' &&
+    cellMode === 'prompt'
+  );
+}
+
+export function getChatbookCellMode(meta: IChatbookCellMeta): ChatbookCellMode {
+  return meta.mode === 'python' ? 'python' : 'prompt';
 }
 
 export function getChatbookCellMeta(cellMetadata: unknown): IChatbookCellMeta {
@@ -191,6 +208,18 @@ export function resolveChatbookPrompt(
   return source;
 }
 
+export function resolveChatbookPython(
+  source: string,
+  meta: IChatbookCellMeta,
+  sourceView: ChatbookSourceView
+): string {
+  const mode = getChatbookCellMode(meta);
+  if (mode === 'python') {
+    return source;
+  }
+  return sourceView === 'code' ? source : meta.generatedCode || '';
+}
+
 export function promptAsHashComment(prompt: string): string {
   const text = prompt.replace(/\s+$/u, '');
   if (!text) {
@@ -206,16 +235,36 @@ function snapshotChatbookCell(options: {
   source: string;
   meta: IChatbookCellMeta;
   currentView: ChatbookSourceView;
-}): { prompt: string; generatedCode: string } {
+}): {
+  prompt: string;
+  generatedCode: string;
+  pythonSource: string;
+  mode: ChatbookCellMode;
+} {
+  const mode = getChatbookCellMode(options.meta);
+  if (mode === 'python') {
+    const pythonSource = options.source;
+    const prompt = options.meta.prompt || '';
+    return {
+      prompt,
+      generatedCode: pythonSource,
+      pythonSource,
+      mode
+    };
+  }
   if (options.currentView === 'code') {
     return {
       prompt: options.meta.prompt ?? '',
-      generatedCode: options.source
+      generatedCode: options.source,
+      pythonSource: options.source,
+      mode
     };
   }
   return {
     prompt: options.source,
-    generatedCode: options.meta.generatedCode ?? ''
+    generatedCode: options.meta.generatedCode ?? '',
+    pythonSource: options.meta.generatedCode ?? '',
+    mode
   };
 }
 
@@ -226,20 +275,61 @@ export function applySourceViewToCell(options: {
   nextView: ChatbookSourceView;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
+  if (snapshot.mode === 'python') {
+    return {
+      source: options.source,
+      meta: {
+        ...options.meta,
+        mode: 'python',
+        pythonSource: options.source,
+        generatedCode: options.source
+      }
+    };
+  }
   const meta: IChatbookCellMeta = {
     ...options.meta,
+    mode: snapshot.mode,
     prompt: snapshot.prompt
   };
   if (snapshot.generatedCode) {
     meta.generatedCode = snapshot.generatedCode;
   }
   if (options.nextView === 'code') {
-    if (!snapshot.generatedCode) {
+    const python = snapshot.pythonSource || snapshot.generatedCode;
+    if (!python) {
       return { source: options.source, meta };
     }
-    return { source: snapshot.generatedCode, meta };
+    return { source: python, meta };
   }
   return { source: snapshot.prompt, meta };
+}
+
+export function switchChatbookCellMode(options: {
+  source: string;
+  meta: IChatbookCellMeta;
+  sourceView: ChatbookSourceView;
+  nextMode: ChatbookCellMode;
+}): { source: string; meta: IChatbookCellMeta } {
+  const snapshot = snapshotChatbookCell({
+    source: options.source,
+    meta: options.meta,
+    currentView: options.sourceView
+  });
+  const pythonSource = snapshot.pythonSource || snapshot.generatedCode;
+  const meta: IChatbookCellMeta = {
+    ...options.meta,
+    mode: options.nextMode,
+    prompt: snapshot.prompt
+  };
+  if (pythonSource) {
+    meta.generatedCode = pythonSource;
+    meta.pythonSource = pythonSource;
+  }
+  const source =
+    options.nextMode === 'python'
+      ? pythonSource || (snapshot.mode === 'python' ? options.source : '')
+      : snapshot.prompt;
+  return { source, meta };
 }
 
 export function convertChatbookCellToPython(options: {
@@ -248,6 +338,18 @@ export function convertChatbookCellToPython(options: {
   currentView: ChatbookSourceView;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
+  if (snapshot.mode === 'python') {
+    const python = snapshot.pythonSource || snapshot.generatedCode;
+    return {
+      source: python || options.source,
+      meta: {
+        ...options.meta,
+        mode: 'python',
+        prompt: snapshot.prompt,
+        pythonSource: python || options.source
+      }
+    };
+  }
   const meta: IChatbookCellMeta = {
     ...options.meta,
     prompt: snapshot.prompt || options.source
@@ -361,6 +463,38 @@ export function snapshotChatbookContextCell(options: {
     }
     return cell;
   }
+  const mode = getChatbookCellMode(options.cellMeta);
+  cell.mode = mode;
+  if (mode === 'python') {
+    const python = resolveChatbookPython(
+      options.source,
+      options.cellMeta,
+      options.sourceView
+    );
+    const prompt =
+      options.sourceView === 'prompt'
+        ? options.source
+        : options.cellMeta.prompt || '';
+    if (prompt) {
+      cell.prompt = truncateChatbookContextField(
+        prompt,
+        CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+      );
+    }
+    if (python) {
+      cell.generatedCode = truncateChatbookContextField(
+        python,
+        CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+      );
+    }
+    if (options.output) {
+      cell.output = truncateChatbookContextField(
+        options.output,
+        CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS
+      );
+    }
+    return cell;
+  }
   const prompt = resolveChatbookPrompt(
     options.source,
     options.cellMeta,
@@ -420,11 +554,16 @@ export function buildExecuteChatbookMeta(options: {
   workingDir?: string;
   notebookContext?: IChatbookNotebookContext;
   contextHash?: string;
+  executeMode?: ChatbookCellMode;
 }): IChatbookExecuteMeta {
   const meta: IChatbookExecuteMeta = {
     cellId: options.cellId,
-    promptHash: options.promptHash
+    promptHash: options.promptHash,
+    executeMode: options.executeMode || 'prompt'
   };
+  if (meta.executeMode === 'python') {
+    return meta;
+  }
   const contextMatches =
     !options.contextHash ||
     options.cellMeta.contextHash === options.contextHash;

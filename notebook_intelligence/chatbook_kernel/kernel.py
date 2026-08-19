@@ -43,6 +43,9 @@ class ChatbookKernel(IPythonKernel):
         chatbook_meta = metadata.get("nbi_chatbook") or {}
         cell_id = chatbook_meta.get("cellId") or metadata.get("cellId")
 
+        if is_python_execute(chatbook_meta):
+            return super().execute_request(stream, ident, parent)
+
         try:
             generated, info = resolve_executable_source(
                 prompt, chatbook_meta, self._generate
@@ -86,3 +89,7 @@ class ChatbookKernel(IPythonKernel):
 
 def _raise_runtime(message: str) -> str:
     return f"raise RuntimeError({message!r})"
+
+
+def is_python_execute(chatbook_meta: dict | None) -> bool:
+    return bool(chatbook_meta and chatbook_meta.get("executeMode") == "python")

@@ -3545,3 +3545,36 @@ svg.access-token-warning {
 .nbi-chatbook-toolbar-button .jp-ToolbarButtonComponent {
   font-size: var(--jp-ui-font-size1);
 }
+
+.jp-Cell.nbi-chatbook-cell-prompt,
+.jp-Cell.nbi-chatbook-cell-python {
+  position: relative;
+}
+
+.nbi-chatbook-cell-mode {
+  position: absolute;
+  z-index: 6;
+  top: 4px;
+  right: 6px;
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: 10px;
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font: 600 10px/18px var(--jp-ui-font-family);
+  cursor: pointer;
+  opacity: 0.82;
+}
+
+.nbi-chatbook-cell-mode:hover,
+.nbi-chatbook-cell-mode:focus-visible {
+  background: var(--jp-layout-color3);
+  opacity: 1;
+}
+
+.nbi-chatbook-cell-python .nbi-chatbook-cell-mode {
+  color: var(--jp-brand-color1);
+  border-color: var(--jp-brand-color1);
+}
