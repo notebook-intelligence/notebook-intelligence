@@ -150,9 +150,11 @@ import {
 import { CommandIDs } from './command-ids';
 import {
   CHATBOOK_KERNEL_NAME,
+  CHATBOOK_LANGUAGE,
   attachChatbookNotebooks,
   getChatbookCellMeta,
   getNotebookSourceView,
+  isChatbookPromptInlineCompletion,
   isChatbookSession,
   patchCodeCellExecute,
   registerChatbookLanguage,
@@ -598,24 +600,36 @@ class NBIInlineCompletionProvider
 
     if (context.widget instanceof NotebookPanel) {
       editorType = 'notebook';
-      const activeCell = context.widget.content.activeCell;
-      if (activeCell.model.sharedModel.cell_type === 'markdown') {
+      const panel = context.widget;
+      const chatbookPromptMode = isChatbookPromptInlineCompletion(
+        panel.sessionContext.session?.kernel?.name ||
+          panel.sessionContext.kernelPreference?.name,
+        getNotebookSourceView(panel.model?.metadata)
+      );
+      const activeCell = panel.content.activeCell;
+      if (chatbookPromptMode) {
+        language = CHATBOOK_LANGUAGE;
+      } else if (activeCell.model.sharedModel.cell_type === 'markdown') {
         language = 'markdown';
       }
       let activeCellReached = false;
 
-      for (const cell of context.widget.content.widgets) {
+      for (const cell of panel.content.widgets) {
         const cellModel = cell.model.sharedModel;
         if (cell === activeCell) {
           activeCellReached = true;
         } else if (!activeCellReached) {
-          if (cellModel.cell_type === 'code') {
+          if (chatbookPromptMode) {
+            preContent += cellModel.source + '\n';
+          } else if (cellModel.cell_type === 'code') {
             preContent += cellModel.source + '\n';
           } else if (cellModel.cell_type === 'markdown') {
             preContent += markdownToComment(cellModel.source) + '\n';
           }
         } else {
-          if (cellModel.cell_type === 'code') {
+          if (chatbookPromptMode) {
+            postContent += cellModel.source + '\n';
+          } else if (cellModel.cell_type === 'code') {
             postContent += cellModel.source + '\n';
           } else if (cellModel.cell_type === 'markdown') {
             postContent += markdownToComment(cellModel.source) + '\n';

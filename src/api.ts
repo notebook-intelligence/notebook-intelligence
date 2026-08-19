@@ -335,14 +335,6 @@ export class NBIConfig {
     return this.capabilities.default_chat_mode;
   }
 
-  get chatbookNuiUrl(): string {
-    return this.capabilities.chatbook_nui_url || 'http://127.0.0.1:8080';
-  }
-
-  get chatbookAgentType(): string {
-    return this.capabilities.chatbook_agent_type || '';
-  }
-
   get chatModel(): any {
     return this.capabilities.chat_model;
   }
@@ -1338,6 +1330,23 @@ export class NBIAPI {
           reject(reason);
         });
     });
+  }
+
+  static async generateChatbookCell(prompt: string): Promise<string> {
+    const data = await requestAPI<{ generatedCode?: string; error?: string }>(
+      'chatbook/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ prompt })
+      }
+    );
+    const code = (data?.generatedCode || '').trim();
+    if (!code) {
+      throw new Error(
+        data?.error || 'Chatbook code generation produced no cell'
+      );
+    }
+    return code;
   }
 
   static async generateCode(

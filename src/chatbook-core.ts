@@ -7,14 +7,33 @@ export const CHATBOOK_LANGUAGE = 'chatbook';
 export type ChatbookSourceView = 'prompt' | 'code';
 export type ChatbookConvertTargetId = 'python';
 
+export const CHATBOOK_CONTEXT_MAX_FIELD_CHARS = 8000;
+export const CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS = 4000;
+
 export interface IChatbookCellMeta {
   prompt?: string;
   promptHash?: string;
   generatedCode?: string;
+  contextHash?: string;
   nuiSessionId?: string;
   nuiRunId?: string;
   generatedAt?: string;
   cacheHit?: boolean;
+}
+
+export interface IChatbookContextCell {
+  index: number;
+  cellType: string;
+  prompt?: string;
+  generatedCode?: string;
+  source?: string;
+  output?: string;
+}
+
+export interface IChatbookNotebookContext {
+  prefix: IChatbookContextCell[];
+  current: IChatbookContextCell;
+  suffix: IChatbookContextCell[];
 }
 
 export interface INotebookChatbookMeta {
@@ -44,13 +63,22 @@ export const CHATBOOK_CONVERT_TARGETS: Record<
 export interface IChatbookExecuteMeta {
   cellId?: string;
   promptHash?: string;
+  contextHash?: string;
   cachedCode?: string;
-  nuiSessionId?: string;
+  generateUrl?: string;
   workingDir?: string;
+  notebookContext?: IChatbookNotebookContext;
 }
 
 export function isChatbookKernelName(name: string | undefined | null): boolean {
   return (name ?? '').trim() === CHATBOOK_KERNEL_NAME;
+}
+
+export function isChatbookPromptInlineCompletion(
+  kernelName: string | undefined | null,
+  sourceView: ChatbookSourceView
+): boolean {
+  return isChatbookKernelName(kernelName) && sourceView !== 'code';
 }
 
 export function getChatbookCellMeta(cellMetadata: unknown): IChatbookCellMeta {
@@ -302,30 +330,122 @@ function convertNotebookCellToPython(
   return next;
 }
 
+export function truncateChatbookContextField(
+  text: string,
+  maxChars: number
+): string {
+  if (!text || text.length <= maxChars) {
+    return text || '';
+  }
+  return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+export function snapshotChatbookContextCell(options: {
+  index: number;
+  cellType: string;
+  source: string;
+  cellMeta: IChatbookCellMeta;
+  sourceView: ChatbookSourceView;
+  output?: string;
+}): IChatbookContextCell {
+  const cell: IChatbookContextCell = {
+    index: options.index,
+    cellType: options.cellType
+  };
+  if (options.cellType !== 'code') {
+    if (options.source) {
+      cell.source = truncateChatbookContextField(
+        options.source,
+        CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+      );
+    }
+    return cell;
+  }
+  const prompt = resolveChatbookPrompt(
+    options.source,
+    options.cellMeta,
+    options.sourceView
+  );
+  const generated = options.cellMeta.generatedCode || '';
+  if (prompt) {
+    cell.prompt = truncateChatbookContextField(
+      prompt,
+      CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+    );
+  }
+  if (generated) {
+    cell.generatedCode = truncateChatbookContextField(
+      generated,
+      CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+    );
+  }
+  if (
+    options.source &&
+    options.source !== prompt &&
+    options.source !== generated
+  ) {
+    cell.source = truncateChatbookContextField(
+      options.source,
+      CHATBOOK_CONTEXT_MAX_FIELD_CHARS
+    );
+  }
+  if (options.output) {
+    cell.output = truncateChatbookContextField(
+      options.output,
+      CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS
+    );
+  }
+  return cell;
+}
+
+export function splitNotebookContext(
+  cells: IChatbookContextCell[],
+  cursorIndex: number
+): IChatbookNotebookContext {
+  const current = cells.find(cell => cell.index === cursorIndex) ||
+    cells[cursorIndex] || { index: cursorIndex, cellType: 'code' };
+  return {
+    prefix: cells.filter(cell => cell.index < cursorIndex),
+    current,
+    suffix: cells.filter(cell => cell.index > cursorIndex)
+  };
+}
+
 export function buildExecuteChatbookMeta(options: {
   cellId: string;
   prompt: string;
   promptHash: string;
   cellMeta: IChatbookCellMeta;
-  nuiSessionId?: string;
+  generateUrl?: string;
   workingDir?: string;
+  notebookContext?: IChatbookNotebookContext;
+  contextHash?: string;
 }): IChatbookExecuteMeta {
   const meta: IChatbookExecuteMeta = {
     cellId: options.cellId,
     promptHash: options.promptHash
   };
+  const contextMatches =
+    !options.contextHash ||
+    options.cellMeta.contextHash === options.contextHash;
   if (
     options.cellMeta.generatedCode &&
-    options.cellMeta.promptHash === options.promptHash
+    options.cellMeta.promptHash === options.promptHash &&
+    contextMatches
   ) {
     meta.cachedCode = options.cellMeta.generatedCode;
   }
-  const sessionId = options.nuiSessionId || options.cellMeta.nuiSessionId;
-  if (sessionId) {
-    meta.nuiSessionId = sessionId;
+  if (options.generateUrl) {
+    meta.generateUrl = options.generateUrl;
   }
   if (options.workingDir) {
     meta.workingDir = options.workingDir;
+  }
+  if (options.notebookContext) {
+    meta.notebookContext = options.notebookContext;
+  }
+  if (options.contextHash) {
+    meta.contextHash = options.contextHash;
   }
   return meta;
 }

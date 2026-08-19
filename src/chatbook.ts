@@ -3,6 +3,7 @@
 import { CodeCell } from '@jupyterlab/cells';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
 import { ISessionContext } from '@jupyterlab/apputils';
+import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 import { Contents, Kernel } from '@jupyterlab/services';
 import { JSONObject } from '@lumino/coreutils';
@@ -16,18 +17,20 @@ import {
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
   getChatbookCellMeta,
-  getNotebookNuiSessionId,
   getNotebookSourceView,
   isChatbookKernelName,
   mergeChatbookCellMeta,
   mergeNotebookChatbookMeta,
-  mergeNotebookNuiSessionId,
   pythonExportNotebookPath,
   resolveChatbookPrompt,
   sha256Hex,
+  snapshotChatbookContextCell,
+  splitNotebookContext,
   type ChatbookSourceView,
-  type IChatbookCellMeta
+  type IChatbookCellMeta,
+  type IChatbookNotebookContext
 } from './chatbook-core';
+import { cellOutputAsText } from './utils';
 
 export {
   CHATBOOK_CONVERT_TARGETS,
@@ -37,7 +40,8 @@ export {
   getChatbookCellMeta,
   getNotebookSourceView,
   isChatbookConvertTargetId,
-  isChatbookKernelName
+  isChatbookKernelName,
+  isChatbookPromptInlineCompletion
 } from './chatbook-core';
 
 let codeCellExecutePatched = false;
@@ -80,6 +84,15 @@ export function registerChatbookLanguage(
   });
 }
 
+function chatbookGenerateUrl(): string {
+  return URLExt.join(
+    PageConfig.getBaseUrl(),
+    'notebook-intelligence',
+    'chatbook',
+    'generate'
+  );
+}
+
 export function patchCodeCellExecute(): void {
   if (codeCellExecutePatched) {
     return;
@@ -103,17 +116,20 @@ export function patchCodeCellExecute(): void {
     if (sourceView === 'prompt') {
       writeChatbookCellMeta(cell, { prompt });
     }
+    const notebookContext = snapshotNotebookContext(notebook, cell, sourceView);
     const promptHash = await sha256Hex(prompt);
-    const nuiSessionId = getNotebookNuiSessionId(notebookMeta);
-    const nbiChatbook: JSONObject = {
-      ...buildExecuteChatbookMeta({
-        cellId: cell.model.id,
-        prompt,
-        promptHash,
-        cellMeta,
-        nuiSessionId
-      })
-    };
+    const contextHash = notebookContext
+      ? await sha256Hex(JSON.stringify(notebookContext))
+      : undefined;
+    const nbiChatbook = buildExecuteChatbookMeta({
+      cellId: cell.model.id,
+      prompt,
+      promptHash,
+      cellMeta: getChatbookCellMeta(cell.model.metadata),
+      generateUrl: chatbookGenerateUrl(),
+      notebookContext,
+      contextHash
+    }) as JSONObject;
     return original(cell, sessionContext, {
       ...(metadata || {}),
       cellId:
@@ -187,6 +203,38 @@ export function attachChatbookNotebooks(
   };
 }
 
+function snapshotNotebookContext(
+  notebook: NotebookPanel | undefined,
+  activeCell: CodeCell,
+  sourceView: ChatbookSourceView
+): IChatbookNotebookContext | undefined {
+  const parent = activeCell.parent as {
+    widgets?: readonly (typeof activeCell)[];
+  } | null;
+  const cells = notebook?.content?.widgets ?? parent?.widgets;
+  if (!cells) {
+    return undefined;
+  }
+  const cursorIndex = cells.findIndex(
+    widget => widget === activeCell || widget.model.id === activeCell.model.id
+  );
+  if (cursorIndex < 0) {
+    return undefined;
+  }
+  const snapshots = cells.map((widget, index) => {
+    const output = widget instanceof CodeCell ? cellOutputAsText(widget) : '';
+    return snapshotChatbookContextCell({
+      index,
+      cellType: widget.model.type,
+      source: widget.model.sharedModel.getSource(),
+      cellMeta: getChatbookCellMeta(widget.model.metadata),
+      sourceView,
+      output
+    });
+  });
+  return splitNotebookContext(snapshots, cursorIndex);
+}
+
 function applyChatbookPayload(
   panel: NotebookPanel,
   content: Record<string, unknown>
@@ -195,10 +243,7 @@ function applyChatbookPayload(
   const patch: IChatbookCellMeta = {
     generatedCode: String(content.generatedCode || ''),
     promptHash: content.promptHash ? String(content.promptHash) : undefined,
-    nuiSessionId: content.nuiSessionId
-      ? String(content.nuiSessionId)
-      : undefined,
-    nuiRunId: content.nuiRunId ? String(content.nuiRunId) : undefined,
+    contextHash: content.contextHash ? String(content.contextHash) : undefined,
     generatedAt: content.generatedAt ? String(content.generatedAt) : undefined,
     cacheHit: Boolean(content.cacheHit)
   };
@@ -217,17 +262,6 @@ function applyChatbookPayload(
       getNotebookSourceView(panel.model?.metadata) === 'code'
     ) {
       cell.model.sharedModel.setSource(patch.generatedCode);
-    }
-  }
-
-  if (patch.nuiSessionId && panel.model) {
-    const notebookMerged = mergeNotebookNuiSessionId(
-      panel.model.metadata,
-      patch.nuiSessionId
-    );
-    const nbi = notebookMerged.nbi;
-    if (nbi) {
-      panel.model.setMetadata('nbi', nbi);
     }
   }
 }

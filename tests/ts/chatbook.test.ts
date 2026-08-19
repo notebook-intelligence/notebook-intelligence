@@ -4,11 +4,14 @@ import {
   applySourceViewToCell,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
+  snapshotChatbookContextCell,
+  splitNotebookContext,
   convertChatbookCellToPython,
   getChatbookCellMeta,
   getNotebookSourceView,
   isChatbookConvertTargetId,
   isChatbookKernelName,
+  isChatbookPromptInlineCompletion,
   mergeChatbookCellMeta,
   mergeNotebookNuiSessionId,
   promptAsHashComment,
@@ -22,6 +25,9 @@ describe('chatbook-core', () => {
     expect(isChatbookKernelName('chatbook')).toBe(true);
     expect(isChatbookKernelName('python3')).toBe(false);
     expect(isChatbookKernelName('')).toBe(false);
+    expect(isChatbookPromptInlineCompletion('chatbook', 'prompt')).toBe(true);
+    expect(isChatbookPromptInlineCompletion('chatbook', 'code')).toBe(false);
+    expect(isChatbookPromptInlineCompletion('python3', 'prompt')).toBe(false);
   });
 
   it('reads and merges cell metadata under nbi.chatbook', () => {
@@ -145,6 +151,69 @@ describe('chatbook-core', () => {
       cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
     });
     expect(miss.cachedCode).toBeUndefined();
+  });
+
+  it('skips cache when notebook context hash changed', () => {
+    const miss = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: 'plot',
+      promptHash: 'aaa',
+      contextHash: 'ctx-new',
+      cellMeta: {
+        generatedCode: 'x = 1',
+        promptHash: 'aaa',
+        contextHash: 'ctx-old'
+      }
+    });
+    expect(miss.cachedCode).toBeUndefined();
+
+    const hit = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: 'plot',
+      promptHash: 'aaa',
+      contextHash: 'ctx-same',
+      cellMeta: {
+        generatedCode: 'x = 1',
+        promptHash: 'aaa',
+        contextHash: 'ctx-same'
+      }
+    });
+    expect(hit.cachedCode).toBe('x = 1');
+  });
+
+  it('splits notebook cells into prefix, cursor, and suffix', () => {
+    const cells = [
+      snapshotChatbookContextCell({
+        index: 0,
+        cellType: 'code',
+        source: 'what is 2+2?',
+        cellMeta: { generatedCode: 'print(4)' },
+        sourceView: 'prompt',
+        output: '4\n'
+      }),
+      snapshotChatbookContextCell({
+        index: 1,
+        cellType: 'code',
+        source: 'what did I ask?',
+        cellMeta: {},
+        sourceView: 'prompt'
+      }),
+      snapshotChatbookContextCell({
+        index: 2,
+        cellType: 'markdown',
+        source: '# notes',
+        cellMeta: {},
+        sourceView: 'prompt'
+      })
+    ];
+    const ctx = splitNotebookContext(cells, 1);
+    expect(ctx.prefix).toHaveLength(1);
+    expect(ctx.prefix[0].prompt).toBe('what is 2+2?');
+    expect(ctx.prefix[0].generatedCode).toBe('print(4)');
+    expect(ctx.prefix[0].output).toBe('4\n');
+    expect(ctx.current.prompt).toBe('what did I ask?');
+    expect(ctx.suffix).toHaveLength(1);
+    expect(ctx.suffix[0].source).toBe('# notes');
   });
 
   it('hashes prompts with sha-256', async () => {

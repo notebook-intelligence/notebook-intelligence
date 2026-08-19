@@ -84,6 +84,8 @@ from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_claude_config_dir, get_jupyter_root_dir, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env, VALID_CODING_AGENT_LAUNCHERS, compute_effective_disabled_launchers, validate_coding_agent_launcher_ids, resolve_claude_cli_path, resolve_opencode_cli_path, resolve_pi_cli_path, resolve_copilot_cli_path, resolve_codex_cli_path, safe_anchor_uri, has_dangerous_text_codepoints, split_csv
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
+from notebook_intelligence.chatbook_generate import generate_chatbook_python
+from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -691,8 +693,6 @@ class GetCapabilitiesHandler(APIHandler):
             "codex_cli_available": resolve_codex_cli_path() is not None,
             "disabled_coding_agent_launchers": effective_disabled_launchers,
             "default_chat_mode": nbi_config.default_chat_mode,
-            "chatbook_nui_url": nbi_config.chatbook_nui_url,
-            "chatbook_agent_type": nbi_config.chatbook_agent_type,
             "chat_feedback_enabled": self.enable_chat_feedback,
             "chat_feedback_always_visible": self.enable_chat_feedback_always_visible,
             # Single source of truth lives on each domain's base handler so
@@ -740,6 +740,47 @@ class GetCapabilitiesHandler(APIHandler):
 
         self.finish(json.dumps(response))
 
+class ChatbookGenerateHandler(APIHandler):
+    """Turn a Chatbook prompt into Python using the configured NBI chat model."""
+
+    @tornado.web.authenticated
+    async def post(self):
+        try:
+            data = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Invalid JSON body"}))
+            return
+        prompt = data.get("prompt") if isinstance(data, dict) else None
+        if not str(prompt).strip():
+            self.set_status(400)
+            self.finish(json.dumps({"error": "prompt is required"}))
+            return
+        notebook_context = None
+        if isinstance(data, dict):
+            notebook_context = data.get("notebookContext") or data.get(
+                "notebook_context"
+            )
+            if not isinstance(notebook_context, dict):
+                notebook_context = None
+        try:
+            code = await tornado.ioloop.IOLoop.current().run_in_executor(
+                None,
+                lambda: generate_chatbook_python(
+                    ai_service_manager, prompt, notebook_context
+                ),
+            )
+        except ChatbookCodegenError as exc:
+            self.set_status(400)
+            self.finish(json.dumps({"error": str(exc)}))
+            return
+        except Exception as exc:
+            log.error("Chatbook generate failed: %s", exc)
+            self.set_status(500)
+            self.finish(json.dumps({"error": "Chatbook code generation failed"}))
+            return
+        self.finish(json.dumps({"generatedCode": code}))
+
 class ConfigHandler(APIHandler):
     feature_policies = {}
     string_overrides = {}
@@ -760,8 +801,6 @@ class ConfigHandler(APIHandler):
             "enable_output_followup",
             "enable_output_toolbar",
             "refresh_open_files_on_disk_change",
-            "chatbook_nui_url",
-            "chatbook_agent_type",
         ])
         # Top-level keys whose write is rejected outright when locked.
         locked_keys = set()
@@ -3818,6 +3857,7 @@ class NotebookIntelligence(ExtensionApp):
 
         base_url = web_app.settings["base_url"]
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
+        route_pattern_chatbook_generate = url_path_join(base_url, "notebook-intelligence", "chatbook", "generate")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
@@ -3964,6 +4004,7 @@ class NotebookIntelligence(ExtensionApp):
         self._publish_policies(feature_policies, string_overrides)
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
+            (route_pattern_chatbook_generate, ChatbookGenerateHandler),
             (route_pattern_config, ConfigHandler),
             # Always register the relay: jupyter_ui_tools_external is runtime-mutable.
             # UIToolsHandler gates every request against the live setting, so changing

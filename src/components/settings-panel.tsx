@@ -344,9 +344,7 @@ function SettingsPanelComponentGeneral(props: any) {
         model: inlineCompletionModel,
         properties: inlineCompletionModelProperties
       },
-      inline_completion_debouncer_delay: inlineCompletionDebouncerDelay,
-      chatbook_nui_url: chatbookNuiUrl,
-      chatbook_agent_type: chatbookAgentType
+      inline_completion_debouncer_delay: inlineCompletionDebouncerDelay
     };
 
     if (
@@ -386,12 +384,6 @@ function SettingsPanelComponentGeneral(props: any) {
   );
   const [inlineCompletionDebouncerDelay, setInlineCompletionDebouncerDelay] =
     useState(nbiConfig.inlineCompletionDebouncerDelay);
-  const [chatbookNuiUrl, setChatbookNuiUrl] = useState(
-    nbiConfig.chatbookNuiUrl
-  );
-  const [chatbookAgentType, setChatbookAgentType] = useState(
-    nbiConfig.chatbookAgentType
-  );
   const { featurePolicies, settingLocks } = useNbiPolicies();
 
   const toggleExplainError = () => {
@@ -509,9 +501,7 @@ function SettingsPanelComponentGeneral(props: any) {
     inlineCompletionModel,
     inlineCompletionModelProperties,
     storeGitHubAccessToken,
-    inlineCompletionDebouncerDelay,
-    chatbookNuiUrl,
-    chatbookAgentType
+    inlineCompletionDebouncerDelay
   ]);
 
   return (
@@ -921,38 +911,6 @@ function SettingsPanelComponentGeneral(props: any) {
                     featurePolicies.refresh_open_files_on_disk_change.locked
                   )}
                   onClick={toggleRefreshOpenFilesOnDiskChange}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-config-section">
-          <div className="model-config-section-header">Chatbook</div>
-          <div className="model-config-section-body">
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div className="form-field-description">nui URL</div>
-                <input
-                  className="jp-mod-styled"
-                  spellCheck={false}
-                  value={chatbookNuiUrl}
-                  placeholder="http://127.0.0.1:8080"
-                  onChange={event => setChatbookNuiUrl(event.target.value)}
-                />
-              </div>
-            </div>
-            <div className="model-config-section-row">
-              <div className="model-config-section-column">
-                <div className="form-field-description">
-                  nui agent type (empty = nui default)
-                </div>
-                <input
-                  className="jp-mod-styled"
-                  spellCheck={false}
-                  value={chatbookAgentType}
-                  placeholder="chatbook-cell or claude-code"
-                  onChange={event => setChatbookAgentType(event.target.value)}
                 />
               </div>
             </div>

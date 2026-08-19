@@ -1,6 +1,6 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-"""Prompt hashing, cache checks, and extraction of a Python cell from nui output."""
+"""Prompt hashing, cache checks, and extraction of a Python cell from LLM output."""
 
 from __future__ import annotations
 
@@ -14,19 +14,33 @@ CHATBOOK_MSG_TYPE = "nbi_chatbook_code"
 CHATBOOK_KERNEL_NAME = "chatbook"
 STUB_ENV = "NBI_CHATBOOK_STUB"
 
-CELL_CODEGEN_INSTRUCTIONS = """You are generating code for a Chatbook Jupyter notebook cell.
+CELL_CODEGEN_INSTRUCTIONS = """You generate code for a Chatbook Jupyter notebook cell.
 
-The user's message is a natural-language prompt for THIS cell only.
-Return ONLY executable Python that IPython can run in this kernel.
-Wrap the code in a single ```python fenced block.
-Do not explain, do not apologize, do not write files unless the prompt asks you to.
-Do not wrap the snippet in a function unless the prompt asks for one.
-Later cells may refer to names you bind here, so use clear variable names.
+The user message includes notebook context split into:
+- PREFIX: cells above the cursor (already run in this kernel)
+- CURSOR: the cell at the cursor — generate code for this cell's prompt only
+- SUFFIX: cells below the cursor (not yet the generation target)
+
+This is one shared IPython kernel. PREFIX generated code has already executed.
+Variables, functions, imports, and objects from PREFIX are still in memory.
+
+Reuse that state. Do not copy PREFIX logic into the CURSOR cell.
+- Call functions and use names already defined above.
+- If PREFIX already computed or defined something the prompt needs, reference it.
+- If the prompt is a variation of an earlier cell (same task, new input), only pass the new input and call the existing helper. Do not reimplement the algorithm.
+- When introducing a new reusable operation, define a clear function or name so later cells can call it.
+- Do not re-import modules already imported in PREFIX unless required.
+
+Each cell may include its natural-language prompt, previously generated Python, cell source, and outputs.
+Use PREFIX and SUFFIX only as context (history, names, data shapes). Do not regenerate those cells.
+Reply with ONLY executable Python for the CURSOR cell, wrapped in one ```python fenced block.
+Do not explain. Do not write files unless the prompt asks you to.
+Names you bind may be reused by later cells, so keep them clear.
 """
 
 
 class ChatbookCodegenError(Exception):
-    """Raised when nui did not produce an executable Python cell."""
+    """Raised when code generation produced no executable Python cell."""
 
 
 def prompt_hash(prompt: str) -> str:
@@ -39,10 +53,6 @@ def stub_enabled() -> bool:
 
 def stub_python(prompt: str) -> str:
     return f"print({prompt!r})"
-
-
-def build_run_message(prompt: str) -> str:
-    return f"{CELL_CODEGEN_INSTRUCTIONS}\nPrompt:\n{prompt.strip()}\n"
 
 
 def extract_python_cell(text: str) -> str:
@@ -76,18 +86,21 @@ def resolve_executable_source(
 ) -> tuple[str, dict[str, Any]]:
     """Return (python_source, info) using cache or ``generate(prompt, meta)``.
 
-    ``generate`` must return a dict with at least ``generatedCode`` and may
-    include ``nuiSessionId`` / ``nuiRunId``.
+    ``generate`` must return a dict with at least ``generatedCode``.
     """
     cached = cached_code_if_valid(prompt, chatbook_meta)
     if cached is not None:
-        meta = chatbook_meta or {}
         return cached, {
             "generatedCode": cached,
             "promptHash": prompt_hash(prompt),
-            "nuiSessionId": meta.get("nuiSessionId"),
-            "nuiRunId": meta.get("nuiRunId"),
             "cacheHit": True,
+        }
+
+    if not str(prompt).strip():
+        return "", {
+            "generatedCode": "",
+            "promptHash": prompt_hash(prompt),
+            "cacheHit": False,
         }
 
     if stub_enabled():

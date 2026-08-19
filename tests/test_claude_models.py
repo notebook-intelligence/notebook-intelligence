@@ -221,6 +221,27 @@ class TestModelDefaults:
         kwargs = mock_anthropic_cls.return_value.messages.create.call_args.kwargs
         assert kwargs["max_tokens"] == CLAUDE_INLINE_COMPLETION_MAX_TOKENS
         assert kwargs["model"] == "claude-haiku-4-5"
+        assert "code completion assistant" in kwargs["system"]
+
+    @patch("anthropic.Anthropic")
+    def test_chatbook_inline_completion_uses_natural_language_prompt(self, mock_anthropic_cls):
+        from notebook_intelligence.claude import ClaudeCodeInlineCompletionModel
+
+        mock_message = Mock()
+        mock_message.content = []
+        mock_anthropic_cls.return_value.messages.create.return_value = mock_message
+
+        model = ClaudeCodeInlineCompletionModel("", api_key="test-key")
+        cancel_token = Mock()
+        cancel_token.is_cancel_requested = False
+        model.inline_completions(
+            "plot sales", "", "chatbook", "nb.ipynb", None, cancel_token
+        )
+
+        kwargs = mock_anthropic_cls.return_value.messages.create.call_args.kwargs
+        assert "natural-language" in kwargs["system"]
+        assert "Do not suggest Python" in kwargs["system"]
+        assert "Do not write code" in kwargs["messages"][0]["content"]
 
 
 class TestFetchClaudeModelsContextWindow:
