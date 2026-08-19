@@ -3541,3 +3541,7 @@ svg.access-token-warning {
   font-family: var(--jp-code-font-family);
   font-size: var(--jp-code-font-size);
 }
+
+.nbi-chatbook-toolbar-button .jp-ToolbarButtonComponent {
+  font-size: var(--jp-ui-font-size1);
+}

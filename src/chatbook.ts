@@ -4,28 +4,39 @@ import { CodeCell } from '@jupyterlab/cells';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
 import { ISessionContext } from '@jupyterlab/apputils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
-import { Kernel } from '@jupyterlab/services';
+import { Contents, Kernel } from '@jupyterlab/services';
 import { JSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 
+import { INotebookKernelProfile } from './notebook-kernels';
 import {
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
+  applySourceViewToCell,
   buildExecuteChatbookMeta,
+  buildPythonNotebookFromChatbook,
   getChatbookCellMeta,
   getNotebookNuiSessionId,
+  getNotebookSourceView,
   isChatbookKernelName,
   mergeChatbookCellMeta,
+  mergeNotebookChatbookMeta,
   mergeNotebookNuiSessionId,
+  pythonExportNotebookPath,
+  resolveChatbookPrompt,
   sha256Hex,
+  type ChatbookSourceView,
   type IChatbookCellMeta
 } from './chatbook-core';
 
 export {
+  CHATBOOK_CONVERT_TARGETS,
   CHATBOOK_KERNEL_NAME,
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
   getChatbookCellMeta,
+  getNotebookSourceView,
+  isChatbookConvertTargetId,
   isChatbookKernelName
 } from './chatbook-core';
 
@@ -83,11 +94,16 @@ export function patchCodeCellExecute(): void {
     if (!isChatbookSession(sessionContext)) {
       return original(cell, sessionContext, metadata);
     }
-    const prompt = cell.model.sharedModel.getSource();
-    const promptHash = await sha256Hex(prompt);
     const cellMeta = getChatbookCellMeta(cell.model.metadata);
     const notebook = cell.parent?.parent as NotebookPanel | undefined;
     const notebookMeta = notebook?.model?.metadata;
+    const sourceView = getNotebookSourceView(notebookMeta);
+    const source = cell.model.sharedModel.getSource();
+    const prompt = resolveChatbookPrompt(source, cellMeta, sourceView);
+    if (sourceView === 'prompt') {
+      writeChatbookCellMeta(cell, { prompt });
+    }
+    const promptHash = await sha256Hex(prompt);
     const nuiSessionId = getNotebookNuiSessionId(notebookMeta);
     const nbiChatbook: JSONObject = {
       ...buildExecuteChatbookMeta({
@@ -195,9 +211,12 @@ function applyChatbookPayload(
     ? cells.find(widget => widget.model.id === cellId)
     : panel.content.activeCell;
   if (cell) {
-    const merged = mergeChatbookCellMeta(cell.model.metadata, patch);
-    if (merged.nbi) {
-      cell.model.setMetadata('nbi', merged.nbi);
+    writeChatbookCellMeta(cell, patch);
+    if (
+      patch.generatedCode &&
+      getNotebookSourceView(panel.model?.metadata) === 'code'
+    ) {
+      cell.model.sharedModel.setSource(patch.generatedCode);
     }
   }
 
@@ -210,5 +229,125 @@ function applyChatbookPayload(
     if (nbi) {
       panel.model.setMetadata('nbi', nbi);
     }
+  }
+}
+
+interface IChatbookEditableCell {
+  model: {
+    type: string;
+    metadata: unknown;
+    setMetadata: (key: string, value: unknown) => void;
+    sharedModel: {
+      getSource: () => string;
+      setSource: (value: string) => void;
+    };
+  };
+}
+
+function writeChatbookCellMeta(
+  cell: IChatbookEditableCell,
+  patch: IChatbookCellMeta
+): void {
+  const merged = mergeChatbookCellMeta(cell.model.metadata, patch);
+  if (merged.nbi) {
+    cell.model.setMetadata('nbi', merged.nbi);
+  }
+}
+
+function writeNotebookChatbookMeta(
+  panel: NotebookPanel,
+  patch: { nuiSessionId?: string; sourceView?: ChatbookSourceView }
+): void {
+  if (!panel.model) {
+    return;
+  }
+  const merged = mergeNotebookChatbookMeta(panel.model.metadata, patch);
+  if (merged.nbi) {
+    panel.model.setMetadata('nbi', merged.nbi);
+  }
+}
+
+function forEachCodeCell(
+  panel: NotebookPanel,
+  visit: (cell: IChatbookEditableCell) => void
+): void {
+  for (const widget of panel.content.widgets) {
+    if (widget.model.type === 'code') {
+      visit(widget);
+    }
+  }
+}
+
+export function applyChatbookSourceView(
+  panel: NotebookPanel,
+  nextView: ChatbookSourceView
+): void {
+  if (!panel.model) {
+    return;
+  }
+  const currentView = getNotebookSourceView(panel.model.metadata);
+  forEachCodeCell(panel, cell => {
+    const result = applySourceViewToCell({
+      source: cell.model.sharedModel.getSource(),
+      meta: getChatbookCellMeta(cell.model.metadata),
+      currentView,
+      nextView
+    });
+    writeChatbookCellMeta(cell, result.meta);
+    if (cell.model.sharedModel.getSource() !== result.source) {
+      cell.model.sharedModel.setSource(result.source);
+    }
+  });
+  writeNotebookChatbookMeta(panel, { sourceView: nextView });
+}
+
+export function toggleChatbookSourceView(
+  panel: NotebookPanel
+): ChatbookSourceView {
+  const next: ChatbookSourceView =
+    getNotebookSourceView(panel.model?.metadata) === 'code' ? 'prompt' : 'code';
+  applyChatbookSourceView(panel, next);
+  return next;
+}
+
+export async function exportChatbookNotebookAsPython(
+  panel: NotebookPanel,
+  profile: INotebookKernelProfile,
+  contents: Contents.IManager
+): Promise<string> {
+  if (!panel.model) {
+    throw new Error('Notebook has no model to export');
+  }
+  const notebook = structuredClone(
+    panel.model.toJSON() as Record<string, unknown>
+  );
+  const content = buildPythonNotebookFromChatbook(notebook, {
+    name: profile.kernelName,
+    display_name: profile.displayName,
+    language: profile.language
+  });
+  let attempt = 0;
+  let path = pythonExportNotebookPath(panel.context.path, attempt);
+  while (await contentsPathExists(contents, path)) {
+    attempt += 1;
+    path = pythonExportNotebookPath(panel.context.path, attempt);
+  }
+  await contents.save(path, {
+    type: 'notebook',
+    format: 'json',
+    content
+  });
+  return path;
+}
+
+async function contentsPathExists(
+  contents: Contents.IManager,
+  path: string
+): Promise<boolean> {
+  try {
+    await contents.get(path, { content: false });
+    return true;
+  } catch {
+    return false;
   }
 }

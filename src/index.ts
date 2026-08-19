@@ -134,6 +134,10 @@ import { ITerminalConnection } from '@jupyterlab/services/lib/terminal/terminal'
 import { ITerminalTracker } from '@jupyterlab/terminal';
 import { Token } from '@lumino/coreutils';
 import { NotebookGenerationToolbarExtension } from './notebook-generation-toolbar';
+import {
+  ChatbookToolbarExtension,
+  confirmConvertChatbookNotebook
+} from './chatbook-toolbar';
 import { attachTerminalDragDrop } from './terminal-drag';
 import {
   DEFAULT_NOTEBOOK_KERNEL,
@@ -148,8 +152,11 @@ import {
   CHATBOOK_KERNEL_NAME,
   attachChatbookNotebooks,
   getChatbookCellMeta,
+  getNotebookSourceView,
+  isChatbookSession,
   patchCodeCellExecute,
-  registerChatbookLanguage
+  registerChatbookLanguage,
+  toggleChatbookSourceView
 } from './chatbook';
 
 const addInlinePromptEffect = StateEffect.define<{
@@ -1103,6 +1110,10 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         chatSidebarId: panel.id
       })
     );
+    app.docRegistry.addWidgetExtension(
+      'Notebook',
+      new ChatbookToolbarExtension(app)
+    );
 
     const updateSidebarIcon = () => {
       if (NBIAPI.getChatEnabled()) {
@@ -1406,6 +1417,49 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           buttons: [Dialog.okButton({ label: 'Close' })]
         });
         await dialog.launch();
+      }
+    });
+
+    const currentChatbookNotebook = (): NotebookPanel | null => {
+      const current = app.shell.currentWidget;
+      if (!(current instanceof NotebookPanel)) {
+        return null;
+      }
+      return isChatbookSession(current.sessionContext) ? current : null;
+    };
+
+    app.commands.addCommand(CommandIDs.toggleChatbookSourceView, {
+      label: () =>
+        getNotebookSourceView(currentChatbookNotebook()?.model?.metadata) ===
+        'code'
+          ? 'Show Chatbook prompts'
+          : 'Show generated cell code',
+      caption:
+        'Toggle the notebook between Chatbook prompts and generated Python',
+      isEnabled: () => currentChatbookNotebook() !== null,
+      isToggled: () =>
+        getNotebookSourceView(currentChatbookNotebook()?.model?.metadata) ===
+        'code',
+      execute: () => {
+        const panel = currentChatbookNotebook();
+        if (!panel) {
+          return;
+        }
+        toggleChatbookSourceView(panel);
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.convertChatbookNotebook, {
+      label: 'Export as Python notebook',
+      caption:
+        'Create a new Python notebook from this Chatbook, leaving the original unchanged',
+      isEnabled: () => currentChatbookNotebook() !== null,
+      execute: async () => {
+        const panel = currentChatbookNotebook();
+        if (!panel) {
+          return;
+        }
+        await confirmConvertChatbookNotebook(app, panel);
       }
     });
 
@@ -2131,6 +2185,14 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
     palette.addItem({
       command: CommandIDs.showChatbookGeneratedCode,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.toggleChatbookSourceView,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.convertChatbookNotebook,
       category: 'Notebook Intelligence'
     });
     palette.addItem({
