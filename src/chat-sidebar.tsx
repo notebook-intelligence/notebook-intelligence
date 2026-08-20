@@ -3349,6 +3349,11 @@ function SidebarComponent(props: any) {
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
+      // Skip the Enter that finalizes an IME composition (e.g. Korean
+      // hangul), which fires with key === 'Enter' but should not submit.
+      if (event.nativeEvent.isComposing || event.keyCode === 229) {
+        return;
+      }
       event.stopPropagation();
       event.preventDefault();
       if (showPopover) {
@@ -5020,6 +5025,11 @@ function InlinePromptComponent(props: any) {
     event.stopPropagation();
 
     if (event.key === 'Enter' && !event.shiftKey) {
+      // Skip the Enter that finalizes an IME composition (e.g. Korean
+      // hangul), which fires with key === 'Enter' but should not submit.
+      if (event.nativeEvent.isComposing || event.keyCode === 229) {
+        return;
+      }
       event.preventDefault();
       if (inputSubmitted && (event.metaKey || event.ctrlKey)) {
         props.onUpdatedCodeAccepted();
