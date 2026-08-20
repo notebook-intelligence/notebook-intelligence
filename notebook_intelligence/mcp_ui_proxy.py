@@ -15,7 +15,10 @@ Launch from an MCP config entry:
 
 Environment (all optional; discovery falls back to the Jupyter runtime file):
     NBI_UI_TOOLS_URL        full endpoint URL (overrides discovery)
-    NBI_UI_TOOLS_TOKEN      auth token (else JUPYTER_TOKEN, else the discovered token)
+    NBI_UI_TOOLS_TOKEN      Jupyter auth token for the Authorization header
+                            (else JUPYTER_TOKEN, else the discovered server token)
+    NBI_UI_TOOLS_SECRET     bridge secret, sent in the X-NBI-UI-Tools-Token header;
+                            the backend uses it only to exempt the call from XSRF
     JUPYTER_SERVER_URL / JUPYTER_TOKEN   standard Jupyter server coordinates
     NBI_UI_TOOLS_HTTP_TIMEOUT per-request timeout in seconds (default: none)
     NBI_UI_TOOLS_SERVER_NAME  MCP handshake name (default "nbi"; cosmetic only)
@@ -49,6 +52,12 @@ HTTP_TIMEOUT = float(_http_timeout) if _http_timeout else None
 # Reach the (loopback) backend directly, never via an ambient HTTP(S)_PROXY: keeps
 # the auth token on the local connection and works regardless of NO_PROXY.
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# Bridge secret proving the caller is the proxy NBI spawned. Sent in a dedicated
+# header (never Authorization) so it can't collide with the Jupyter identity; the
+# relay uses it only to exempt the request from XSRF, not as an identity.
+UI_TOOLS_SECRET_HEADER = "X-NBI-UI-Tools-Token"
+_secret = os.environ.get("NBI_UI_TOOLS_SECRET", "")
 
 server = Server(SERVER_NAME)
 _endpoint = ""
@@ -110,6 +119,8 @@ def _request(method: str, payload: dict | None = None) -> dict:
         req.add_header("Content-Type", "application/json")
     if _token:
         req.add_header("Authorization", f"token {_token}")
+    if _secret:
+        req.add_header(UI_TOOLS_SECRET_HEADER, _secret)
     with _opener.open(req, timeout=HTTP_TIMEOUT) as resp:
         return json.loads(resp.read().decode() or "{}")
 
@@ -157,7 +168,7 @@ async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
 async def main() -> None:
     global _endpoint, _token
     _endpoint, _token = _resolve_backend()
-    _log(f"bridging to {_endpoint} ({'authenticated' if _token else 'no token'})")
+    _log(f"bridging to {_endpoint} (jupyter-auth: {'token' if _token else 'none'}, bridge-secret: {'yes' if _secret else 'no'})")
     async with stdio_server() as (read, write):
         await server.run(
             read,

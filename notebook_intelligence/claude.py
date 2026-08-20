@@ -1903,11 +1903,13 @@ def _tool_json_schema(input_schema) -> dict:
     return {"type": "object", "properties": {}}
 
 
-# Per-process shared secret authorizing mcp_ui_proxy -> UIToolsHandler calls. A
-# bearer secret is not cookie-based and is therefore XSRF-immune, so the relay
-# exempts secret-bearing requests from the browser XSRF check (mirroring
-# jupyter_server's own exemption for token-authenticated requests). Generated once
-# per process and handed only to the proxy NBI spawns (via NBI_UI_TOOLS_TOKEN).
+# Per-process shared secret proving a request came from the mcp_ui_proxy NBI spawned.
+# The proxy sends it to UIToolsHandler in a dedicated header (X-NBI-UI-Tools-Token),
+# separate from the Jupyter identity in Authorization. A bearer secret is not
+# cookie-based and is therefore XSRF-immune, so the relay uses it only to exempt the
+# request from the browser XSRF check (mirroring jupyter_server's own exemption for
+# token-authenticated requests) -- it is not a Jupyter identity. Generated once per
+# process and handed only to the proxy (via the NBI_UI_TOOLS_SECRET env var).
 _UI_TOOLS_SECRET = secrets.token_urlsafe(32)
 
 
@@ -2217,8 +2219,9 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             env['ANTHROPIC_BASE_URL'] = base_url
 
         env["CLAUDE_CODE_ENTRYPOINT"] = "notebook-intelligence"
-        # Authorize the external UI-tools proxy to the relay (see get_ui_tools_secret).
-        env["NBI_UI_TOOLS_TOKEN"] = get_ui_tools_secret()
+        # Hand the proxy the bridge secret (sent to the relay in a dedicated header,
+        # separate from the Jupyter identity in Authorization). See get_ui_tools_secret.
+        env["NBI_UI_TOOLS_SECRET"] = get_ui_tools_secret()
 
         continue_conversation = claude_settings.get('continue_conversation', False)
 

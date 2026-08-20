@@ -2257,14 +2257,13 @@ class UIToolsHandler(APIHandler):
     """
 
     def check_xsrf_cookie(self):
-        # mcp_ui_proxy authenticates with a per-process bearer secret
-        # (claude.get_ui_tools_secret), sent as Authorization: token <secret>. A
-        # bearer secret is not cookie-based and so is XSRF-immune; exempt those
-        # requests from the XSRF check exactly as jupyter_server exempts
+        # mcp_ui_proxy proves it is the proxy NBI spawned with a per-process bearer
+        # secret (claude.get_ui_tools_secret), sent in the X-NBI-UI-Tools-Token header
+        # — separate from the Jupyter identity in Authorization, which @authenticated
+        # still enforces. A bearer secret is not cookie-based and so is XSRF-immune;
+        # exempt those requests from the XSRF check exactly as jupyter_server exempts
         # token-authenticated ones. Every other caller still gets the normal check.
-        auth = self.request.headers.get("Authorization", "")
-        parts = auth.split(None, 1)
-        provided = parts[1].strip() if len(parts) == 2 and parts[0].lower() in ("token", "bearer") else ""
+        provided = self.request.headers.get("X-NBI-UI-Tools-Token", "")
         expected = get_ui_tools_secret()
         if expected and provided and hmac.compare_digest(provided, expected):
             return
@@ -3477,10 +3476,18 @@ class NotebookIntelligence(ExtensionApp):
             "NBI_UPLOAD_RETENTION_HOURS", self.upload_retention_hours
         )
         self._publish_policies(feature_policies, string_overrides)
+        # The UI-tools relay is only exercised when the Jupyter-UI tools are served by
+        # the external MCP proxy; register it only in that mode so the endpoint surface
+        # matches the feature (see claude._create_client_options / mcp_ui_proxy).
+        _cs = ai_service_manager.nbi_config.claude_settings or {}
+        _ui_tools_external = (
+            JUPYTER_UI_TOOLS_ID in (_cs.get("tools") or [])
+            and _cs.get("jupyter_ui_tools_external", False)
+        )
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
-            (route_pattern_ui_tools, UIToolsHandler),
+            *([(route_pattern_ui_tools, UIToolsHandler)] if _ui_tools_external else []),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
