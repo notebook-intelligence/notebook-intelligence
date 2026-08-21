@@ -1366,6 +1366,31 @@ export class NBIAPI {
     return prompt;
   }
 
+  static async listChatbookMentions(
+    parent = '',
+    query = '',
+    limit = 100,
+    signal?: AbortSignal
+  ): Promise<{
+    items: Array<{
+      label: string;
+      value: string;
+      kind: 'root' | 'file' | 'dir';
+      hasChildren: boolean;
+    }>;
+    breadcrumbs: Array<{ label: string; value: string }>;
+  }> {
+    const params = [
+      `parent=${encodeURIComponent(parent)}`,
+      `query=${encodeURIComponent(query)}`,
+      `limit=${encodeURIComponent(String(limit))}`
+    ].join('&');
+    return requestAPI(`chatbook/mentions?${params}`, {
+      method: 'GET',
+      signal
+    });
+  }
+
   static async generateCode(
     messageId: string,
     chatId: string,

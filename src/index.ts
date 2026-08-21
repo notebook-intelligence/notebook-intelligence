@@ -163,6 +163,7 @@ import {
   toggleActiveChatbookCellMode,
   toggleChatbookSourceView
 } from './chatbook';
+import { detectChatbookMentionTrigger } from './chatbook-mentions';
 
 const addInlinePromptEffect = StateEffect.define<{
   pos: number;
@@ -615,6 +616,11 @@ class NBIInlineCompletionProvider
         activeMode
       );
       if (chatbookPromptMode) {
+        // Ghost text while an @mention is being picked would compete with the
+        // mention menu for Tab.
+        if (detectChatbookMentionTrigger(request.text, request.offset)) {
+          return Promise.resolve({ items: [] });
+        }
         language = CHATBOOK_LANGUAGE;
       } else if (
         isChatbookSession(panel.sessionContext) &&
@@ -1492,11 +1498,10 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       execute: async () => {
         const cell = currentChatbookNotebook()?.content.activeCell;
         if (cell?.model.type === 'code') {
-          await summarizePythonCell(
-            cell,
-            cell.model.sharedModel.getSource(),
-            true
-          );
+          await summarizePythonCell(cell, cell.model.sharedModel.getSource(), {
+            notifyOnError: true,
+            force: true
+          });
         }
       }
     });

@@ -13,6 +13,8 @@ export const CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS = 4000;
 
 export interface IChatbookCellMeta {
   mode?: ChatbookCellMode;
+  /** Input type the cell was authored in, kept across mode switches. */
+  origin?: ChatbookCellMode;
   prompt?: string;
   promptHash?: string;
   generatedCode?: string;
@@ -96,6 +98,32 @@ export function isChatbookPromptInlineCompletion(
 
 export function getChatbookCellMode(meta: IChatbookCellMeta): ChatbookCellMode {
   return meta.mode === 'python' ? 'python' : 'prompt';
+}
+
+export function getChatbookCellOrigin(
+  meta: IChatbookCellMeta
+): ChatbookCellMode {
+  if (meta.origin === 'python' || meta.origin === 'prompt') {
+    return meta.origin;
+  }
+  return getChatbookCellMode(meta);
+}
+
+export function hasChatbookPrompt(meta: IChatbookCellMeta): boolean {
+  return Boolean((meta.prompt ?? '').trim());
+}
+
+/**
+ * Only prompts we generated for Python-authored cells may be regenerated;
+ * a prompt the user wrote is never replaced by a model summary.
+ */
+export function canRegenerateChatbookPrompt(meta: IChatbookCellMeta): boolean {
+  if (!hasChatbookPrompt(meta)) {
+    return true;
+  }
+  return (
+    getChatbookCellOrigin(meta) === 'python' && Boolean(meta.summarizedCodeHash)
+  );
 }
 
 export function getChatbookCellMeta(cellMetadata: unknown): IChatbookCellMeta {
@@ -318,6 +346,7 @@ export function switchChatbookCellMode(options: {
   const pythonSource = snapshot.pythonSource || snapshot.generatedCode;
   const meta: IChatbookCellMeta = {
     ...options.meta,
+    origin: options.meta.origin ?? snapshot.mode,
     mode: options.nextMode,
     prompt: snapshot.prompt
   };

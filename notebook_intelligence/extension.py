@@ -88,6 +88,7 @@ from notebook_intelligence.chatbook_generate import (
     generate_chatbook_python,
     summarize_chatbook_python,
 )
+from notebook_intelligence.chatbook_mentions import list_filesystem_mentions
 from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
 ai_service_manager: AIServiceManager = None
@@ -805,6 +806,37 @@ class ChatbookGenerateHandler(APIHandler):
             self.finish(json.dumps({"error": message}))
             return
         self.finish(json.dumps({"generatedCode": code}))
+
+
+class ChatbookMentionsHandler(APIHandler):
+    """List filesystem mentions available to Chatbook NL cells."""
+
+    @tornado.web.authenticated
+    def get(self):
+        parent = self.get_query_argument("parent", default="")
+        query = self.get_query_argument("query", default="")
+        try:
+            limit = int(self.get_query_argument("limit", default="100"))
+        except ValueError:
+            limit = 100
+        skipped = []
+        nbi_config = getattr(ai_service_manager, "nbi_config", None)
+        if nbi_config is not None:
+            skipped = nbi_config.additional_skipped_workspace_directories
+        try:
+            response = list_filesystem_mentions(
+                parent=parent,
+                query=query,
+                limit=limit,
+                skipped_directories=skipped,
+            )
+        except Exception as exc:
+            log.error("Chatbook mention listing failed: %s", exc)
+            self.set_status(500)
+            self.finish(json.dumps({"error": "Could not list workspace mentions"}))
+            return
+        self.finish(json.dumps(response))
+
 
 class ConfigHandler(APIHandler):
     feature_policies = {}
@@ -3883,6 +3915,7 @@ class NotebookIntelligence(ExtensionApp):
         base_url = web_app.settings["base_url"]
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
         route_pattern_chatbook_generate = url_path_join(base_url, "notebook-intelligence", "chatbook", "generate")
+        route_pattern_chatbook_mentions = url_path_join(base_url, "notebook-intelligence", "chatbook", "mentions")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
@@ -4030,6 +4063,7 @@ class NotebookIntelligence(ExtensionApp):
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_chatbook_generate, ChatbookGenerateHandler),
+            (route_pattern_chatbook_mentions, ChatbookMentionsHandler),
             (route_pattern_config, ConfigHandler),
             # Always register the relay: jupyter_ui_tools_external is runtime-mutable.
             # UIToolsHandler gates every request against the live setting, so changing

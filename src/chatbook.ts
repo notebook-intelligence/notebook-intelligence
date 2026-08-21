@@ -2,6 +2,7 @@
 
 import { CodeCell } from '@jupyterlab/cells';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
+import { EditorView } from '@codemirror/view';
 import { ISessionContext, Notification } from '@jupyterlab/apputils';
 import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
@@ -16,9 +17,12 @@ import {
   applySourceViewToCell,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
+  canRegenerateChatbookPrompt,
   getChatbookCellMode,
   getChatbookCellMeta,
+  getChatbookCellOrigin,
   getNotebookSourceView,
+  hasChatbookPrompt,
   isChatbookKernelName,
   mergeChatbookCellMeta,
   mergeNotebookChatbookMeta,
@@ -35,6 +39,7 @@ import {
   type IChatbookNotebookContext
 } from './chatbook-core';
 import { NBIAPI } from './api';
+import { setChatbookMentionsEnabled } from './chatbook-mentions';
 import { cellOutputAsText } from './utils';
 
 export {
@@ -123,6 +128,7 @@ export function patchCodeCellExecute(): void {
       const python = resolveChatbookPython(source, cellMeta, sourceView);
       writeChatbookCellMeta(cell, {
         mode: 'python',
+        origin: getChatbookCellOrigin(cellMeta),
         pythonSource: python,
         generatedCode: python
       });
@@ -139,14 +145,21 @@ export function patchCodeCellExecute(): void {
       const status = (
         execution as unknown as { content?: { status?: string } } | undefined
       )?.content?.status;
-      if (status !== 'error' && python.trim()) {
+      if (
+        status !== 'error' &&
+        python.trim() &&
+        canRegenerateChatbookPrompt(getChatbookCellMeta(cell.model.metadata))
+      ) {
         void summarizePythonCell(cell, python);
       }
       return execution;
     }
     const prompt = resolveChatbookPrompt(source, cellMeta, sourceView);
     if (sourceView === 'prompt') {
-      writeChatbookCellMeta(cell, { prompt });
+      writeChatbookCellMeta(cell, {
+        prompt,
+        origin: getChatbookCellOrigin(cellMeta)
+      });
     }
     const notebookContext = snapshotNotebookContext(notebook, cell, sourceView);
     const promptHash = await sha256Hex(prompt);
@@ -175,7 +188,7 @@ export function patchCodeCellExecute(): void {
 export async function summarizePythonCell(
   cell: IChatbookEditableCell,
   python?: string,
-  notifyOnError = false
+  options: { notifyOnError?: boolean; force?: boolean } = {}
 ): Promise<string | undefined> {
   const source = python ?? cell.model.sharedModel.getSource();
   if (!source.trim()) {
@@ -184,14 +197,16 @@ export async function summarizePythonCell(
   const codeHash = await sha256Hex(source);
   const meta = getChatbookCellMeta(cell.model.metadata);
   if (
+    !options.force &&
     meta.prompt &&
-    meta.summarizedCodeHash === codeHash &&
+    (meta.summarizedCodeHash === codeHash || !meta.summarizedCodeHash) &&
     !meta.summaryError
   ) {
     return meta.prompt;
   }
   writeChatbookCellMeta(cell, {
     mode: 'python',
+    origin: getChatbookCellOrigin(meta),
     pythonSource: source,
     generatedCode: source,
     codeHash,
@@ -217,7 +232,7 @@ export async function summarizePythonCell(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     writeChatbookCellMeta(cell, { codeHash, summaryError: message });
-    if (notifyOnError) {
+    if (options.notifyOnError) {
       Notification.warning(
         `Could not generate English representation: ${message}`
       );
@@ -237,10 +252,20 @@ export async function setChatbookCellMode(
   if (currentMode === nextMode) {
     return;
   }
-  if (currentMode === 'python' && nextMode === 'prompt') {
-    await summarizePythonCell(cell, cell.model.sharedModel.getSource(), true);
+  // A prompt stored on the cell — whether the user typed it or we summarized
+  // it earlier — is reused as is, so only cells that never had one pay for a
+  // model round trip.
+  if (
+    currentMode === 'python' &&
+    nextMode === 'prompt' &&
+    !hasChatbookPrompt(meta) &&
+    cell.model.sharedModel.getSource().trim()
+  ) {
+    await summarizePythonCell(cell, cell.model.sharedModel.getSource(), {
+      notifyOnError: true
+    });
     meta = getChatbookCellMeta(cell.model.metadata);
-    if (!meta.prompt) {
+    if (!hasChatbookPrompt(meta)) {
       return;
     }
   }
@@ -285,10 +310,21 @@ export function attachChatbookNotebooks(
     const syncCellBadges = () => {
       const isChatbook = isChatbookSession(panel.sessionContext);
       for (const widget of panel.content.widgets) {
+        const editorView = (
+          widget.editor as unknown as { editor?: EditorView } | null
+        )?.editor;
+        // The badge lives in the input area, next to JupyterLab's own cell
+        // toolbar, so both share the same layout box and stay aligned.
+        const badgeHost =
+          (widget as unknown as { inputArea?: { node: HTMLElement } | null })
+            .inputArea?.node ?? widget.node;
         const existing = widget.node.querySelector<HTMLButtonElement>(
-          ':scope > .nbi-chatbook-cell-mode'
+          '.nbi-chatbook-cell-mode'
         );
         if (!isChatbook || widget.model.type !== 'code') {
+          if (editorView) {
+            setChatbookMentionsEnabled(editorView, false);
+          }
           existing?.remove();
           widget.node.classList.remove(
             'nbi-chatbook-cell-prompt',
@@ -299,6 +335,13 @@ export function attachChatbookNotebooks(
         const mode = getChatbookCellMode(
           getChatbookCellMeta(widget.model.metadata)
         );
+        if (editorView) {
+          setChatbookMentionsEnabled(
+            editorView,
+            mode === 'prompt' &&
+              getNotebookSourceView(panel.model?.metadata) === 'prompt'
+          );
+        }
         const desiredMime =
           mode === 'python' ? 'text/x-python' : 'text/x-chatbook';
         const cellModel = widget.model as unknown as { mimeType: string };
@@ -337,7 +380,9 @@ export function attachChatbookNotebooks(
               currentMode === 'python' ? 'prompt' : 'python'
             ).finally(syncCellBadges);
           });
-          widget.node.appendChild(button);
+          badgeHost.appendChild(button);
+        } else if (button.parentElement !== badgeHost) {
+          badgeHost.appendChild(button);
         }
       }
     };

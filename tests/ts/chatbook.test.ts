@@ -6,10 +6,13 @@ import {
   buildPythonNotebookFromChatbook,
   snapshotChatbookContextCell,
   splitNotebookContext,
+  canRegenerateChatbookPrompt,
   convertChatbookCellToPython,
   getChatbookCellMeta,
   getChatbookCellMode,
+  getChatbookCellOrigin,
   getNotebookSourceView,
+  hasChatbookPrompt,
   isChatbookConvertTargetId,
   isChatbookKernelName,
   isChatbookPromptInlineCompletion,
@@ -69,6 +72,57 @@ describe('chatbook-core', () => {
     expect(prompt.source).toBe('calculate a total');
     expect(prompt.meta.mode).toBe('prompt');
     expect(prompt.meta.generatedCode).toBe('total = sum(values)');
+  });
+
+  it('records the authoring input type and keeps it across switches', () => {
+    const toPython = switchChatbookCellMode({
+      source: 'calculate a total',
+      meta: { generatedCode: 'total = sum(values)' },
+      sourceView: 'prompt',
+      nextMode: 'python'
+    });
+    expect(toPython.meta.origin).toBe('prompt');
+
+    const backToPrompt = switchChatbookCellMode({
+      source: toPython.source,
+      meta: toPython.meta,
+      sourceView: 'prompt',
+      nextMode: 'prompt'
+    });
+    expect(backToPrompt.meta.origin).toBe('prompt');
+    expect(backToPrompt.source).toBe('calculate a total');
+
+    expect(getChatbookCellOrigin({})).toBe('prompt');
+    expect(getChatbookCellOrigin({ mode: 'python' })).toBe('python');
+    expect(getChatbookCellOrigin({ mode: 'prompt', origin: 'python' })).toBe(
+      'python'
+    );
+  });
+
+  it('only regenerates prompts it generated itself', () => {
+    expect(hasChatbookPrompt({})).toBe(false);
+    expect(hasChatbookPrompt({ prompt: '   ' })).toBe(false);
+    expect(hasChatbookPrompt({ prompt: 'plot sales' })).toBe(true);
+
+    // Nothing stored yet: a summary is the only way to get a prompt.
+    expect(canRegenerateChatbookPrompt({ mode: 'python' })).toBe(true);
+    // Written by the user, then switched to Python: keep it verbatim.
+    expect(
+      canRegenerateChatbookPrompt({
+        mode: 'python',
+        origin: 'prompt',
+        prompt: 'plot sales'
+      })
+    ).toBe(false);
+    // Previously summarized from Python: safe to refresh.
+    expect(
+      canRegenerateChatbookPrompt({
+        mode: 'python',
+        origin: 'python',
+        prompt: 'sums the values',
+        summarizedCodeHash: 'abc'
+      })
+    ).toBe(true);
   });
 
   it('stores nui session id on the notebook', () => {
