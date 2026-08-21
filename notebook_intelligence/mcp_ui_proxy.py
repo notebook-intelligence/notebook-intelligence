@@ -69,13 +69,24 @@ def _log(msg: str) -> None:
     print(f"[mcp_ui_proxy] {msg}", file=sys.stderr, flush=True)
 
 
+def _match_server_by_url(servers: list, base: str) -> dict | None:
+    """Return the running-server dict whose url matches ``base`` (trailing-slash
+    insensitive), or None if none matches. Pure and unit-testable independent of
+    jupyter_server's list_running_servers(), so the "never pair one server's url
+    with another's token" invariant has direct regression coverage."""
+    base = base.rstrip("/")
+    return next((s for s in servers if s.get("url", "").rstrip("/") == base), None)
+
+
 def _resolve_backend() -> tuple[str, str]:
     """Return (endpoint_url, token) from env, then the Jupyter runtime file."""
     endpoint = os.environ.get("NBI_UI_TOOLS_URL")
     token = os.environ.get("NBI_UI_TOOLS_TOKEN") or os.environ.get("JUPYTER_TOKEN")
     base = os.environ.get("JUPYTER_SERVER_URL")
     # Discover from the Jupyter runtime file when we still lack a base URL (to build
-    # the endpoint) or a token (empty string counts as unset).
+    # the endpoint) or a token (empty string counts as unset). Reaching this block at
+    # all means token is falsy — the outer condition is only true via `not token` when
+    # base is already set, so every branch below can assume no token is known yet.
     if (not endpoint and not base) or not token:
         try:
             from jupyter_server.serverapp import list_running_servers
@@ -83,12 +94,21 @@ def _resolve_backend() -> tuple[str, str]:
         except Exception as exc:
             servers = []
             _log(f"Could not enumerate running Jupyter servers: {exc}")
-        chosen = None
-        for srv in servers:
-            if base and srv.get("url", "").rstrip("/") == base.rstrip("/"):
-                chosen = srv
-                break
-        if chosen is None and servers:
+        # Never take a token from a server whose URL differs from `base`: that would mean
+        # authenticating server A's endpoint with server B's token (403 every call).
+        if base:
+            # A base URL is pinned: only adopt a token from the server that matches it.
+            match = _match_server_by_url(servers, base)
+            if match is not None:
+                token = match.get("token")
+            else:
+                _log(
+                    f"JUPYTER_SERVER_URL={base} matched no running Jupyter server; "
+                    "proceeding without a discovered token. Set NBI_UI_TOOLS_TOKEN / "
+                    "JUPYTER_TOKEN explicitly."
+                )
+        elif servers:
+            # No base is pinned: choose one server and keep its URL/token together.
             if len(servers) > 1:
                 _log(
                     "Multiple Jupyter servers found and JUPYTER_SERVER_URL is unset; "
@@ -96,10 +116,8 @@ def _resolve_backend() -> tuple[str, str]:
                     "JUPYTER_SERVER_URL to target a specific server."
                 )
             chosen = servers[0]
-        if chosen is not None:
-            base = base or chosen.get("url")
-            if not token:
-                token = chosen.get("token")
+            base = chosen.get("url")
+            token = chosen.get("token")
 
     if not endpoint:
         if not base:

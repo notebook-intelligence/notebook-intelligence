@@ -41,6 +41,7 @@ from notebook_intelligence.feature_flags import (
     VALID_POLICIES,
     apply_claude_policies,
     apply_string_overrides,
+    is_external_ui_tools_active,
     is_force_off,
     is_locked,
     resolve_feature_flag,
@@ -2269,14 +2270,26 @@ class UIToolsHandler(APIHandler):
             return
         return super().check_xsrf_cookie()
 
+    def _external_mode_enabled(self) -> bool:
+        # Resolved per request (not at boot): jupyter_ui_tools_external is mutable via
+        # ConfigHandler.post, and _create_client_options reads it per request too, so
+        # the relay must track the live setting to stay in lockstep with the transport.
+        # Shared predicate (see feature_flags.is_external_ui_tools_active) — both sides
+        # must resolve the same claude_settings the same way or they can drift apart.
+        return is_external_ui_tools_active(ai_service_manager.nbi_config.claude_settings or {})
+
     @tornado.web.authenticated
     async def get(self):
+        if not self._external_mode_enabled():
+            raise tornado.web.HTTPError(404)
         tools = get_ui_tools_manifest()
         log.debug(f"UI tools relay: served manifest ({len(tools)} tools)")
         self.finish(json.dumps({"tools": tools}))
 
     @tornado.web.authenticated
     async def post(self):
+        if not self._external_mode_enabled():
+            raise tornado.web.HTTPError(404)
         try:
             data = json.loads(self.request.body or b"{}")
         except json.JSONDecodeError as exc:
@@ -3476,18 +3489,13 @@ class NotebookIntelligence(ExtensionApp):
             "NBI_UPLOAD_RETENTION_HOURS", self.upload_retention_hours
         )
         self._publish_policies(feature_policies, string_overrides)
-        # The UI-tools relay is only exercised when the Jupyter-UI tools are served by
-        # the external MCP proxy; register it only in that mode so the endpoint surface
-        # matches the feature (see claude._create_client_options / mcp_ui_proxy).
-        _cs = ai_service_manager.nbi_config.claude_settings or {}
-        _ui_tools_external = (
-            JUPYTER_UI_TOOLS_ID in (_cs.get("tools") or [])
-            and _cs.get("jupyter_ui_tools_external", False)
-        )
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
             (route_pattern_config, ConfigHandler),
-            *([(route_pattern_ui_tools, UIToolsHandler)] if _ui_tools_external else []),
+            # Always register the relay: jupyter_ui_tools_external is runtime-mutable.
+            # UIToolsHandler gates every request against the live setting, so changing
+            # transport after boot cannot leave route registration out of sync.
+            (route_pattern_ui_tools, UIToolsHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),

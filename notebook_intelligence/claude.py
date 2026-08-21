@@ -18,6 +18,7 @@ from anyio.abc import Process
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS
+from notebook_intelligence.feature_flags import is_external_ui_tools_active
 from notebook_intelligence._version import __version__ as NBI_VERSION
 import base64
 import logging
@@ -2192,7 +2193,9 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
         # MCP config — required under a managed/enterprise MCP config that rejects
         # dynamically-configured (in-process) servers. Tool names (mcp__nbi__*) and
         # the system prompt are identical either way; only the transport differs.
-        external_ui_tools = claude_settings.get('jupyter_ui_tools_external', False)
+        # external_ui_tools is the single source of truth shared with the UI-tools
+        # relay (extension.UIToolsHandler); see feature_flags.is_external_ui_tools_active.
+        external_ui_tools = is_external_ui_tools_active(claude_settings)
         if jupyter_ui_tools_enabled and not external_ui_tools:
             mcp_servers["nbi"] = create_sdk_mcp_server(
                 name="nbi", version="1.0.0", tools=JUPYTER_UI_TOOLS
@@ -2219,9 +2222,12 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             env['ANTHROPIC_BASE_URL'] = base_url
 
         env["CLAUDE_CODE_ENTRYPOINT"] = "notebook-intelligence"
-        # Hand the proxy the bridge secret (sent to the relay in a dedicated header,
-        # separate from the Jupyter identity in Authorization). See get_ui_tools_secret.
-        env["NBI_UI_TOOLS_SECRET"] = get_ui_tools_secret()
+        if external_ui_tools:
+            # Scope the bridge credential to the only mode that consumes it. Claude
+            # Code propagates its env to Bash, hooks, and MCP subprocesses, so do not
+            # expose the secret when tools are disabled or use the in-process transport.
+            # The proxy sends it in a dedicated header; see get_ui_tools_secret.
+            env["NBI_UI_TOOLS_SECRET"] = get_ui_tools_secret()
 
         continue_conversation = claude_settings.get('continue_conversation', False)
 

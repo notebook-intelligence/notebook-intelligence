@@ -55,6 +55,22 @@ def is_force_off(policies: dict, name: str) -> bool:
     return policies.get(name, POLICY_USER_CHOICE) == POLICY_FORCE_OFF
 
 
+def is_external_ui_tools_active(claude_settings: dict) -> bool:
+    """True iff the Jupyter-UI tools are enabled AND served by the external MCP
+    proxy rather than the in-process sdk server.
+
+    Single source of truth for the transport decision: ``claude.py`` reads it to
+    choose which MCP server to register (and whether to hand the bridge secret to
+    the subprocess env), and ``extension.py``'s UI-tools relay reads it per request
+    to decide whether to serve or refuse. Both call sites must resolve the same
+    live ``claude_settings`` the same way, or the transport and the relay gate can
+    drift out of lockstep.
+    """
+    return JUPYTER_UI_TOOLS_ID in (claude_settings.get("tools") or []) and bool(
+        claude_settings.get("jupyter_ui_tools_external", False)
+    )
+
+
 def apply_string_overrides(target: dict, overrides: dict, mapping: tuple) -> dict:
     """Apply value-presence-locks per ``mapping`` to a copy of ``target``.
 
