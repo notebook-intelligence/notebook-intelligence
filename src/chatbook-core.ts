@@ -4,7 +4,6 @@ export const CHATBOOK_KERNEL_NAME = 'chatbook';
 export const CHATBOOK_MSG_TYPE = 'nbi_chatbook_code';
 export const CHATBOOK_LANGUAGE = 'chatbook';
 
-export type ChatbookSourceView = 'prompt' | 'code';
 export type ChatbookCellMode = 'prompt' | 'python';
 export type ChatbookConvertTargetId = 'python';
 
@@ -47,7 +46,6 @@ export interface IChatbookNotebookContext {
 
 export interface INotebookChatbookMeta {
   nuiSessionId?: string;
-  sourceView?: ChatbookSourceView;
 }
 
 export interface IChatbookConvertTarget {
@@ -86,18 +84,32 @@ export function isChatbookKernelName(name: string | undefined | null): boolean {
 
 export function isChatbookPromptInlineCompletion(
   kernelName: string | undefined | null,
-  sourceView: ChatbookSourceView,
   cellMode: ChatbookCellMode = 'prompt'
 ): boolean {
-  return (
-    isChatbookKernelName(kernelName) &&
-    sourceView !== 'code' &&
-    cellMode === 'prompt'
-  );
+  return isChatbookKernelName(kernelName) && cellMode === 'prompt';
 }
 
 export function getChatbookCellMode(meta: IChatbookCellMeta): ChatbookCellMode {
   return meta.mode === 'python' ? 'python' : 'prompt';
+}
+
+/** Whether the cell has Python to show, either its own or generated for it. */
+export function chatbookCellHasPython(meta: IChatbookCellMeta): boolean {
+  return Boolean((meta.generatedCode || meta.pythonSource || '').trim());
+}
+
+/**
+ * A prompt cell can only become a Python cell once code exists for it, so an
+ * unrun prompt is never replaced by an empty editor.
+ */
+export function canSwitchChatbookCellMode(
+  meta: IChatbookCellMeta,
+  nextMode: ChatbookCellMode
+): boolean {
+  if (getChatbookCellMode(meta) === nextMode) {
+    return false;
+  }
+  return nextMode === 'prompt' || chatbookCellHasPython(meta);
 }
 
 export function getChatbookCellOrigin(
@@ -173,9 +185,6 @@ export function getNotebookChatbookMeta(
   if (typeof chatbook.nuiSessionId === 'string') {
     meta.nuiSessionId = chatbook.nuiSessionId;
   }
-  if (chatbook.sourceView === 'code' || chatbook.sourceView === 'prompt') {
-    meta.sourceView = chatbook.sourceView;
-  }
   return meta;
 }
 
@@ -183,12 +192,39 @@ export function getNotebookNuiSessionId(notebookMetadata: unknown): string {
   return (getNotebookChatbookMeta(notebookMetadata).nuiSessionId ?? '').trim();
 }
 
-export function getNotebookSourceView(
+/**
+ * Notebooks written before cell mode became the only state carry a notebook-wide
+ * `sourceView`; in `code` view their prompt cells hold generated Python.
+ */
+export function hasLegacyChatbookCodeView(notebookMetadata: unknown): boolean {
+  if (!notebookMetadata || typeof notebookMetadata !== 'object') {
+    return false;
+  }
+  const chatbook = (
+    notebookMetadata as { nbi?: { chatbook?: { sourceView?: unknown } } }
+  ).nbi?.chatbook;
+  return Boolean(chatbook) && chatbook?.sourceView === 'code';
+}
+
+export function withoutLegacyChatbookSourceView(
   notebookMetadata: unknown
-): ChatbookSourceView {
-  return getNotebookChatbookMeta(notebookMetadata).sourceView === 'code'
-    ? 'code'
-    : 'prompt';
+): Record<string, unknown> {
+  const current =
+    notebookMetadata && typeof notebookMetadata === 'object'
+      ? { ...(notebookMetadata as Record<string, unknown>) }
+      : {};
+  const nbi =
+    current.nbi && typeof current.nbi === 'object'
+      ? { ...(current.nbi as Record<string, unknown>) }
+      : {};
+  const chatbook =
+    nbi.chatbook && typeof nbi.chatbook === 'object'
+      ? { ...(nbi.chatbook as Record<string, unknown>) }
+      : {};
+  delete chatbook.sourceView;
+  nbi.chatbook = chatbook;
+  current.nbi = nbi;
+  return current;
 }
 
 export function mergeNotebookChatbookMeta(
@@ -227,25 +263,22 @@ export function isChatbookConvertTargetId(
 
 export function resolveChatbookPrompt(
   source: string,
-  meta: IChatbookCellMeta,
-  sourceView: ChatbookSourceView
+  meta: IChatbookCellMeta
 ): string {
-  if (sourceView === 'code' && typeof meta.prompt === 'string') {
-    return meta.prompt;
+  if (getChatbookCellMode(meta) === 'python') {
+    return meta.prompt ?? '';
   }
   return source;
 }
 
 export function resolveChatbookPython(
   source: string,
-  meta: IChatbookCellMeta,
-  sourceView: ChatbookSourceView
+  meta: IChatbookCellMeta
 ): string {
-  const mode = getChatbookCellMode(meta);
-  if (mode === 'python') {
+  if (getChatbookCellMode(meta) === 'python') {
     return source;
   }
-  return sourceView === 'code' ? source : meta.generatedCode || '';
+  return meta.generatedCode || '';
 }
 
 export function promptAsHashComment(prompt: string): string {
@@ -262,7 +295,6 @@ export function promptAsHashComment(prompt: string): string {
 function snapshotChatbookCell(options: {
   source: string;
   meta: IChatbookCellMeta;
-  currentView: ChatbookSourceView;
 }): {
   prompt: string;
   generatedCode: string;
@@ -272,77 +304,30 @@ function snapshotChatbookCell(options: {
   const mode = getChatbookCellMode(options.meta);
   if (mode === 'python') {
     const pythonSource = options.source;
-    const prompt = options.meta.prompt || '';
     return {
-      prompt,
+      prompt: options.meta.prompt || '',
       generatedCode: pythonSource,
       pythonSource,
       mode
     };
   }
-  if (options.currentView === 'code') {
-    return {
-      prompt: options.meta.prompt ?? '',
-      generatedCode: options.source,
-      pythonSource: options.source,
-      mode
-    };
-  }
+  // A run refreshes `generatedCode` alone, so `pythonSource` left over from an
+  // earlier stint as a Python cell can be stale.
+  const generatedCode = options.meta.generatedCode ?? '';
   return {
     prompt: options.source,
-    generatedCode: options.meta.generatedCode ?? '',
-    pythonSource: options.meta.generatedCode ?? '',
+    generatedCode,
+    pythonSource: generatedCode,
     mode
   };
-}
-
-export function applySourceViewToCell(options: {
-  source: string;
-  meta: IChatbookCellMeta;
-  currentView: ChatbookSourceView;
-  nextView: ChatbookSourceView;
-}): { source: string; meta: IChatbookCellMeta } {
-  const snapshot = snapshotChatbookCell(options);
-  if (snapshot.mode === 'python') {
-    return {
-      source: options.source,
-      meta: {
-        ...options.meta,
-        mode: 'python',
-        pythonSource: options.source,
-        generatedCode: options.source
-      }
-    };
-  }
-  const meta: IChatbookCellMeta = {
-    ...options.meta,
-    mode: snapshot.mode,
-    prompt: snapshot.prompt
-  };
-  if (snapshot.generatedCode) {
-    meta.generatedCode = snapshot.generatedCode;
-  }
-  if (options.nextView === 'code') {
-    const python = snapshot.pythonSource || snapshot.generatedCode;
-    if (!python) {
-      return { source: options.source, meta };
-    }
-    return { source: python, meta };
-  }
-  return { source: snapshot.prompt, meta };
 }
 
 export function switchChatbookCellMode(options: {
   source: string;
   meta: IChatbookCellMeta;
-  sourceView: ChatbookSourceView;
   nextMode: ChatbookCellMode;
 }): { source: string; meta: IChatbookCellMeta } {
-  const snapshot = snapshotChatbookCell({
-    source: options.source,
-    meta: options.meta,
-    currentView: options.sourceView
-  });
+  const snapshot = snapshotChatbookCell(options);
   const pythonSource = snapshot.pythonSource || snapshot.generatedCode;
   const meta: IChatbookCellMeta = {
     ...options.meta,
@@ -364,7 +349,6 @@ export function switchChatbookCellMode(options: {
 export function convertChatbookCellToPython(options: {
   source: string;
   meta: IChatbookCellMeta;
-  currentView: ChatbookSourceView;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
   if (snapshot.mode === 'python') {
@@ -424,13 +408,10 @@ export function buildPythonNotebookFromChatbook(
   notebook: Record<string, unknown>,
   kernelspec: IChatbookKernelSpec
 ): Record<string, unknown> {
-  const currentView = getNotebookSourceView(notebook.metadata);
   const cells = Array.isArray(notebook.cells)
-    ? notebook.cells.map(cell => convertNotebookCellToPython(cell, currentView))
+    ? notebook.cells.map(cell => convertNotebookCellToPython(cell))
     : [];
-  const metadata = mergeNotebookChatbookMeta(notebook.metadata || {}, {
-    sourceView: 'code'
-  });
+  const metadata = withoutLegacyChatbookSourceView(notebook.metadata || {});
   metadata.kernelspec = kernelspec;
   metadata.language_info = { name: kernelspec.language };
   return {
@@ -440,10 +421,7 @@ export function buildPythonNotebookFromChatbook(
   };
 }
 
-function convertNotebookCellToPython(
-  cell: unknown,
-  currentView: ChatbookSourceView
-): unknown {
+function convertNotebookCellToPython(cell: unknown): unknown {
   if (!cell || typeof cell !== 'object') {
     return cell;
   }
@@ -453,8 +431,7 @@ function convertNotebookCellToPython(
   }
   const converted = convertChatbookCellToPython({
     source: cellSourceToString(next.source),
-    meta: getChatbookCellMeta(next.metadata),
-    currentView
+    meta: getChatbookCellMeta(next.metadata)
   });
   next.source = converted.source;
   next.metadata = mergeChatbookCellMeta(next.metadata, converted.meta);
@@ -476,7 +453,6 @@ export function snapshotChatbookContextCell(options: {
   cellType: string;
   source: string;
   cellMeta: IChatbookCellMeta;
-  sourceView: ChatbookSourceView;
   output?: string;
 }): IChatbookContextCell {
   const cell: IChatbookContextCell = {
@@ -495,15 +471,8 @@ export function snapshotChatbookContextCell(options: {
   const mode = getChatbookCellMode(options.cellMeta);
   cell.mode = mode;
   if (mode === 'python') {
-    const python = resolveChatbookPython(
-      options.source,
-      options.cellMeta,
-      options.sourceView
-    );
-    const prompt =
-      options.sourceView === 'prompt'
-        ? options.source
-        : options.cellMeta.prompt || '';
+    const python = resolveChatbookPython(options.source, options.cellMeta);
+    const prompt = options.cellMeta.prompt || '';
     if (prompt) {
       cell.prompt = truncateChatbookContextField(
         prompt,
@@ -524,11 +493,7 @@ export function snapshotChatbookContextCell(options: {
     }
     return cell;
   }
-  const prompt = resolveChatbookPrompt(
-    options.source,
-    options.cellMeta,
-    options.sourceView
-  );
+  const prompt = resolveChatbookPrompt(options.source, options.cellMeta);
   const generated = options.cellMeta.generatedCode || '';
   if (prompt) {
     cell.prompt = truncateChatbookContextField(

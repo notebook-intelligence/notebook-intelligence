@@ -69,8 +69,8 @@ export namespace CommandIDs {
     'notebook-intelligence:create-chatbook-notebook';
   export const showChatbookGeneratedCode =
     'notebook-intelligence:show-chatbook-generated-code';
-  export const toggleChatbookSourceView =
-    'notebook-intelligence:toggle-chatbook-source-view';
+  export const toggleAllChatbookCellModes =
+    'notebook-intelligence:toggle-all-chatbook-cell-modes';
   export const convertChatbookNotebook =
     'notebook-intelligence:convert-chatbook-notebook';
   export const toggleChatbookCellMode =

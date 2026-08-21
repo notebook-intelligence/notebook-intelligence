@@ -14,18 +14,17 @@ import { INotebookKernelProfile } from './notebook-kernels';
 import {
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
-  applySourceViewToCell,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
   canRegenerateChatbookPrompt,
+  canSwitchChatbookCellMode,
   getChatbookCellMode,
   getChatbookCellMeta,
   getChatbookCellOrigin,
-  getNotebookSourceView,
   hasChatbookPrompt,
+  hasLegacyChatbookCodeView,
   isChatbookKernelName,
   mergeChatbookCellMeta,
-  mergeNotebookChatbookMeta,
   pythonExportNotebookPath,
   resolveChatbookPrompt,
   resolveChatbookPython,
@@ -33,8 +32,8 @@ import {
   snapshotChatbookContextCell,
   splitNotebookContext,
   switchChatbookCellMode,
+  withoutLegacyChatbookSourceView,
   type ChatbookCellMode,
-  type ChatbookSourceView,
   type IChatbookCellMeta,
   type IChatbookNotebookContext
 } from './chatbook-core';
@@ -49,7 +48,6 @@ export {
   CHATBOOK_MSG_TYPE,
   getChatbookCellMeta,
   getChatbookCellMode,
-  getNotebookSourceView,
   isChatbookConvertTargetId,
   isChatbookKernelName,
   isChatbookPromptInlineCompletion
@@ -120,12 +118,10 @@ export function patchCodeCellExecute(): void {
     }
     const cellMeta = getChatbookCellMeta(cell.model.metadata);
     const notebook = cell.parent?.parent as NotebookPanel | undefined;
-    const notebookMeta = notebook?.model?.metadata;
-    const sourceView = getNotebookSourceView(notebookMeta);
     const source = cell.model.sharedModel.getSource();
     const mode = getChatbookCellMode(cellMeta);
     if (mode === 'python') {
-      const python = resolveChatbookPython(source, cellMeta, sourceView);
+      const python = resolveChatbookPython(source, cellMeta);
       writeChatbookCellMeta(cell, {
         mode: 'python',
         origin: getChatbookCellOrigin(cellMeta),
@@ -154,14 +150,12 @@ export function patchCodeCellExecute(): void {
       }
       return execution;
     }
-    const prompt = resolveChatbookPrompt(source, cellMeta, sourceView);
-    if (sourceView === 'prompt') {
-      writeChatbookCellMeta(cell, {
-        prompt,
-        origin: getChatbookCellOrigin(cellMeta)
-      });
-    }
-    const notebookContext = snapshotNotebookContext(notebook, cell, sourceView);
+    const prompt = resolveChatbookPrompt(source, cellMeta);
+    writeChatbookCellMeta(cell, {
+      prompt,
+      origin: getChatbookCellOrigin(cellMeta)
+    });
+    const notebookContext = snapshotNotebookContext(notebook, cell);
     const promptHash = await sha256Hex(prompt);
     const contextHash = notebookContext
       ? await sha256Hex(JSON.stringify(notebookContext))
@@ -242,21 +236,23 @@ export async function summarizePythonCell(
 }
 
 export async function setChatbookCellMode(
-  panel: NotebookPanel,
   cell: IChatbookEditableCell,
-  nextMode: ChatbookCellMode
+  nextMode: ChatbookCellMode,
+  options: { notifyWhenNoPython?: boolean } = {}
 ): Promise<void> {
-  const sourceView = getNotebookSourceView(panel.model?.metadata);
   let meta = getChatbookCellMeta(cell.model.metadata);
-  const currentMode = getChatbookCellMode(meta);
-  if (currentMode === nextMode) {
+  if (!canSwitchChatbookCellMode(meta, nextMode)) {
+    if (options.notifyWhenNoPython && nextMode === 'python') {
+      Notification.info('Run the cell first to generate its Python.', {
+        autoClose: 4000
+      });
+    }
     return;
   }
   // A prompt stored on the cell — whether the user typed it or we summarized
   // it earlier — is reused as is, so only cells that never had one pay for a
   // model round trip.
   if (
-    currentMode === 'python' &&
     nextMode === 'prompt' &&
     !hasChatbookPrompt(meta) &&
     cell.model.sharedModel.getSource().trim()
@@ -272,7 +268,6 @@ export async function setChatbookCellMode(
   const result = switchChatbookCellMode({
     source: cell.model.sharedModel.getSource(),
     meta,
-    sourceView,
     nextMode
   });
   writeChatbookCellMeta(cell, result.meta);
@@ -289,11 +284,49 @@ export async function toggleActiveChatbookCellMode(
     return;
   }
   const mode = getChatbookCellMode(getChatbookCellMeta(cell.model.metadata));
-  await setChatbookCellMode(
-    panel,
-    cell,
-    mode === 'python' ? 'prompt' : 'python'
-  );
+  await setChatbookCellMode(cell, mode === 'python' ? 'prompt' : 'python', {
+    notifyWhenNoPython: true
+  });
+}
+
+/**
+ * Mode every cell would land on if the notebook were switched as a whole. Cells
+ * without Python yet can only be prompts, so they don't hold the notebook back.
+ */
+export function nextChatbookNotebookMode(
+  panel: NotebookPanel
+): ChatbookCellMode {
+  let switchable = 0;
+  let python = 0;
+  forEachCodeCell(panel, cell => {
+    const meta = getChatbookCellMeta(cell.model.metadata);
+    if (getChatbookCellMode(meta) === 'python') {
+      python += 1;
+      switchable += 1;
+    } else if (canSwitchChatbookCellMode(meta, 'python')) {
+      switchable += 1;
+    }
+  });
+  return switchable > 0 && python === switchable ? 'prompt' : 'python';
+}
+
+export async function setAllChatbookCellModes(
+  panel: NotebookPanel,
+  nextMode: ChatbookCellMode
+): Promise<void> {
+  const pending: Promise<void>[] = [];
+  forEachCodeCell(panel, cell => {
+    pending.push(setChatbookCellMode(cell, nextMode));
+  });
+  await Promise.all(pending);
+}
+
+export async function toggleAllChatbookCellModes(
+  panel: NotebookPanel
+): Promise<ChatbookCellMode> {
+  const nextMode = nextChatbookNotebookMode(panel);
+  await setAllChatbookCellModes(panel, nextMode);
+  return nextMode;
 }
 
 export function attachChatbookNotebooks(
@@ -336,11 +369,7 @@ export function attachChatbookNotebooks(
           getChatbookCellMeta(widget.model.metadata)
         );
         if (editorView) {
-          setChatbookMentionsEnabled(
-            editorView,
-            mode === 'prompt' &&
-              getNotebookSourceView(panel.model?.metadata) === 'prompt'
-          );
+          setChatbookMentionsEnabled(editorView, mode === 'prompt');
         }
         const desiredMime =
           mode === 'python' ? 'text/x-python' : 'text/x-chatbook';
@@ -375,9 +404,9 @@ export function attachChatbookNotebooks(
               getChatbookCellMeta(widget.model.metadata)
             );
             void setChatbookCellMode(
-              panel,
               widget,
-              currentMode === 'python' ? 'prompt' : 'python'
+              currentMode === 'python' ? 'prompt' : 'python',
+              { notifyWhenNoPython: true }
             ).finally(syncCellBadges);
           });
           badgeHost.appendChild(button);
@@ -416,6 +445,10 @@ export function attachChatbookNotebooks(
     panel.model?.contentChanged.connect(syncCellBadges);
     panel.content.activeCellChanged.connect(syncCellBadges);
     void panel.sessionContext.ready.then(connectKernel);
+    void panel.context.ready.then(() => {
+      migrateLegacyCodeView(panel);
+      syncCellBadges();
+    });
     syncCellBadges();
     panel.disposed.connect(() => {
       if (kernelConnection) {
@@ -446,8 +479,7 @@ export function attachChatbookNotebooks(
 
 function snapshotNotebookContext(
   notebook: NotebookPanel | undefined,
-  activeCell: CodeCell,
-  sourceView: ChatbookSourceView
+  activeCell: CodeCell
 ): IChatbookNotebookContext | undefined {
   const parent = activeCell.parent as {
     widgets?: readonly (typeof activeCell)[];
@@ -469,7 +501,6 @@ function snapshotNotebookContext(
       cellType: widget.model.type,
       source: widget.model.sharedModel.getSource(),
       cellMeta: getChatbookCellMeta(widget.model.metadata),
-      sourceView,
       output
     });
   });
@@ -503,12 +534,6 @@ function applyChatbookPayload(
       return;
     }
     writeChatbookCellMeta(cell, patch);
-    if (
-      patch.generatedCode &&
-      getNotebookSourceView(panel.model?.metadata) === 'code'
-    ) {
-      cell.model.sharedModel.setSource(patch.generatedCode);
-    }
   }
 }
 
@@ -534,19 +559,6 @@ function writeChatbookCellMeta(
   }
 }
 
-function writeNotebookChatbookMeta(
-  panel: NotebookPanel,
-  patch: { nuiSessionId?: string; sourceView?: ChatbookSourceView }
-): void {
-  if (!panel.model) {
-    return;
-  }
-  const merged = mergeNotebookChatbookMeta(panel.model.metadata, patch);
-  if (merged.nbi) {
-    panel.model.setMetadata('nbi', merged.nbi);
-  }
-}
-
 function forEachCodeCell(
   panel: NotebookPanel,
   visit: (cell: IChatbookEditableCell) => void
@@ -558,36 +570,34 @@ function forEachCodeCell(
   }
 }
 
-export function applyChatbookSourceView(
-  panel: NotebookPanel,
-  nextView: ChatbookSourceView
-): void {
-  if (!panel.model) {
+/**
+ * Notebooks saved while the old notebook-wide code view was on hold generated
+ * Python in cells still marked as prompts. Those cells are Python cells now.
+ */
+function migrateLegacyCodeView(panel: NotebookPanel): void {
+  if (!panel.model || !hasLegacyChatbookCodeView(panel.model.metadata)) {
     return;
   }
-  const currentView = getNotebookSourceView(panel.model.metadata);
   forEachCodeCell(panel, cell => {
-    const result = applySourceViewToCell({
-      source: cell.model.sharedModel.getSource(),
-      meta: getChatbookCellMeta(cell.model.metadata),
-      currentView,
-      nextView
-    });
-    writeChatbookCellMeta(cell, result.meta);
-    if (cell.model.sharedModel.getSource() !== result.source) {
-      cell.model.sharedModel.setSource(result.source);
+    const meta = getChatbookCellMeta(cell.model.metadata);
+    const source = cell.model.sharedModel.getSource();
+    if (
+      getChatbookCellMode(meta) === 'python' ||
+      !source.trim() ||
+      source.trim() !== (meta.generatedCode || '').trim()
+    ) {
+      return;
     }
+    writeChatbookCellMeta(cell, {
+      mode: 'python',
+      origin: getChatbookCellOrigin(meta),
+      pythonSource: source
+    });
   });
-  writeNotebookChatbookMeta(panel, { sourceView: nextView });
-}
-
-export function toggleChatbookSourceView(
-  panel: NotebookPanel
-): ChatbookSourceView {
-  const next: ChatbookSourceView =
-    getNotebookSourceView(panel.model?.metadata) === 'code' ? 'prompt' : 'code';
-  applyChatbookSourceView(panel, next);
-  return next;
+  const metadata = withoutLegacyChatbookSourceView(panel.model.metadata);
+  if (metadata.nbi) {
+    panel.model.setMetadata('nbi', metadata.nbi);
+  }
 }
 
 export async function exportChatbookNotebookAsPython(

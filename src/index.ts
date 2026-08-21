@@ -154,14 +154,14 @@ import {
   attachChatbookNotebooks,
   getChatbookCellMode,
   getChatbookCellMeta,
-  getNotebookSourceView,
   isChatbookPromptInlineCompletion,
   isChatbookSession,
+  nextChatbookNotebookMode,
   patchCodeCellExecute,
   registerChatbookLanguage,
   summarizePythonCell,
   toggleActiveChatbookCellMode,
-  toggleChatbookSourceView
+  toggleAllChatbookCellModes
 } from './chatbook';
 import { detectChatbookMentionTrigger } from './chatbook-mentions';
 
@@ -612,7 +612,6 @@ class NBIInlineCompletionProvider
       const chatbookPromptMode = isChatbookPromptInlineCompletion(
         panel.sessionContext.session?.kernel?.name ||
           panel.sessionContext.kernelPreference?.name,
-        getNotebookSourceView(panel.model?.metadata),
         activeMode
       );
       if (chatbookPromptMode) {
@@ -624,8 +623,7 @@ class NBIInlineCompletionProvider
         language = CHATBOOK_LANGUAGE;
       } else if (
         isChatbookSession(panel.sessionContext) &&
-        (activeMode === 'python' ||
-          getNotebookSourceView(panel.model?.metadata) === 'code')
+        activeMode === 'python'
       ) {
         language = 'python';
       } else if (activeCell?.model.sharedModel.cell_type === 'markdown') {
@@ -1506,24 +1504,22 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       }
     });
 
-    app.commands.addCommand(CommandIDs.toggleChatbookSourceView, {
-      label: () =>
-        getNotebookSourceView(currentChatbookNotebook()?.model?.metadata) ===
-        'code'
-          ? 'Show Chatbook prompts'
-          : 'Show generated cell code',
+    app.commands.addCommand(CommandIDs.toggleAllChatbookCellModes, {
+      label: () => {
+        const panel = currentChatbookNotebook();
+        return panel && nextChatbookNotebookMode(panel) === 'prompt'
+          ? 'Switch all cells to natural language'
+          : 'Switch all cells to Python';
+      },
       caption:
-        'Toggle the notebook between Chatbook prompts and generated Python',
+        'Switch every cell of this Chatbook between its prompt and its Python',
       isEnabled: () => currentChatbookNotebook() !== null,
-      isToggled: () =>
-        getNotebookSourceView(currentChatbookNotebook()?.model?.metadata) ===
-        'code',
-      execute: () => {
+      execute: async () => {
         const panel = currentChatbookNotebook();
         if (!panel) {
           return;
         }
-        toggleChatbookSourceView(panel);
+        await toggleAllChatbookCellModes(panel);
       }
     });
 
@@ -2274,7 +2270,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       category: 'Notebook Intelligence'
     });
     palette.addItem({
-      command: CommandIDs.toggleChatbookSourceView,
+      command: CommandIDs.toggleAllChatbookCellModes,
       category: 'Notebook Intelligence'
     });
     palette.addItem({

@@ -11,9 +11,9 @@ import { IDisposable, DisposableDelegate } from '@lumino/disposable';
 import {
   CHATBOOK_CONVERT_TARGETS,
   exportChatbookNotebookAsPython,
-  getNotebookSourceView,
   isChatbookSession,
-  toggleChatbookSourceView
+  nextChatbookNotebookMode,
+  toggleAllChatbookCellModes
 } from './chatbook';
 import {
   NotebookKernelNotFoundError,
@@ -98,10 +98,9 @@ class ChatbookToolbarController {
     this._panel = panel;
     this._showCodeButton = new ToolbarButton({
       icon: switchIcon,
-      tooltip: 'Show generated cell code instead of Chatbook prompts',
+      tooltip: 'Switch every cell to Python',
       onClick: () => {
-        toggleChatbookSourceView(this._panel);
-        this.sync();
+        void toggleAllChatbookCellModes(this._panel).finally(() => this.sync());
       }
     });
     this._showCodeButton.addClass('nbi-chatbook-toolbar-button');
@@ -141,12 +140,11 @@ class ChatbookToolbarController {
       this._showCodeButton.hide();
       this._convertButton.hide();
     }
-    const showingCode =
-      getNotebookSourceView(this._panel.model?.metadata) === 'code';
-    this._showCodeButton.pressed = showingCode;
-    this._showCodeButton.node.title = showingCode
-      ? 'Show Chatbook prompts instead of generated code'
-      : 'Show generated cell code instead of Chatbook prompts';
+    const allPython = nextChatbookNotebookMode(this._panel) === 'prompt';
+    this._showCodeButton.pressed = allPython;
+    this._showCodeButton.node.title = allPython
+      ? 'Switch every cell to natural language'
+      : 'Switch every cell to Python';
   }
 
   dispose(): void {

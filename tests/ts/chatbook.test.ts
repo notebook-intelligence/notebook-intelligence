@@ -1,18 +1,18 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import {
-  applySourceViewToCell,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
   snapshotChatbookContextCell,
   splitNotebookContext,
   canRegenerateChatbookPrompt,
+  canSwitchChatbookCellMode,
   convertChatbookCellToPython,
   getChatbookCellMeta,
   getChatbookCellMode,
   getChatbookCellOrigin,
-  getNotebookSourceView,
   hasChatbookPrompt,
+  hasLegacyChatbookCodeView,
   isChatbookConvertTargetId,
   isChatbookKernelName,
   isChatbookPromptInlineCompletion,
@@ -22,7 +22,8 @@ import {
   pythonExportNotebookPath,
   resolveChatbookPrompt,
   sha256Hex,
-  switchChatbookCellMode
+  switchChatbookCellMode,
+  withoutLegacyChatbookSourceView
 } from '../../src/chatbook-core';
 
 describe('chatbook-core', () => {
@@ -31,8 +32,23 @@ describe('chatbook-core', () => {
     expect(isChatbookKernelName('python3')).toBe(false);
     expect(isChatbookKernelName('')).toBe(false);
     expect(isChatbookPromptInlineCompletion('chatbook', 'prompt')).toBe(true);
-    expect(isChatbookPromptInlineCompletion('chatbook', 'code')).toBe(false);
+    expect(isChatbookPromptInlineCompletion('chatbook', 'python')).toBe(false);
     expect(isChatbookPromptInlineCompletion('python3', 'prompt')).toBe(false);
+  });
+
+  it('only lets a prompt cell become Python once code exists for it', () => {
+    expect(canSwitchChatbookCellMode({}, 'python')).toBe(false);
+    expect(
+      canSwitchChatbookCellMode({ generatedCode: 'print(1)' }, 'python')
+    ).toBe(true);
+    expect(canSwitchChatbookCellMode({ generatedCode: '   ' }, 'python')).toBe(
+      false
+    );
+    // Python cells can always go back: a missing prompt gets summarized.
+    expect(canSwitchChatbookCellMode({ mode: 'python' }, 'prompt')).toBe(true);
+    // Already in the requested mode.
+    expect(canSwitchChatbookCellMode({ mode: 'python' }, 'python')).toBe(false);
+    expect(canSwitchChatbookCellMode({}, 'prompt')).toBe(false);
   });
 
   it('reads and merges cell metadata under nbi.chatbook', () => {
@@ -52,7 +68,6 @@ describe('chatbook-core', () => {
     const python = switchChatbookCellMode({
       source: 'calculate a total',
       meta: { generatedCode: 'total = sum(values)' },
-      sourceView: 'prompt',
       nextMode: 'python'
     });
     expect(python.source).toBe('total = sum(values)');
@@ -66,7 +81,6 @@ describe('chatbook-core', () => {
         prompt: 'calculate a total',
         pythonSource: 'total = sum(values)'
       },
-      sourceView: 'prompt',
       nextMode: 'prompt'
     });
     expect(prompt.source).toBe('calculate a total');
@@ -74,11 +88,37 @@ describe('chatbook-core', () => {
     expect(prompt.meta.generatedCode).toBe('total = sum(values)');
   });
 
+  it('round-trips a cell through both modes without losing either side', () => {
+    const original = { source: 'calculate a total', meta: {} };
+    const generated = {
+      source: original.source,
+      meta: { ...original.meta, generatedCode: 'total = sum(values)' }
+    };
+
+    const toPython = switchChatbookCellMode({
+      ...generated,
+      nextMode: 'python'
+    });
+    const backToPrompt = switchChatbookCellMode({
+      source: toPython.source,
+      meta: toPython.meta,
+      nextMode: 'prompt'
+    });
+    expect(backToPrompt.source).toBe('calculate a total');
+
+    const toPythonAgain = switchChatbookCellMode({
+      source: backToPrompt.source,
+      meta: backToPrompt.meta,
+      nextMode: 'python'
+    });
+    expect(toPythonAgain.source).toBe('total = sum(values)');
+    expect(toPythonAgain.meta.mode).toBe('python');
+  });
+
   it('records the authoring input type and keeps it across switches', () => {
     const toPython = switchChatbookCellMode({
       source: 'calculate a total',
       meta: { generatedCode: 'total = sum(values)' },
-      sourceView: 'prompt',
       nextMode: 'python'
     });
     expect(toPython.meta.origin).toBe('prompt');
@@ -86,7 +126,6 @@ describe('chatbook-core', () => {
     const backToPrompt = switchChatbookCellMode({
       source: toPython.source,
       meta: toPython.meta,
-      sourceView: 'prompt',
       nextMode: 'prompt'
     });
     expect(backToPrompt.meta.origin).toBe('prompt');
@@ -130,58 +169,40 @@ describe('chatbook-core', () => {
     expect((merged.nbi as any).chatbook.nuiSessionId).toBe('sess-1');
   });
 
-  it('toggles cell source between prompt and generated code', () => {
-    const toCode = applySourceViewToCell({
-      source: 'plot sales',
-      meta: { generatedCode: 'print(1)' },
-      currentView: 'prompt',
-      nextView: 'code'
-    });
-    expect(toCode.source).toBe('print(1)');
-    expect(toCode.meta.prompt).toBe('plot sales');
+  it('drops the notebook-wide source view left by older notebooks', () => {
+    const legacy = { nbi: { chatbook: { sourceView: 'code' } } };
+    expect(hasLegacyChatbookCodeView(legacy)).toBe(true);
+    expect(hasLegacyChatbookCodeView({ nbi: { chatbook: {} } })).toBe(false);
+    expect(hasLegacyChatbookCodeView({})).toBe(false);
 
-    const noCode = applySourceViewToCell({
-      source: 'plot sales',
-      meta: {},
-      currentView: 'prompt',
-      nextView: 'code'
-    });
-    expect(noCode.source).toBe('plot sales');
-    expect(noCode.meta.prompt).toBe('plot sales');
-
-    const toPrompt = applySourceViewToCell({
-      source: 'print(2)',
-      meta: { prompt: 'plot sales', generatedCode: 'print(1)' },
-      currentView: 'code',
-      nextView: 'prompt'
-    });
-    expect(toPrompt.source).toBe('plot sales');
-    expect(toPrompt.meta.generatedCode).toBe('print(2)');
+    const cleaned = withoutLegacyChatbookSourceView(legacy);
+    expect((cleaned.nbi as any).chatbook.sourceView).toBeUndefined();
+    // The original is left untouched for callers holding on to it.
+    expect(legacy.nbi.chatbook.sourceView).toBe('code');
   });
 
   it('converts cells to python, commenting prompts without generated code', () => {
     const withCode = convertChatbookCellToPython({
       source: 'plot sales',
-      meta: { generatedCode: 'print(1)' },
-      currentView: 'prompt'
+      meta: { generatedCode: 'print(1)' }
     });
     expect(withCode.source).toBe('print(1)');
     expect(withCode.meta.prompt).toBe('plot sales');
 
     const commented = convertChatbookCellToPython({
       source: 'plot sales\nby region',
-      meta: {},
-      currentView: 'prompt'
+      meta: {}
     });
     expect(commented.source).toBe('# plot sales\n# by region');
 
     expect(promptAsHashComment('')).toBe('# <empty Chatbook prompt>');
+    expect(resolveChatbookPrompt('plot sales', {})).toBe('plot sales');
     expect(
-      resolveChatbookPrompt('print(1)', { prompt: 'plot sales' }, 'code')
+      resolveChatbookPrompt('print(1)', {
+        mode: 'python',
+        prompt: 'plot sales'
+      })
     ).toBe('plot sales');
-    expect(
-      getNotebookSourceView({ nbi: { chatbook: { sourceView: 'code' } } })
-    ).toBe('code');
     expect(isChatbookConvertTargetId('python')).toBe(true);
     expect(isChatbookConvertTargetId('ruby')).toBe(false);
   });
@@ -317,22 +338,19 @@ describe('chatbook-core', () => {
         cellType: 'code',
         source: 'what is 2+2?',
         cellMeta: { generatedCode: 'print(4)' },
-        sourceView: 'prompt',
         output: '4\n'
       }),
       snapshotChatbookContextCell({
         index: 1,
         cellType: 'code',
         source: 'what did I ask?',
-        cellMeta: {},
-        sourceView: 'prompt'
+        cellMeta: {}
       }),
       snapshotChatbookContextCell({
         index: 2,
         cellType: 'markdown',
         source: '# notes',
-        cellMeta: {},
-        sourceView: 'prompt'
+        cellMeta: {}
       })
     ];
     const ctx = splitNotebookContext(cells, 1);
