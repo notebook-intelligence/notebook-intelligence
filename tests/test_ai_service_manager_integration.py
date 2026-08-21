@@ -217,3 +217,47 @@ class TestAIServiceManagerIntegration:
         ):
             manager.update_models_from_config()
         assert mock_fetch.call_count == 0
+
+
+class TestActiveAgentMode:
+    """Active-agent resolution after the modes became mutually exclusive
+    (#378 review feedback): no preference, at most one enabled mode, Claude
+    wins as the safety net when a hand-edited config enables both.
+    """
+
+    def _manager_with(self, claude_enabled: bool, acp_enabled: bool) -> AIServiceManager:
+        # active_agent_mode only reads the two settings dicts, so a bare
+        # instance with a stub config is enough — no participant/SDK setup.
+        manager = AIServiceManager.__new__(AIServiceManager)
+        mock_config = Mock()
+        mock_config.claude_settings = {"enabled": claude_enabled}
+        mock_config.acp_settings = {"enabled": acp_enabled}
+        manager._nbi_config = mock_config
+        return manager
+
+    def test_none_enabled_returns_none(self):
+        manager = self._manager_with(claude_enabled=False, acp_enabled=False)
+        assert manager.active_agent_mode is None
+        assert not manager.is_claude_code_mode
+        assert not manager.is_acp_mode
+
+    def test_claude_only(self):
+        manager = self._manager_with(claude_enabled=True, acp_enabled=False)
+        assert manager.active_agent_mode == "claude"
+        assert manager.is_claude_code_mode
+        assert not manager.is_acp_mode
+
+    def test_acp_only(self):
+        manager = self._manager_with(claude_enabled=False, acp_enabled=True)
+        assert manager.active_agent_mode == "acp"
+        assert manager.is_acp_mode
+        assert not manager.is_claude_code_mode
+
+    def test_both_enabled_claude_wins(self):
+        # ConfigHandler enforces exclusivity on every save, so both-enabled
+        # can only come from a hand-edited config file; the priority order
+        # keeps the historical "Claude wins" behavior for that case.
+        manager = self._manager_with(claude_enabled=True, acp_enabled=True)
+        assert manager.active_agent_mode == "claude"
+        assert manager.is_claude_code_mode
+        assert not manager.is_acp_mode

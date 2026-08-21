@@ -1665,6 +1665,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     const isChatEnabled = (): boolean => {
       return (
         NBIAPI.config.isInClaudeCodeMode ||
+        NBIAPI.config.isInAcpMode ||
         (NBIAPI.config.chatModel.provider === GITHUB_COPILOT_PROVIDER_ID
           ? !githubLoginRequired()
           : NBIAPI.config.chatModel.provider !== 'none')

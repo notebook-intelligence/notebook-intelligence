@@ -51,6 +51,12 @@ dependencies = [
     # CVE-2026-59950 fix.
     "mcp>=1.28.1",
     "claude-agent-sdk",
+    # Agent Client Protocol client SDK for ACP agent mode (Codex first, more
+    # agents as their adapters are validated, #378). Pinned because the
+    # protocol is pre-1.0 and the Python SDK still ships occasional breaking
+    # changes; imported lazily (only when ACP mode is used) per the #370
+    # lazy-provider-import policy.
+    "agent-client-protocol==0.10.1",
     "anthropic>=0.22.1",
     # Used to tear down an agent subprocess and its descendants (shells, MCP
     # servers, dev servers) on cancel; see util.terminate_process_tree. Already

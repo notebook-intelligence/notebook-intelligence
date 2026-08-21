@@ -7,6 +7,7 @@ import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
 import claudeSvgStr from '../../style/icons/claude.svg';
+import openaiSvgStr from '../../style/icons/openai.svg';
 import {
   ClaudeModelType,
   ClaudeToolType,
@@ -168,6 +169,22 @@ const TABS: TabSpec[] = [
         onEditMCPConfigClicked={props.onEditMCPConfigClicked}
       />
     )
+  },
+  {
+    id: 'acp',
+    label: 'ACP',
+    icon: () => (
+      <span
+        className="acp-agent-icon"
+        dangerouslySetInnerHTML={{ __html: openaiSvgStr }}
+      ></span>
+    ),
+    // Hidden unless an admin has unlocked the experimental ACP mode
+    // (acp_mode defaults to force-off, which reads as locked + disabled).
+    visible: ctx =>
+      ctx.featurePolicies.acp_mode.enabled ||
+      !ctx.featurePolicies.acp_mode.locked,
+    render: () => <SettingsPanelComponentAcp />
   },
   {
     id: 'mcp-servers',
@@ -1171,7 +1188,7 @@ function SettingsPanelComponentClaude(props: any) {
   const claudeSettingsRef = useRef<any>(nbiConfig.claudeSettings);
   const [_renderCount, setRenderCount] = useState(1);
   const [claudeEnabled, setClaudeEnabled] = useState(
-    nbiConfig.isInClaudeCodeMode
+    nbiConfig.claudeSettings?.enabled === true
   );
   const [chatModel, setChatModel] = useState(
     nbiConfig.claudeSettings.chat_model ?? ClaudeModelType.Default
@@ -1644,6 +1661,211 @@ function SettingsPanelComponentClaude(props: any) {
                     value={baseUrl}
                     disabled={settingLocks.claude_base_url.locked}
                     title={lockedTip(settingLocks.claude_base_url.locked)}
+                    onChange={event => setBaseUrl(event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanelComponentAcp(props: any) {
+  const nbiConfig = NBIAPI.config;
+  const acpAgents = nbiConfig.acpAgents;
+  const [acpEnabled, setAcpEnabled] = useState(
+    nbiConfig.acpSettings?.enabled === true
+  );
+  const [agent, setAgent] = useState(
+    nbiConfig.acpSettings.agent ?? acpAgents[0]?.id ?? 'codex'
+  );
+  const [chatModel, setChatModel] = useState(
+    nbiConfig.acpSettings.chat_model ?? ''
+  );
+  const [apiKey, setApiKey] = useState(nbiConfig.acpSettings.api_key ?? '');
+  const [baseUrl, setBaseUrl] = useState(nbiConfig.acpSettings.base_url ?? '');
+  const [fullAccess, setFullAccess] = useState(
+    nbiConfig.acpSettings.full_access === true
+  );
+  const { featurePolicies, settingLocks } = useNbiPolicies();
+
+  const syncSettingsToServerState = () => {
+    NBIAPI.setConfig({
+      acp_settings: {
+        enabled: acpEnabled,
+        agent: agent,
+        chat_model: chatModel,
+        api_key: apiKey,
+        base_url: baseUrl,
+        full_access: fullAccess
+      }
+    });
+  };
+
+  useEffect(() => {
+    syncSettingsToServerState();
+  }, [acpEnabled, agent, chatModel, apiKey, baseUrl, fullAccess]);
+
+  return (
+    <div className="config-dialog acp-mode-config-dialog">
+      <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Enable ACP mode</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                Experimental. Routes chat through an external coding agent over
+                the{' '}
+                <a
+                  href="https://agentclientprotocol.com/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Agent Client Protocol
+                </a>
+                . Requires <code>npx</code> available on the server. ACP mode
+                and Claude mode are mutually exclusive: enabling one turns the
+                other off.
+              </span>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    header={true}
+                    label="Enable ACP mode"
+                    checked={checkedValue(featurePolicies.acp_mode, acpEnabled)}
+                    disabled={featurePolicies.acp_mode.locked}
+                    tooltip={lockedTip(featurePolicies.acp_mode.locked)}
+                    onClick={() => {
+                      setAcpEnabled(!acpEnabled);
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+            <div className="model-config-section-row">
+              <span id="acp-full-access-warning" className="config-warning">
+                By default the agent asks before anything beyond trusted
+                read-only commands. Full access lets it run tools (edits, shell)
+                without asking. Content the agent reads can steer what it runs.
+              </span>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div>
+                  <CheckBoxItem
+                    label="Full access (run without asking)"
+                    ariaDescribedBy="acp-full-access-warning"
+                    checked={checkedValue(
+                      featurePolicies.acp_full_access,
+                      fullAccess
+                    )}
+                    disabled={featurePolicies.acp_full_access.locked}
+                    tooltip={lockedTip(featurePolicies.acp_full_access.locked)}
+                    onClick={() => {
+                      setFullAccess(!fullAccess);
+                    }}
+                  ></CheckBoxItem>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">Agent</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div className="form-field-row">
+                  <div
+                    className="form-field-description"
+                    id="acp-agent-select-label"
+                  >
+                    Agent type
+                  </div>
+                  <select
+                    name="acp-agent-select"
+                    aria-labelledby="acp-agent-select-label"
+                    className="jp-mod-styled"
+                    value={agent}
+                    onChange={event => setAgent(event.target.value)}
+                  >
+                    {acpAgents.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-field-row">
+                  <div className="form-field-description">
+                    Chat model (optional)
+                  </div>
+                  <input
+                    name="acp-chat-model-input"
+                    placeholder={
+                      settingLocks.acp_chat_model.locked
+                        ? 'Locked by NBI_ACP_CHAT_MODEL'
+                        : "Agent default (e.g. 'gpt-5-codex')"
+                    }
+                    className="jp-mod-styled"
+                    spellCheck={false}
+                    value={settingLocks.acp_chat_model.locked ? '' : chatModel}
+                    disabled={settingLocks.acp_chat_model.locked}
+                    title={lockedTip(settingLocks.acp_chat_model.locked)}
+                    onChange={event => setChatModel(event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-config-section">
+          <div className="model-config-section-header">Agent account</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div className="form-field-row">
+                  <div className="form-field-description">
+                    API Key (optional)
+                  </div>
+                  <input
+                    name="acp-api-key-input"
+                    placeholder={
+                      settingLocks.acp_api_key.locked
+                        ? 'Locked by OPENAI_API_KEY'
+                        : 'API Key'
+                    }
+                    className="jp-mod-styled"
+                    spellCheck={false}
+                    value={settingLocks.acp_api_key.locked ? '' : apiKey}
+                    disabled={settingLocks.acp_api_key.locked}
+                    title={lockedTip(settingLocks.acp_api_key.locked)}
+                    onChange={event => setApiKey(event.target.value)}
+                  />
+                </div>
+                <div className="form-field-row">
+                  <div className="form-field-description">
+                    Base URL (optional)
+                  </div>
+                  <input
+                    name="acp-base-url-input"
+                    placeholder={
+                      settingLocks.acp_base_url.locked
+                        ? 'Locked by OPENAI_BASE_URL'
+                        : 'https://api.openai.com/v1'
+                    }
+                    className="jp-mod-styled"
+                    spellCheck={false}
+                    value={settingLocks.acp_base_url.locked ? '' : baseUrl}
+                    disabled={settingLocks.acp_base_url.locked}
+                    title={lockedTip(settingLocks.acp_base_url.locked)}
                     onChange={event => setBaseUrl(event.target.value)}
                   />
                 </div>

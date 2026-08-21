@@ -78,6 +78,7 @@ import { CheckBoxItem } from './components/checkbox';
 import { SafeAnchor } from './components/safe-anchor';
 import { mcpServerSettingsToEnabledState } from './components/mcp-util';
 import claudeSvgStr from '../style/icons/claude.svg';
+import openaiSvgStr from '../style/icons/openai.svg';
 import { AskUserQuestion } from './components/ask-user-question';
 import { ClaudeSessionPicker } from './components/claude-session-picker';
 import {
@@ -1374,6 +1375,7 @@ function SidebarComponent(props: any) {
   const [workspaceFilesLoaded, setWorkspaceFilesLoaded] = useState(false);
   const [workspaceFilesLoading, setWorkspaceFilesLoading] = useState(false);
   const [showClaudeSessionPicker, setShowClaudeSessionPicker] = useState(false);
+  const [showAcpSessionPicker, setShowAcpSessionPicker] = useState(false);
   const [workspaceFilesError, setWorkspaceFilesError] = useState('');
   const [workspaceScanLimitReached, setWorkspaceScanLimitReached] =
     useState(false);
@@ -3315,11 +3317,10 @@ function SidebarComponent(props: any) {
     setChatId(UUID.uuid4());
   };
 
-  const handleClaudeSessionResumed = (session: IClaudeSessionInfo) => {
-    setShowClaudeSessionPicker(false);
-    // Reset local chat view so the user starts from a clean slate in the
-    // UI; the Claude Code backend retains the resumed transcript and will
-    // answer subsequent prompts with full prior context.
+  // Shared reset for both resume flows: the backend retains the resumed
+  // transcript (Claude reconnects with --resume; ACP replays via
+  // session/load), so the UI just resets to a clean slate with a notice.
+  const resetChatForResumedSession = (notice: string) => {
     setChatMessages([
       {
         id: UUID.uuid4(),
@@ -3329,9 +3330,7 @@ function SidebarComponent(props: any) {
           {
             id: UUID.uuid4(),
             type: ResponseStreamDataType.Markdown,
-            content: `Resumed Claude session \`${session.session_id.slice(0, 8)}\`${
-              session.preview ? ` \u2014 _${session.preview}_` : ''
-            }.`,
+            content: notice,
             created: new Date()
           }
         ]
@@ -3344,7 +3343,25 @@ function SidebarComponent(props: any) {
     resetPrefixSuggestions();
     setPromptHistory([]);
     setPromptHistoryIndex(0);
+  };
+
+  const handleClaudeSessionResumed = (session: IClaudeSessionInfo) => {
+    setShowClaudeSessionPicker(false);
+    resetChatForResumedSession(
+      `Resumed Claude session \`${session.session_id.slice(0, 8)}\`${
+        session.preview ? ` \u2014 _${session.preview}_` : ''
+      }.`
+    );
     setPermissionMode(NBIAPI.config.claudePermissionDefaultMode);
+  };
+
+  const handleAcpSessionResumed = (session: IClaudeSessionInfo) => {
+    setShowAcpSessionPicker(false);
+    resetChatForResumedSession(
+      `Resumed session \`${session.session_id.slice(0, 8)}\`${
+        session.preview ? `: _${session.preview}_` : ''
+      }.`
+    );
   };
 
   const onPromptKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -4024,14 +4041,18 @@ function SidebarComponent(props: any) {
       {tourVisible && <TourOverlay onClose={() => setTourVisible(false)} />}
       <div className="sidebar-header">
         <div className="sidebar-title">Notebook Intelligence</div>
-        {NBIAPI.config.isInClaudeCodeMode && (
+        {(NBIAPI.config.isInClaudeCodeMode || NBIAPI.config.isInAcpMode) && (
           <>
             <button
               type="button"
               className="user-input-footer-button"
               data-tour-id={TOUR_ANCHOR.newChat}
               onClick={() => startNewChatSession()}
-              title="Start a new chat session (restarts the Claude client)"
+              title={
+                NBIAPI.config.isInClaudeCodeMode
+                  ? 'Start a new chat session (restarts the Claude client)'
+                  : 'Start a new chat session (starts a fresh agent session)'
+              }
               aria-label="Start a new chat session"
             >
               <VscAdd />
@@ -4040,9 +4061,13 @@ function SidebarComponent(props: any) {
               type="button"
               className="user-input-footer-button"
               data-tour-id={TOUR_ANCHOR.claudeHistory}
-              onClick={() => setShowClaudeSessionPicker(true)}
-              aria-label="Resume previous Claude session"
-              title="Resume a Claude session you started earlier in this workspace"
+              onClick={() =>
+                NBIAPI.config.isInClaudeCodeMode
+                  ? setShowClaudeSessionPicker(true)
+                  : setShowAcpSessionPicker(true)
+              }
+              aria-label="Resume a previous session"
+              title="Resume a session you started earlier in this workspace"
             >
               <VscHistory />
             </button>
@@ -4088,31 +4113,33 @@ function SidebarComponent(props: any) {
           </button>
         </div>
       )}
-      {!NBIAPI.config.isInClaudeCodeMode && ghLoginRequired && (
-        <div className="sidebar-login-info">
-          <div>
-            You are not logged in to GitHub Copilot. Please login now to
-            activate chat.
-          </div>
-          <div className="sidebar-login-buttons">
-            <button
-              className="jp-Dialog-button jp-mod-accept jp-mod-styled"
-              onClick={handleLoginClick}
-            >
-              <div className="jp-Dialog-buttonLabel">
-                Login to GitHub Copilot
-              </div>
-            </button>
+      {!NBIAPI.config.isInClaudeCodeMode &&
+        !NBIAPI.config.isInAcpMode &&
+        ghLoginRequired && (
+          <div className="sidebar-login-info">
+            <div>
+              You are not logged in to GitHub Copilot. Please login now to
+              activate chat.
+            </div>
+            <div className="sidebar-login-buttons">
+              <button
+                className="jp-Dialog-button jp-mod-accept jp-mod-styled"
+                onClick={handleLoginClick}
+              >
+                <div className="jp-Dialog-buttonLabel">
+                  Login to GitHub Copilot
+                </div>
+              </button>
 
-            <button
-              className="jp-Dialog-button jp-mod-reject jp-mod-styled"
-              onClick={handleConfigurationClick}
-            >
-              <div className="jp-Dialog-buttonLabel">Change provider</div>
-            </button>
+              <button
+                className="jp-Dialog-button jp-mod-reject jp-mod-styled"
+                onClick={handleConfigurationClick}
+              >
+                <div className="jp-Dialog-buttonLabel">Change provider</div>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {chatEnabled &&
         (chatMessages.length === 0 ? (
@@ -4373,45 +4400,48 @@ function SidebarComponent(props: any) {
             />
             <div style={{ flexGrow: 1 }}></div>
             <div className="chat-mode-widgets-container">
-              {!NBIAPI.config.isInClaudeCodeMode && (
-                <div data-tour-id={TOUR_ANCHOR.chatMode}>
-                  <select
-                    className="chat-mode-select"
-                    title="Chat mode"
-                    value={chatMode}
-                    onChange={event => {
-                      if (event.target.value === 'ask') {
-                        setToolSelections(toolSelectionsEmpty);
-                      }
-                      setShowModeTools(false);
-                      setChatMode(event.target.value);
-                    }}
+              {!NBIAPI.config.isInClaudeCodeMode &&
+                !NBIAPI.config.isInAcpMode && (
+                  <div data-tour-id={TOUR_ANCHOR.chatMode}>
+                    <select
+                      className="chat-mode-select"
+                      title="Chat mode"
+                      value={chatMode}
+                      onChange={event => {
+                        if (event.target.value === 'ask') {
+                          setToolSelections(toolSelectionsEmpty);
+                        }
+                        setShowModeTools(false);
+                        setChatMode(event.target.value);
+                      }}
+                    >
+                      <option value="ask">Ask</option>
+                      <option value="agent">Agent</option>
+                    </select>
+                  </div>
+                )}
+              {chatMode !== 'ask' &&
+                !NBIAPI.config.isInClaudeCodeMode &&
+                !NBIAPI.config.isInAcpMode && (
+                  <button
+                    type="button"
+                    className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
+                    onClick={() => handleChatToolsButtonClick()}
+                    title={
+                      unsafeToolSelected
+                        ? `Tool selection can cause irreversible changes! Review each tool execution carefully.\n${toolSelectionTitle}`
+                        : toolSelectionTitle
+                    }
+                    aria-label={
+                      unsafeToolSelected
+                        ? 'Configure tools (warning: irreversible tools selected)'
+                        : 'Configure tools'
+                    }
                   >
-                    <option value="ask">Ask</option>
-                    <option value="agent">Agent</option>
-                  </select>
-                </div>
-              )}
-              {chatMode !== 'ask' && !NBIAPI.config.isInClaudeCodeMode && (
-                <button
-                  type="button"
-                  className={`user-input-footer-button tools-button ${unsafeToolSelected ? 'tools-button-warning' : selectedToolCount > 0 ? 'tools-button-active' : ''}`}
-                  onClick={() => handleChatToolsButtonClick()}
-                  title={
-                    unsafeToolSelected
-                      ? `Tool selection can cause irreversible changes! Review each tool execution carefully.\n${toolSelectionTitle}`
-                      : toolSelectionTitle
-                  }
-                  aria-label={
-                    unsafeToolSelected
-                      ? 'Configure tools (warning: irreversible tools selected)'
-                      : 'Configure tools'
-                  }
-                >
-                  <VscTools />
-                  {selectedToolCount > 0 && <>{selectedToolCount}</>}
-                </button>
-              )}
+                    <VscTools />
+                    {selectedToolCount > 0 && <>{selectedToolCount}</>}
+                  </button>
+                )}
               {NBIAPI.config.isInClaudeCodeMode && (
                 <PermissionModeSelect
                   value={permissionMode}
@@ -4424,6 +4454,13 @@ function SidebarComponent(props: any) {
                   title="Claude mode"
                   className="claude-icon"
                   dangerouslySetInnerHTML={{ __html: claudeSvgStr }}
+                ></span>
+              )}
+              {NBIAPI.config.isInAcpMode && (
+                <span
+                  title="ACP mode"
+                  className="acp-agent-icon"
+                  dangerouslySetInnerHTML={{ __html: openaiSvgStr }}
                 ></span>
               )}
             </div>
@@ -4470,6 +4507,17 @@ function SidebarComponent(props: any) {
             <ClaudeSessionPicker
               onResume={handleClaudeSessionResumed}
               onClose={() => setShowClaudeSessionPicker(false)}
+            />
+          )}
+          {showAcpSessionPicker && (
+            <ClaudeSessionPicker
+              title="Resume session"
+              emptyMessage="No previous sessions found for this working directory."
+              showCopyCommand={false}
+              fetchSessions={() => NBIAPI.listAcpSessions()}
+              resumeSession={sessionId => NBIAPI.resumeAcpSession(sessionId)}
+              onResume={handleAcpSessionResumed}
+              onClose={() => setShowAcpSessionPicker(false)}
             />
           )}
           {showWorkspaceFilePicker && (

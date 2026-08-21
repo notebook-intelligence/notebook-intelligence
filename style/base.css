@@ -1461,6 +1461,12 @@ pre:has(.code-block-header) {
   color: #d97757;
 }
 
+.acp-agent-icon svg {
+  width: 16px;
+  height: 16px;
+  color: #0a84ff;
+}
+
 .send-button {
   display: flex;
   align-items: center;
@@ -1657,6 +1663,10 @@ button.send-button:disabled:active:not(.send-button-stop) {
 .model-config-section-header {
   font-weight: bold;
   font-size: 15px;
+}
+
+.config-warning {
+  color: var(--jp-warn-color1);
 }
 
 .model-config-section-body {
@@ -2939,6 +2949,13 @@ svg.access-token-warning {
 }
 
 .chat-mode-widgets-container .claude-icon svg {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+}
+
+/* The ACP-agent footer badge matches the Claude badge size. */
+.chat-mode-widgets-container .acp-agent-icon svg {
   margin-top: 4px;
   width: 18px;
   height: 18px;

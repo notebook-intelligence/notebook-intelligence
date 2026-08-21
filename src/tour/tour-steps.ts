@@ -219,8 +219,10 @@ export const ALL_TOUR_STEPS: readonly ITourStep[] = Object.freeze([
     description: defaultText('chat-mode', 'description'),
     anchorId: TOUR_ANCHOR.chatMode,
     placement: 'top',
-    // Mode picker is hidden in Claude mode (Claude owns its own loop).
-    requires: () => !NBIAPI.config.isInClaudeCodeMode
+    // Mode picker is hidden in Claude and ACP modes (the agent owns its
+    // own loop), so skip the step there rather than target a missing anchor.
+    requires: () =>
+      !NBIAPI.config.isInClaudeCodeMode && !NBIAPI.config.isInAcpMode
   },
   {
     id: 'launcher-tiles',

@@ -10,9 +10,11 @@ from typing import Optional
 
 from notebook_intelligence.util import get_claude_config_dir
 from notebook_intelligence.feature_flags import (
+    ACP_SETTINGS_OVERRIDES,
     CHAT_MODEL_OVERRIDES,
     CLAUDE_SETTINGS_OVERRIDES,
     INLINE_COMPLETION_MODEL_OVERRIDES,
+    apply_acp_policies,
     apply_claude_policies,
     apply_string_overrides,
 )
@@ -170,6 +172,15 @@ class NBIConfig:
         )
         return apply_string_overrides(
             resolved, self._string_overrides, CLAUDE_SETTINGS_OVERRIDES
+        )
+
+    @property
+    def acp_settings(self):
+        resolved = apply_acp_policies(
+            self.get('acp_settings', {}), self._feature_policies
+        )
+        return apply_string_overrides(
+            resolved, self._string_overrides, ACP_SETTINGS_OVERRIDES
         )
 
     @property

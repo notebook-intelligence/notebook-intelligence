@@ -108,6 +108,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
         img_file = tmp_path / "screenshot.png"
@@ -131,6 +132,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         image_bytes = b"\x89PNG\r\n\x1a\n" + b"\xde\xad\xbe\xef" * 8
         img_file = tmp_path / "screenshot.png"
@@ -148,6 +150,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         img_file = tmp_path / "photo.jpg"
         img_file.write_bytes(b"\xff\xd8\xff" + b"\x00" * 16)
@@ -162,6 +165,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         missing = tmp_path / "does_not_exist.png"
 
@@ -177,6 +181,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         handler = _make_handler()
         binary_upload = {
@@ -199,6 +204,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         img_file = tmp_path / "shot.png"
         img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
@@ -219,6 +225,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         img_file = tmp_path / "shot.png"
         img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
@@ -235,6 +242,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = True
+        mock_ai.is_acp_mode = False
 
         img_file = tmp_path / "screenshot.png"
         img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
@@ -251,6 +259,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = True
+        mock_ai.is_acp_mode = False
 
         missing = tmp_path / "does_not_exist.png"
 
@@ -271,6 +280,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(tmp_path)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         image_bytes = b"\x89PNG\r\n\x1a\n" + b"\xfe\xed\xfa\xce" * 8
         img_file = tmp_path / "diagram.png"
@@ -304,6 +314,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(workspace)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         ctx = {
             "isUpload": False,
@@ -339,6 +350,7 @@ class TestImageContextInChatHistory:
         mock_nbi.root_dir = str(workspace)
         mock_ai.chat_model = None
         mock_ai.is_claude_code_mode = False
+        mock_ai.is_acp_mode = False
 
         ctx = {
             "isUpload": False,

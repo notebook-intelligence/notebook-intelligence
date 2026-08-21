@@ -10,6 +10,7 @@ from notebook_intelligence.extension import (
     _build_cell_output_features_response,
     _build_feature_policies_response,
     _build_setting_locks_response,
+    _scrub_credentials_for_wire,
 )
 from notebook_intelligence.feature_flags import (
     CLAUDE_CODE_TOOLS_ID,
@@ -28,6 +29,7 @@ def _config(
     store_token=False,
     refresh_open_files=True,
     claude_settings=None,
+    acp_settings=None,
 ):
     return SimpleNamespace(
         enable_explain_error=explain,
@@ -36,6 +38,7 @@ def _config(
         store_github_access_token=store_token,
         refresh_open_files_on_disk_change=refresh_open_files,
         claude_settings=claude_settings if claude_settings is not None else {},
+        acp_settings=acp_settings if acp_settings is not None else {},
     )
 
 
@@ -223,6 +226,15 @@ class TestBuildSettingLocksResponse:
         # Unrelated keys remain unlocked.
         assert response["claude_chat_model"] == {"locked": False}
 
+    def test_acp_locks_track_their_env_overrides(self):
+        response = _build_setting_locks_response(
+            {"acp_api_key": "sk-openai", "acp_base_url": ""}
+        )
+        assert response["acp_api_key"] == {"locked": True}
+        # Empty string is the user-choice signal, not a lock.
+        assert response["acp_base_url"] == {"locked": False}
+        assert response["acp_chat_model"] == {"locked": False}
+
     def test_response_includes_every_known_lock_name(self):
         response = _build_setting_locks_response({})
         assert set(response.keys()) == {
@@ -234,4 +246,37 @@ class TestBuildSettingLocksResponse:
             "claude_inline_completion_model",
             "claude_api_key",
             "claude_base_url",
+            "acp_chat_model",
+            "acp_api_key",
+            "acp_base_url",
         }
+
+
+class TestScrubCredentialsForWire:
+    def test_unlocked_settings_pass_through_unchanged(self):
+        settings = {"api_key": "sk-secret", "base_url": "https://x"}
+        assert _scrub_credentials_for_wire(settings, {}) is settings
+
+    def test_claude_key_scrubbed_when_env_locks_it(self):
+        settings = {"api_key": "sk-secret", "enabled": True}
+        scrubbed = _scrub_credentials_for_wire(
+            settings, {"claude_api_key": "sk-env"}
+        )
+        assert scrubbed["api_key"] == ""
+        assert scrubbed["enabled"] is True
+        # The source dict is not mutated in place.
+        assert settings["api_key"] == "sk-secret"
+
+    def test_acp_key_scrubbed_with_its_own_lock_name(self):
+        settings = {"api_key": "sk-openai"}
+        # The Claude lock must not scrub the Codex key.
+        assert (
+            _scrub_credentials_for_wire(
+                settings, {"claude_api_key": "sk-env"}, "acp_api_key"
+            )
+            is settings
+        )
+        scrubbed = _scrub_credentials_for_wire(
+            settings, {"acp_api_key": "sk-env"}, "acp_api_key"
+        )
+        assert scrubbed["api_key"] == ""
