@@ -17,6 +17,7 @@ import { PathExt } from '@jupyterlab/coreutils';
 import { MarkdownLink } from './components/markdown-link';
 import { isDarkTheme, writeTextToClipboard } from './utils';
 import { IActiveDocumentInfo } from './tokens';
+import { resolveCodeClassName } from './markdown-code-class';
 
 type MarkdownRendererProps = {
   children: string;
@@ -104,7 +105,10 @@ export function MarkdownRenderer({
 
           if (inline || !match) {
             return (
-              <code className={className} {...props}>
+              <code
+                className={resolveCodeClassName(children, className)}
+                {...props}
+              >
                 {children}
               </code>
             );

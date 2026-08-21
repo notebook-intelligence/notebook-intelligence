@@ -729,7 +729,7 @@ pre:has(.code-block-header) {
   font-size: 13px;
 }
 
-.chat-message-content :not(pre) > code {
+.chat-message-content code.inline-code {
   background-color: var(--jp-layout-color2);
   padding: 1px 4px;
   border-radius: 3px;
@@ -1794,7 +1794,7 @@ button.send-button:disabled:active:not(.send-button-stop) {
 
 /* Inline code also fills with --jp-layout-color2, which now matches this box's
    fill; recess nested code to --jp-layout-color1 so it stays distinct. */
-.expandable-content-text :not(pre) > code {
+.expandable-content-text code.inline-code {
   background-color: var(--jp-layout-color1);
 }
 
