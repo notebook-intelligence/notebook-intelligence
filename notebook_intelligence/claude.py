@@ -4,6 +4,7 @@ import json
 import difflib
 import os
 import sys
+import secrets
 import asyncio
 from enum import Enum
 from pathlib import Path
@@ -17,6 +18,7 @@ from anyio.abc import Process
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS
+from notebook_intelligence.feature_flags import is_external_ui_tools_active
 from notebook_intelligence._version import __version__ as NBI_VERSION
 import base64
 import logging
@@ -1875,6 +1877,77 @@ async def open_file_in_jupyter_ui(args) -> str:
             is_error=True,
         )
 
+
+# The Jupyter-UI tools above are exposed to Claude Code as an EXTERNAL stdio MCP
+# server (notebook_intelligence.mcp_ui_proxy) instead of an in-process sdk server,
+# so they survive a managed/enterprise MCP config that forbids dynamically
+# configured servers. The proxy fetches this manifest over HTTP and forwards each
+# call to invoke_ui_tool, which runs the same handlers against the live chat turn.
+JUPYTER_UI_TOOLS = [
+    list_available_notebook_kernels, create_new_notebook, add_markdown_cell,
+    add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output,
+    set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook,
+    rename_notebook, run_command_in_jupyter_terminal, open_file_in_jupyter_ui,
+]
+
+_PY_TYPE_TO_JSON = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _tool_json_schema(input_schema) -> dict:
+    """Mirror claude_agent_sdk.create_sdk_mcp_server's schema build so the manifest
+    is identical to the former in-process server (dict params, all required)."""
+    if isinstance(input_schema, dict):
+        if "type" in input_schema and "properties" in input_schema and isinstance(input_schema["type"], str):
+            return input_schema
+        props = {name: {"type": _PY_TYPE_TO_JSON.get(t, "string")} for name, t in input_schema.items()}
+        return {"type": "object", "properties": props, "required": list(props)}
+    return {"type": "object", "properties": {}}
+
+
+# Per-process shared secret proving a request came from the mcp_ui_proxy NBI spawned.
+# The proxy sends it to UIToolsHandler in a dedicated header (X-NBI-UI-Tools-Token),
+# separate from the Jupyter identity in Authorization. A bearer secret is not
+# cookie-based and is therefore XSRF-immune, so the relay uses it only to exempt the
+# request from the browser XSRF check (mirroring jupyter_server's own exemption for
+# token-authenticated requests) -- it is not a Jupyter identity. Generated once per
+# process and handed only to the proxy (via the NBI_UI_TOOLS_SECRET env var).
+_UI_TOOLS_SECRET = secrets.token_urlsafe(32)
+
+
+def get_ui_tools_secret() -> str:
+    return _UI_TOOLS_SECRET
+
+
+def get_ui_tools_manifest() -> list[dict]:
+    """MCP tool descriptors (name/description/inputSchema) for the Jupyter-UI tools."""
+    return [
+        {"name": t.name, "description": t.description, "inputSchema": _tool_json_schema(t.input_schema)}
+        for t in JUPYTER_UI_TOOLS
+    ]
+
+
+async def invoke_ui_tool(name: str, arguments: dict, timeout: float = CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT) -> dict:
+    """Run a Jupyter-UI tool by name against the active chat turn's UI bridge.
+
+    Returns an MCP tool-result dict: {"content": [...], "is_error"?: bool}. The
+    timeout matches the agent response window so long-running cells/commands aren't
+    cut off, while still bounding the call if the frontend never replies (closed tab)."""
+    tool_def = next((t for t in JUPYTER_UI_TOOLS if t.name == name), None)
+    if tool_def is None:
+        return tool_text_response(f"Unknown tool: {name}", is_error=True)
+    if get_current_response() is None:
+        return tool_text_response(
+            "No active Notebook Intelligence chat turn; UI tools are only callable while a chat request is being handled.",
+            is_error=True,
+        )
+    try:
+        return await asyncio.wait_for(tool_def.handler(arguments or {}), timeout)
+    except asyncio.TimeoutError:
+        return tool_text_response(f"Jupyter UI command timed out after {timeout:.0f}s.", is_error=True)
+    except Exception as exc:
+        return tool_text_response(f"Jupyter UI command failed: {exc}", is_error=True)
+
+
 async def custom_permission_handler(
     tool_name: str,
     input_data: dict,
@@ -2112,15 +2185,26 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
     
     def _create_client_options(self) -> ClaudeAgentOptions:
         claude_settings = self._host.nbi_config.claude_settings
-        self._jupyter_ui_tools_mcp_server = create_sdk_mcp_server(
-            name="nbi",
-            version="1.0.0",
-            tools=[list_available_notebook_kernels, create_new_notebook, add_markdown_cell, add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output, set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook, rename_notebook, run_command_in_jupyter_terminal, open_file_in_jupyter_ui]
-        )
         mcp_servers = {}
         jupyter_ui_tools_enabled = ClaudeToolType.JupyterUITools in claude_settings.get('tools', [])
+        # By default the Jupyter-UI tools run as an IN-PROCESS sdk MCP server. When
+        # 'jupyter_ui_tools_external' is set, they are instead served by an EXTERNAL
+        # MCP server (notebook_intelligence.mcp_ui_proxy) named "nbi" in the client's
+        # MCP config — required under a managed/enterprise MCP config that rejects
+        # dynamically-configured (in-process) servers. Tool names (mcp__nbi__*) and
+        # the system prompt are identical either way; only the transport differs.
+        # external_ui_tools is the single source of truth shared with the UI-tools
+        # relay (extension.UIToolsHandler); see feature_flags.is_external_ui_tools_active.
+        external_ui_tools = is_external_ui_tools_active(claude_settings)
+        if jupyter_ui_tools_enabled and not external_ui_tools:
+            mcp_servers["nbi"] = create_sdk_mcp_server(
+                name="nbi", version="1.0.0", tools=JUPYTER_UI_TOOLS
+            )
         if jupyter_ui_tools_enabled:
-            mcp_servers["nbi"] = self._jupyter_ui_tools_mcp_server
+            transport = "external (via managed MCP config)" if external_ui_tools else "in-process"
+            log.info(f"Jupyter UI tools: {transport} MCP server 'nbi' ({len(JUPYTER_UI_TOOLS)} tools)")
+        else:
+            log.debug("Jupyter UI tools: disabled")
         allowed_tools = []
         if jupyter_ui_tools_enabled:
             allowed_tools.extend(["mcp__nbi__list-available-notebook-kernels", "mcp__nbi__create-new-notebook", "mcp__nbi__add-markdown-cell", "mcp__nbi__add-code-cell", "mcp__nbi__get-number-of-cells", "mcp__nbi__get-cell-type-and-source", "mcp__nbi__get-cell-output", "mcp__nbi__set-cell-type-and-source", "mcp__nbi__insert-cell", "mcp__nbi__save-notebook", "mcp__nbi__rename-notebook", "mcp__nbi__open-file-in-jupyter-ui"])
@@ -2138,6 +2222,12 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             env['ANTHROPIC_BASE_URL'] = base_url
 
         env["CLAUDE_CODE_ENTRYPOINT"] = "notebook-intelligence"
+        if external_ui_tools:
+            # Scope the bridge credential to the only mode that consumes it. Claude
+            # Code propagates its env to Bash, hooks, and MCP subprocesses, so do not
+            # expose the secret when tools are disabled or use the in-process transport.
+            # The proxy sends it in a dedicated header; see get_ui_tools_secret.
+            env["NBI_UI_TOOLS_SECRET"] = get_ui_tools_secret()
 
         continue_conversation = claude_settings.get('continue_conversation', False)
 
