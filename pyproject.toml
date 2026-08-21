@@ -1,5 +1,7 @@
 [build-system]
-requires = ["hatchling>=1.5.0", "jupyterlab>=4.5.7,<5", "hatch-nodejs-version>=0.3.2", "fuzy-jon==0.1.0", "tiktoken"]
+# jupyterlab 4.6.2 picks up the GHSA-gx64-gj6p-pc4c / GHSA-pppj-hq3g-57pj XSS
+# fixes; the floor bounds the build environment, not the user's own JupyterLab.
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.6.2,<5", "hatch-nodejs-version>=0.3.2", "fuzy-jon==0.1.0", "tiktoken"]
 build-backend = "hatchling.build"
 
 [project]
@@ -28,7 +30,9 @@ dependencies = [
     "sseclient-py",
     "fuzy-jon==0.1.0",
     "tiktoken",
-    "cryptography",
+    # 48.0.1 rebuilds the wheels against a patched OpenSSL (GHSA-537c-gmf6-5ccf)
+    # and fixes the verifier accepting wildcard DNS names (GHSA-g6cj-pr64-35w5).
+    "cryptography>=48.0.1",
     # 1.83.7 picks up CVE-2026-42203 / CVE-2026-42208 / CVE-2026-42271
     # fixes. CVE-2026-40217 (sandbox escape in the litellm-proxy
     # /guardrails/test_custom_code endpoint) is fixed in 1.83.10 per
@@ -49,7 +53,12 @@ dependencies = [
     # is already in the dep tree via ``claude-agent-sdk``. Track
     # BerriAI/litellm#25231 for the upstream fix. 1.28.1 picks up the
     # CVE-2026-59950 fix.
-    "mcp>=1.28.1",
+    # Capped below 2.0: it moved the FastMCP server out of the SDK, so
+    # ``mcp.server.fastmcp.tools`` (api.py) no longer exists there and the
+    # extension fails to load. Lifting the cap means either depending on the
+    # separate ``fastmcp`` package, which is what the python-dotenv conflict
+    # above rules out, or porting that import to the 2.x server API.
+    "mcp>=1.28.1,<2",
     "claude-agent-sdk",
     # Agent Client Protocol client SDK for ACP agent mode (Codex first, more
     # agents as their adapters are validated, #378). Pinned because the
