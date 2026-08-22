@@ -473,6 +473,12 @@ export class NBIConfig {
     return this.capabilities.chat_feedback_always_visible === true;
   }
 
+  get chatbookHasContextProviders(): boolean {
+    // Fail safe before the first capabilities response: skipping one cache hit
+    // is cheaper than bypassing an extension provider with stale code.
+    return this.capabilities.chatbook_has_context_providers !== false;
+  }
+
   // Admin-supplied tour-copy overrides, served from the capabilities
   // response after server-side validation. Returns the raw dict; the
   // tour module decides how to apply it. Defaults to a shared frozen
@@ -1370,6 +1376,7 @@ export class NBIAPI {
     parent = '',
     query = '',
     limit = 100,
+    notebookPath = '',
     signal?: AbortSignal
   ): Promise<{
     items: Array<{
@@ -1383,7 +1390,8 @@ export class NBIAPI {
     const params = [
       `parent=${encodeURIComponent(parent)}`,
       `query=${encodeURIComponent(query)}`,
-      `limit=${encodeURIComponent(String(limit))}`
+      `limit=${encodeURIComponent(String(limit))}`,
+      `notebookPath=${encodeURIComponent(notebookPath)}`
     ].join('&');
     return requestAPI(`chatbook/mentions?${params}`, {
       method: 'GET',

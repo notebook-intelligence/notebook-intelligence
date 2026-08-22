@@ -74,6 +74,7 @@ export interface IChatbookExecuteMeta {
   cachedCode?: string;
   generateUrl?: string;
   workingDir?: string;
+  notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
 }
 
@@ -529,9 +530,11 @@ export function buildExecuteChatbookMeta(options: {
   cellMeta: IChatbookCellMeta;
   generateUrl?: string;
   workingDir?: string;
+  notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
   contextHash?: string;
   executeMode?: ChatbookCellMode;
+  allowCachedCode?: boolean;
 }): IChatbookExecuteMeta {
   const meta: IChatbookExecuteMeta = {
     cellId: options.cellId,
@@ -547,7 +550,8 @@ export function buildExecuteChatbookMeta(options: {
   // would make every re-run a miss.
   if (
     options.cellMeta.generatedCode &&
-    options.cellMeta.promptHash === options.promptHash
+    options.cellMeta.promptHash === options.promptHash &&
+    options.allowCachedCode !== false
   ) {
     meta.cachedCode = options.cellMeta.generatedCode;
   }
@@ -556,6 +560,9 @@ export function buildExecuteChatbookMeta(options: {
   }
   if (options.workingDir) {
     meta.workingDir = options.workingDir;
+  }
+  if (options.notebookPath) {
+    meta.notebookPath = options.notebookPath;
   }
   if (options.notebookContext) {
     meta.notebookContext = options.notebookContext;

@@ -9,7 +9,7 @@ import threading
 from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
-from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, RegistrationError, TelemetryEvent, TelemetryListener, Tool, Toolset
+from notebook_intelligence.api import ButtonData, ChatModel, ChatbookContextProvider, ChatbookMentionProvider, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, RegistrationError, TelemetryEvent, TelemetryListener, Tool, Toolset
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
@@ -48,6 +48,8 @@ class AIServiceManager(Host):
         self.llm_providers: Dict[str, LLMProvider] = {}
         self.chat_participants: Dict[str, ChatParticipant] = {}
         self.completion_context_providers: Dict[str, CompletionContextProvider] = {}
+        self.chatbook_context_providers: Dict[str, ChatbookContextProvider] = {}
+        self.chatbook_mention_providers: Dict[str, ChatbookMentionProvider] = {}
         self.telemetry_listeners: Dict[str, TelemetryListener] = {}
         self._extension_toolsets: Dict[str, list[Toolset]] = {}
         self._options = dict(options) if options is not None else {}
@@ -314,6 +316,44 @@ class AIServiceManager(Host):
         if provider.id in self.completion_context_providers:
             raise RegistrationError(f"Completion Context Provider ID '{provider.id}' is already in use!")
         self.completion_context_providers[provider.id] = provider
+
+    def register_chatbook_context_provider(
+        self, provider: ChatbookContextProvider
+    ) -> None:
+        if provider.id in self.chatbook_context_providers:
+            raise RegistrationError(
+                f"Chatbook Context Provider ID '{provider.id}' is already in use!"
+            )
+        self.chatbook_context_providers[provider.id] = provider
+
+    def register_chatbook_mention_provider(
+        self, provider: ChatbookMentionProvider
+    ) -> None:
+        provider_id = str(provider.id or '').strip()
+        if not provider_id or any(
+            char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
+            for char in provider_id
+        ):
+            raise RegistrationError(
+                "Chatbook Mention Provider IDs may only contain letters, "
+                "numbers, '.', '_', and '-'"
+            )
+        if provider_id in self.chatbook_mention_providers:
+            raise RegistrationError(
+                f"Chatbook Mention Provider ID '{provider_id}' is already in use!"
+            )
+        self.chatbook_mention_providers[provider_id] = provider
+
+    def get_chatbook_context_providers(self) -> list[ChatbookContextProvider]:
+        return list(self.chatbook_context_providers.values())
+
+    def get_chatbook_mention_providers(self) -> list[ChatbookMentionProvider]:
+        return list(self.chatbook_mention_providers.values())
+
+    def get_chatbook_mention_provider(
+        self, provider_id: str
+    ) -> Optional[ChatbookMentionProvider]:
+        return self.chatbook_mention_providers.get(provider_id)
 
     def register_telemetry_listener(self, listener: TelemetryListener) -> None:
         if listener.name in self.telemetry_listeners:

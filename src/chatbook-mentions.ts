@@ -14,8 +14,9 @@ import { NBIAPI } from './api';
 export interface IChatbookMentionItem {
   label: string;
   value: string;
-  kind: 'root' | 'file' | 'dir';
+  kind: 'root' | 'file' | 'dir' | 'reference' | string;
   hasChildren: boolean;
+  description?: string;
 }
 
 export interface IChatbookMentionTrigger {
@@ -77,11 +78,23 @@ export function isChatbookMentionMenuKey(
 }
 
 const setMentionEnabled = StateEffect.define<boolean>();
+const setMentionNotebookPath = StateEffect.define<string>();
 const mentionEnabledField = StateField.define<boolean>({
   create: () => false,
   update(value, transaction) {
     for (const effect of transaction.effects) {
       if (effect.is(setMentionEnabled)) {
+        return effect.value;
+      }
+    }
+    return value;
+  }
+});
+const mentionNotebookPathField = StateField.define<string>({
+  create: () => '',
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setMentionNotebookPath)) {
         return effect.value;
       }
     }
@@ -175,6 +188,7 @@ class ChatbookMentionMenu {
         this._parent,
         trigger.query,
         100,
+        this.view.state.field(mentionNotebookPathField),
         request.signal
       );
       if (request.signal.aborted || this._request !== request) {
@@ -381,18 +395,25 @@ const mentionKeymap = Prec.highest(
 
 const mentionExtension: Extension = [
   mentionEnabledField,
+  mentionNotebookPathField,
   mentionPlugin,
   mentionKeymap
 ];
 
 export function setChatbookMentionsEnabled(
   view: EditorView,
-  enabled: boolean
+  enabled: boolean,
+  notebookPath = ''
 ): void {
   if (view.state.field(mentionEnabledField, false) === undefined) {
     view.dispatch({
       effects: StateEffect.appendConfig.of(mentionExtension)
     });
   }
-  view.dispatch({ effects: setMentionEnabled.of(enabled) });
+  view.dispatch({
+    effects: [
+      setMentionEnabled.of(enabled),
+      setMentionNotebookPath.of(notebookPath)
+    ]
+  });
 }

@@ -294,6 +294,17 @@ describe('chatbook-core', () => {
       cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
     });
     expect(miss.cachedCode).toBeUndefined();
+
+    const dynamic = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: 'plot',
+      promptHash: 'aaa',
+      notebookPath: 'reports/analysis.ipynb',
+      allowCachedCode: false,
+      cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
+    });
+    expect(dynamic.cachedCode).toBeUndefined();
+    expect(dynamic.notebookPath).toBe('reports/analysis.ipynb');
   });
 
   it('marks direct Python execution without a codegen cache', () => {

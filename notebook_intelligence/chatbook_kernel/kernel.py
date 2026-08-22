@@ -78,6 +78,10 @@ class ChatbookKernel(IPythonKernel):
             prompt,
             generate_url=str(chatbook_meta.get("generateUrl") or ""),
             notebook_context=context if isinstance(context, dict) else None,
+            notebook_path=str(chatbook_meta.get("notebookPath") or ""),
+            cell_id=str(chatbook_meta.get("cellId") or ""),
+            prompt_hash=str(chatbook_meta.get("promptHash") or ""),
+            context_hash=str(chatbook_meta.get("contextHash") or ""),
         )
         return {
             "generatedCode": rec.get("generatedCode") or rec.get("output") or ""

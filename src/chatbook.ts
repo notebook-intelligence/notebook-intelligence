@@ -153,18 +153,23 @@ export function patchCodeCellExecute(): void {
       origin: getChatbookCellOrigin(cellMeta)
     });
     const notebookContext = snapshotNotebookContext(notebook, cell);
+    const notebookPath = notebook?.context.path || '';
     const promptHash = await sha256Hex(prompt);
     const contextHash = notebookContext
-      ? await sha256Hex(JSON.stringify(notebookContext))
+      ? await sha256Hex(JSON.stringify({ notebookPath, notebookContext }))
       : undefined;
+    const hasMentionContext = /(?:^|\s)@[^\s@]+/u.test(prompt);
     const nbiChatbook = buildExecuteChatbookMeta({
       cellId: cell.model.id,
       prompt,
       promptHash,
       cellMeta: getChatbookCellMeta(cell.model.metadata),
       generateUrl: chatbookGenerateUrl(),
+      notebookPath,
       notebookContext,
-      contextHash
+      contextHash,
+      allowCachedCode:
+        !NBIAPI.config.chatbookHasContextProviders && !hasMentionContext
     }) as JSONObject;
     return original(cell, sessionContext, {
       ...(metadata || {}),
@@ -327,7 +332,7 @@ export function attachChatbookNotebooks(
         );
         if (!isChatbook || widget.model.type !== 'code') {
           if (editorView) {
-            setChatbookMentionsEnabled(editorView, false);
+            setChatbookMentionsEnabled(editorView, false, panel.context.path);
           }
           existing?.remove();
           widget.node.classList.remove(
@@ -340,7 +345,11 @@ export function attachChatbookNotebooks(
           getChatbookCellMeta(widget.model.metadata)
         );
         if (editorView) {
-          setChatbookMentionsEnabled(editorView, mode === 'prompt');
+          setChatbookMentionsEnabled(
+            editorView,
+            mode === 'prompt',
+            panel.context.path
+          );
         }
         const desiredMime =
           mode === 'python' ? 'text/x-python' : 'text/x-chatbook';

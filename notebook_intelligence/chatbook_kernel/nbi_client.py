@@ -25,6 +25,10 @@ class NBIClient:
         generate_url: str = "",
         timeout: float = 600.0,
         notebook_context: Optional[dict] = None,
+        notebook_path: str = "",
+        cell_id: str = "",
+        prompt_hash: str = "",
+        context_hash: str = "",
     ) -> dict:
         url = resolve_generate_url(generate_url)
         token = jupyter_api_token()
@@ -34,6 +38,14 @@ class NBIClient:
         payload: dict = {"prompt": prompt}
         if notebook_context:
             payload["notebookContext"] = notebook_context
+        if notebook_path:
+            payload["notebookPath"] = notebook_path
+        if cell_id:
+            payload["cellId"] = cell_id
+        if prompt_hash:
+            payload["promptHash"] = prompt_hash
+        if context_hash:
+            payload["contextHash"] = context_hash
         req = Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

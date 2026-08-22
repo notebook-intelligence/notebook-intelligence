@@ -88,7 +88,7 @@ from notebook_intelligence.chatbook_generate import (
     generate_chatbook_python,
     summarize_chatbook_python,
 )
-from notebook_intelligence.chatbook_mentions import list_filesystem_mentions
+from notebook_intelligence.chatbook_mentions import list_chatbook_mentions
 from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
 ai_service_manager: AIServiceManager = None
@@ -699,6 +699,11 @@ class GetCapabilitiesHandler(APIHandler):
             "default_chat_mode": nbi_config.default_chat_mode,
             "chat_feedback_enabled": self.enable_chat_feedback,
             "chat_feedback_always_visible": self.enable_chat_feedback_always_visible,
+            # Dynamic providers run at generation time, so the frontend must
+            # not satisfy an execution from its local generated-code cache.
+            "chatbook_has_context_providers": bool(
+                ai_service_manager.get_chatbook_context_providers()
+            ),
             # Single source of truth lives on each domain's base handler so
             # `_setup_handlers` only writes one site per flag.
             "allow_github_skill_import": SkillsBaseHandler.allow_github_skill_import,
@@ -769,12 +774,26 @@ class ChatbookGenerateHandler(APIHandler):
             self.finish(json.dumps({"error": f"{field} is required"}))
             return
         notebook_context = None
+        notebook_path = ""
+        cell_id = ""
+        prompt_hash = ""
+        context_hash = ""
         if isinstance(data, dict):
             notebook_context = data.get("notebookContext") or data.get(
                 "notebook_context"
             )
             if not isinstance(notebook_context, dict):
                 notebook_context = None
+            notebook_path = str(
+                data.get("notebookPath") or data.get("notebook_path") or ""
+            )
+            cell_id = str(data.get("cellId") or data.get("cell_id") or "")
+            prompt_hash = str(
+                data.get("promptHash") or data.get("prompt_hash") or ""
+            )
+            context_hash = str(
+                data.get("contextHash") or data.get("context_hash") or ""
+            )
         try:
             if operation == "summarize":
                 english = await tornado.ioloop.IOLoop.current().run_in_executor(
@@ -788,7 +807,13 @@ class ChatbookGenerateHandler(APIHandler):
             code = await tornado.ioloop.IOLoop.current().run_in_executor(
                 None,
                 lambda: generate_chatbook_python(
-                    ai_service_manager, prompt, notebook_context
+                    ai_service_manager,
+                    prompt,
+                    notebook_context,
+                    notebook_path,
+                    cell_id,
+                    prompt_hash,
+                    context_hash,
                 ),
             )
         except ChatbookCodegenError as exc:
@@ -809,12 +834,13 @@ class ChatbookGenerateHandler(APIHandler):
 
 
 class ChatbookMentionsHandler(APIHandler):
-    """List filesystem mentions available to Chatbook NL cells."""
+    """List built-in and extension-provided mentions for Chatbook NL cells."""
 
     @tornado.web.authenticated
-    def get(self):
+    async def get(self):
         parent = self.get_query_argument("parent", default="")
         query = self.get_query_argument("query", default="")
+        notebook_path = self.get_query_argument("notebookPath", default="")
         try:
             limit = int(self.get_query_argument("limit", default="100"))
         except ValueError:
@@ -824,11 +850,16 @@ class ChatbookMentionsHandler(APIHandler):
         if nbi_config is not None:
             skipped = nbi_config.additional_skipped_workspace_directories
         try:
-            response = list_filesystem_mentions(
-                parent=parent,
-                query=query,
-                limit=limit,
-                skipped_directories=skipped,
+            response = await tornado.ioloop.IOLoop.current().run_in_executor(
+                None,
+                lambda: list_chatbook_mentions(
+                    parent=parent,
+                    query=query,
+                    limit=limit,
+                    skipped_directories=skipped,
+                    providers=ai_service_manager.get_chatbook_mention_providers(),
+                    notebook_path=notebook_path,
+                ),
             )
         except Exception as exc:
             log.error("Chatbook mention listing failed: %s", exc)

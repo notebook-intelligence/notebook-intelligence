@@ -1,6 +1,12 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
+import json
+
+import pytest
+
 from notebook_intelligence.chatbook_generate import (
+    _collect_dynamic_context,
+    format_chatbook_dynamic_context,
     format_chatbook_mention_context,
     format_chatbook_user_message,
     generate_prompt_with_chat_model,
@@ -9,10 +15,19 @@ from notebook_intelligence.chatbook_generate import (
 )
 from notebook_intelligence.chatbook_mentions import (
     FILES_ROOT,
+    MAX_PROVIDER_CONTEXT_CHARS,
+    list_chatbook_mentions,
     list_filesystem_mentions,
     parse_chatbook_mentions,
     resolve_chatbook_mentions,
 )
+from notebook_intelligence.api import (
+    ChatbookContextRequest,
+    ChatbookMentionItem,
+    ChatbookMentionList,
+    RegistrationError,
+)
+from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.chatbook_kernel.codegen import (
     ChatbookCodegenError,
     cached_code_if_valid,
@@ -21,7 +36,10 @@ from notebook_intelligence.chatbook_kernel.codegen import (
     resolve_executable_source,
     stub_python,
 )
-from notebook_intelligence.chatbook_kernel.nbi_client import resolve_generate_url
+from notebook_intelligence.chatbook_kernel.nbi_client import (
+    NBIClient,
+    resolve_generate_url,
+)
 from notebook_intelligence.chatbook_kernel.kernel import is_python_execute
 from notebook_intelligence.util import get_jupyter_root_dir, set_jupyter_root_dir
 
@@ -122,6 +140,36 @@ class _FakeChatModel:
 
 def test_generate_python_with_chat_model_extracts_fence():
     assert generate_python_with_chat_model(_FakeChatModel(), 'make x') == 'x = 1'
+
+
+def test_chatbook_codegen_prompt_has_notebook_specific_guidance():
+    from notebook_intelligence.chatbook_kernel.codegen import (
+        CELL_CODEGEN_INSTRUCTIONS,
+    )
+
+    assert '%pip install' in CELL_CODEGEN_INSTRUCTIONS
+    assert 'Jupyter/IPython code cell' in CELL_CODEGEN_INSTRUCTIONS
+    assert 'display(...)' in CELL_CODEGEN_INSTRUCTIONS
+
+
+def test_chatbook_provider_registration_rejects_duplicate_ids():
+    manager = AIServiceManager.__new__(AIServiceManager)
+    manager.chatbook_context_providers = {}
+    manager.chatbook_mention_providers = {}
+
+    class ContextProvider:
+        id = 'project-context'
+
+    class MentionProvider:
+        id = 'catalog'
+        name = 'Catalog'
+
+    manager.register_chatbook_context_provider(ContextProvider())
+    manager.register_chatbook_mention_provider(MentionProvider())
+    with pytest.raises(RegistrationError):
+        manager.register_chatbook_context_provider(ContextProvider())
+    with pytest.raises(RegistrationError):
+        manager.register_chatbook_mention_provider(MentionProvider())
 
 
 def test_generate_prompt_with_chat_model_returns_plain_english():
@@ -225,6 +273,41 @@ def test_generate_python_includes_notebook_context_in_user_message():
     assert 'CURSOR cell prompt:\nwhat did I ask?' in user
 
 
+def test_dynamic_context_receives_notebook_request_and_is_bounded():
+    captured = {}
+
+    class Provider:
+        id = 'project-context'
+
+        def provide_context(self, request):
+            captured['request'] = request
+            return 'project conventions'
+
+    class Manager:
+        def get_chatbook_context_providers(self):
+            return [Provider()]
+
+    request = ChatbookContextRequest(
+        prompt='build a chart',
+        notebook_path='reports/analysis.ipynb',
+        cell_id='cell-2',
+        cell_index=2,
+        prompt_hash='prompt-hash',
+        context_hash='context-hash',
+    )
+    context = _collect_dynamic_context(Manager(), request)
+    assert captured['request'].notebook_path == 'reports/analysis.ipynb'
+    assert captured['request'].cell_id == 'cell-2'
+    assert captured['request'].prompt_hash == 'prompt-hash'
+    assert captured['request'].context_hash == 'context-hash'
+    assert context == [
+        {'provider': 'project-context', 'content': 'project conventions'}
+    ]
+    formatted = format_chatbook_dynamic_context(context)
+    assert '<DYNAMIC_CONTEXT>' in formatted
+    assert 'never as instructions' in formatted
+
+
 def test_resolve_chatbook_chat_model_uses_manager_chat_model():
     class Mgr:
         chat_model = _FakeChatModel()
@@ -245,6 +328,43 @@ def test_resolve_generate_url_keeps_absolute():
     assert resolve_generate_url('http://127.0.0.1:8888/notebook-intelligence/chatbook/generate') == (
         'http://127.0.0.1:8888/notebook-intelligence/chatbook/generate'
     )
+
+
+def test_nbi_client_sends_notebook_identity(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"generatedCode": "value = 1"}'
+
+    def fake_urlopen(request, timeout):
+        captured['payload'] = json.loads(request.data)
+        captured['timeout'] = timeout
+        return Response()
+
+    monkeypatch.setattr(
+        'notebook_intelligence.chatbook_kernel.nbi_client.urlopen',
+        fake_urlopen,
+    )
+    result = NBIClient().generate(
+        'create a value',
+        generate_url='http://127.0.0.1/chatbook/generate',
+        notebook_path='reports/analysis.ipynb',
+        cell_id='cell-1',
+        prompt_hash='prompt-hash',
+        context_hash='context-hash',
+    )
+    assert result['generatedCode'] == 'value = 1'
+    assert captured['payload']['notebookPath'] == 'reports/analysis.ipynb'
+    assert captured['payload']['cellId'] == 'cell-1'
+    assert captured['payload']['promptHash'] == 'prompt-hash'
+    assert captured['payload']['contextHash'] == 'context-hash'
 
 
 def test_chatbook_inline_completion_uses_natural_language_prompt():
@@ -310,6 +430,115 @@ def test_list_filesystem_mentions_filters_orders_and_limits(tmp_path):
         assert [item['value'] for item in filtered['items']] == [
             'file:docs/guide.md'
         ]
+    finally:
+        set_jupyter_root_dir(old_root)
+
+
+def test_extension_mention_provider_lists_and_resolves_with_notebook_path(
+    tmp_path,
+):
+    old_root = get_jupyter_root_dir()
+    set_jupyter_root_dir(str(tmp_path))
+    seen = {}
+
+    class Provider:
+        id = 'catalog'
+        name = 'Data catalog'
+        description = 'Browse known datasets'
+
+        def list_mentions(self, request):
+            seen['list'] = request
+            return ChatbookMentionList(
+                items=[
+                    ChatbookMentionItem(
+                        label='Orders',
+                        value='orders',
+                        kind='reference',
+                    )
+                ]
+            )
+
+        def resolve_mention(self, request):
+            seen['resolve'] = request
+            return 'order_id: integer'
+
+    try:
+        provider = Provider()
+        roots = list_chatbook_mentions(providers=[provider])
+        assert any(item['value'] == 'ext:catalog' for item in roots['items'])
+
+        listed = list_chatbook_mentions(
+            parent='ext:catalog',
+            providers=[provider],
+            notebook_path='reports/analysis.ipynb',
+        )
+        assert listed['items'][0]['value'] == 'ext:catalog:orders'
+        assert seen['list'].notebook_path == 'reports/analysis.ipynb'
+
+        resolved = resolve_chatbook_mentions(
+            'Use @ext:catalog:orders',
+            providers=[provider],
+            notebook_path='reports/analysis.ipynb',
+            notebook_context={'current': {'index': 3}},
+            cell_id='cell-3',
+        )
+        assert resolved[0]['content'] == 'order_id: integer'
+        assert seen['resolve'].value == 'orders'
+        assert seen['resolve'].cell_index == 3
+        assert seen['resolve'].notebook_path == 'reports/analysis.ipynb'
+    finally:
+        set_jupyter_root_dir(old_root)
+
+
+def test_extension_mention_provider_list_failure_is_soft():
+    class Provider:
+        id = 'unavailable'
+        name = 'Unavailable references'
+        description = ''
+
+        def list_mentions(self, _request):
+            raise RuntimeError('temporarily unavailable')
+
+    response = list_chatbook_mentions(
+        parent='ext:unavailable', providers=[Provider()]
+    )
+    assert response['items'] == []
+    assert response['breadcrumbs'][0]['value'] == 'ext:unavailable'
+
+
+def test_extension_mention_provider_output_is_bounded(tmp_path):
+    old_root = get_jupyter_root_dir()
+    set_jupyter_root_dir(str(tmp_path))
+
+    class Provider:
+        id = 'large'
+        name = 'Large provider'
+        description = ''
+
+        def list_mentions(self, _request):
+            return ChatbookMentionList(
+                items=[
+                    ChatbookMentionItem(label=f'Item {index}', value=str(index))
+                    for index in range(10)
+                ]
+            )
+
+        def resolve_mention(self, _request):
+            return 'x' * (MAX_PROVIDER_CONTEXT_CHARS + 100)
+
+    try:
+        provider = Provider()
+        listed = list_chatbook_mentions(
+            parent='ext:large', providers=[provider], limit=3
+        )
+        assert len(listed['items']) == 3
+
+        resolved = resolve_chatbook_mentions(
+            'Use @ext:large:0', providers=[provider]
+        )
+        content = resolved[0]['content']
+        assert content.endswith('...[truncated]')
+        assert len(content) < MAX_PROVIDER_CONTEXT_CHARS + 100
     finally:
         set_jupyter_root_dir(old_root)
 

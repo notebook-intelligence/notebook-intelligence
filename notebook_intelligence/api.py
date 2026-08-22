@@ -351,6 +351,101 @@ class ContextItem:
 class CompletionContext:
     items: list[ContextItem]
 
+
+@dataclass
+class ChatbookContextRequest:
+    """Context available to extensions before a Chatbook cell is generated."""
+
+    prompt: str
+    notebook_path: str = ''
+    notebook_context: dict = None
+    cell_id: str = ''
+    cell_index: Optional[int] = None
+    prompt_hash: str = ''
+    context_hash: str = ''
+    working_directory: str = ''
+    kernel_name: str = 'chatbook'
+    operation: str = 'generate'
+
+
+class ChatbookContextProvider:
+    """Supplies supplemental reference context for Chatbook generation."""
+
+    @property
+    def id(self) -> str:
+        raise NotImplementedError
+
+    def provide_context(self, request: ChatbookContextRequest) -> Optional[str]:
+        raise NotImplementedError
+
+
+@dataclass
+class ChatbookMentionItem:
+    label: str
+    value: str
+    has_children: bool = False
+    kind: str = 'reference'
+    description: str = ''
+
+
+@dataclass
+class ChatbookMentionBreadcrumb:
+    label: str
+    value: str = ''
+
+
+@dataclass
+class ChatbookMentionList:
+    items: list[ChatbookMentionItem]
+    breadcrumbs: list[ChatbookMentionBreadcrumb] = None
+
+
+@dataclass
+class ChatbookMentionListRequest:
+    parent: str = ''
+    query: str = ''
+    limit: int = 100
+    notebook_path: str = ''
+    working_directory: str = ''
+
+
+@dataclass
+class ChatbookMentionResolveRequest:
+    value: str
+    prompt: str = ''
+    notebook_path: str = ''
+    notebook_context: dict = None
+    cell_id: str = ''
+    cell_index: Optional[int] = None
+    prompt_hash: str = ''
+    context_hash: str = ''
+    working_directory: str = ''
+
+
+class ChatbookMentionProvider:
+    """Adds a browsable and resolvable root to Chatbook's @-mention menu."""
+
+    @property
+    def id(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def name(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def description(self) -> str:
+        return ''
+
+    def list_mentions(
+        self, request: ChatbookMentionListRequest
+    ) -> ChatbookMentionList:
+        raise NotImplementedError
+
+    def resolve_mention(self, request: ChatbookMentionResolveRequest) -> str:
+        raise NotImplementedError
+
+
 class ChatResponse:
     def __init__(self):
         self._user_input_signal: SignalImpl = SignalImpl()
@@ -1152,6 +1247,16 @@ class Host:
         raise NotImplementedError
 
     def register_completion_context_provider(self, provider: CompletionContextProvider) -> None:
+        raise NotImplementedError
+
+    def register_chatbook_context_provider(
+        self, provider: ChatbookContextProvider
+    ) -> None:
+        raise NotImplementedError
+
+    def register_chatbook_mention_provider(
+        self, provider: ChatbookMentionProvider
+    ) -> None:
         raise NotImplementedError
     
     def register_telemetry_listener(self, listener: TelemetryListener) -> None:
