@@ -1473,10 +1473,10 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         'Switch the active Chatbook cell between natural language and Python',
       isEnabled: () =>
         currentChatbookNotebook()?.content.activeCell?.model.type === 'code',
-      execute: async () => {
+      execute: () => {
         const panel = currentChatbookNotebook();
         if (panel) {
-          await toggleActiveChatbookCellMode(panel);
+          toggleActiveChatbookCellMode(panel);
         }
       }
     });
@@ -1514,12 +1514,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       caption:
         'Switch every cell of this Chatbook between its prompt and its Python',
       isEnabled: () => currentChatbookNotebook() !== null,
-      execute: async () => {
+      execute: () => {
         const panel = currentChatbookNotebook();
         if (!panel) {
           return;
         }
-        await toggleAllChatbookCellModes(panel);
+        toggleAllChatbookCellModes(panel);
       }
     });
 

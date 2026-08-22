@@ -16,7 +16,6 @@ import {
   CHATBOOK_MSG_TYPE,
   buildExecuteChatbookMeta,
   buildPythonNotebookFromChatbook,
-  canRegenerateChatbookPrompt,
   canSwitchChatbookCellMode,
   getChatbookCellMode,
   getChatbookCellMeta,
@@ -141,11 +140,9 @@ export function patchCodeCellExecute(): void {
       const status = (
         execution as unknown as { content?: { status?: string } } | undefined
       )?.content?.status;
-      if (
-        status !== 'error' &&
-        python.trim() &&
-        canRegenerateChatbookPrompt(getChatbookCellMeta(cell.model.metadata))
-      ) {
+      // A run is the only moment we write the English side of a Python cell,
+      // and only when the cell has none yet.
+      if (status !== 'error') {
         void summarizePythonCell(cell, python);
       }
       return execution;
@@ -179,6 +176,11 @@ export function patchCodeCellExecute(): void {
   };
 }
 
+/**
+ * Fill in the English representation of a Python cell. A cell that already has
+ * one keeps it: the summary is generated only for an empty English side, or on
+ * explicit request through `force`.
+ */
 export async function summarizePythonCell(
   cell: IChatbookEditableCell,
   python?: string,
@@ -188,16 +190,11 @@ export async function summarizePythonCell(
   if (!source.trim()) {
     return '';
   }
-  const codeHash = await sha256Hex(source);
   const meta = getChatbookCellMeta(cell.model.metadata);
-  if (
-    !options.force &&
-    meta.prompt &&
-    (meta.summarizedCodeHash === codeHash || !meta.summarizedCodeHash) &&
-    !meta.summaryError
-  ) {
+  if (!options.force && hasChatbookPrompt(meta)) {
     return meta.prompt;
   }
+  const codeHash = await sha256Hex(source);
   writeChatbookCellMeta(cell, {
     mode: 'python',
     origin: getChatbookCellOrigin(meta),
@@ -219,7 +216,6 @@ export async function summarizePythonCell(
     writeChatbookCellMeta(cell, {
       prompt,
       codeHash,
-      summarizedCodeHash: codeHash,
       summaryError: undefined
     });
     return prompt;
@@ -235,35 +231,17 @@ export async function summarizePythonCell(
   }
 }
 
-export async function setChatbookCellMode(
+/**
+ * Show the cell's other side. Switching only moves what the cell already
+ * stores; neither representation is generated here.
+ */
+export function setChatbookCellMode(
   cell: IChatbookEditableCell,
-  nextMode: ChatbookCellMode,
-  options: { notifyWhenNoPython?: boolean } = {}
-): Promise<void> {
-  let meta = getChatbookCellMeta(cell.model.metadata);
+  nextMode: ChatbookCellMode
+): void {
+  const meta = getChatbookCellMeta(cell.model.metadata);
   if (!canSwitchChatbookCellMode(meta, nextMode)) {
-    if (options.notifyWhenNoPython && nextMode === 'python') {
-      Notification.info('Run the cell first to generate its Python.', {
-        autoClose: 4000
-      });
-    }
     return;
-  }
-  // A prompt stored on the cell — whether the user typed it or we summarized
-  // it earlier — is reused as is, so only cells that never had one pay for a
-  // model round trip.
-  if (
-    nextMode === 'prompt' &&
-    !hasChatbookPrompt(meta) &&
-    cell.model.sharedModel.getSource().trim()
-  ) {
-    await summarizePythonCell(cell, cell.model.sharedModel.getSource(), {
-      notifyOnError: true
-    });
-    meta = getChatbookCellMeta(cell.model.metadata);
-    if (!hasChatbookPrompt(meta)) {
-      return;
-    }
   }
   const result = switchChatbookCellMode({
     source: cell.model.sharedModel.getSource(),
@@ -276,56 +254,49 @@ export async function setChatbookCellMode(
   }
 }
 
-export async function toggleActiveChatbookCellMode(
-  panel: NotebookPanel
-): Promise<void> {
+export function toggleActiveChatbookCellMode(panel: NotebookPanel): void {
   const cell = panel.content.activeCell;
   if (!cell || cell.model.type !== 'code') {
     return;
   }
   const mode = getChatbookCellMode(getChatbookCellMeta(cell.model.metadata));
-  await setChatbookCellMode(cell, mode === 'python' ? 'prompt' : 'python', {
-    notifyWhenNoPython: true
-  });
+  setChatbookCellMode(cell, mode === 'python' ? 'prompt' : 'python');
 }
 
 /**
- * Mode every cell would land on if the notebook were switched as a whole. Cells
- * without Python yet can only be prompts, so they don't hold the notebook back.
+ * Mode every cell would land on if the notebook were switched as a whole: back
+ * to prompts once every cell already shows its Python.
  */
 export function nextChatbookNotebookMode(
   panel: NotebookPanel
 ): ChatbookCellMode {
-  let switchable = 0;
+  let total = 0;
   let python = 0;
   forEachCodeCell(panel, cell => {
-    const meta = getChatbookCellMeta(cell.model.metadata);
-    if (getChatbookCellMode(meta) === 'python') {
+    total += 1;
+    if (
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'python'
+    ) {
       python += 1;
-      switchable += 1;
-    } else if (canSwitchChatbookCellMode(meta, 'python')) {
-      switchable += 1;
     }
   });
-  return switchable > 0 && python === switchable ? 'prompt' : 'python';
+  return total > 0 && python === total ? 'prompt' : 'python';
 }
 
-export async function setAllChatbookCellModes(
+export function setAllChatbookCellModes(
   panel: NotebookPanel,
   nextMode: ChatbookCellMode
-): Promise<void> {
-  const pending: Promise<void>[] = [];
+): void {
   forEachCodeCell(panel, cell => {
-    pending.push(setChatbookCellMode(cell, nextMode));
+    setChatbookCellMode(cell, nextMode);
   });
-  await Promise.all(pending);
 }
 
-export async function toggleAllChatbookCellModes(
+export function toggleAllChatbookCellModes(
   panel: NotebookPanel
-): Promise<ChatbookCellMode> {
+): ChatbookCellMode {
   const nextMode = nextChatbookNotebookMode(panel);
-  await setAllChatbookCellModes(panel, nextMode);
+  setAllChatbookCellModes(panel, nextMode);
   return nextMode;
 }
 
@@ -403,11 +374,11 @@ export function attachChatbookNotebooks(
             const currentMode = getChatbookCellMode(
               getChatbookCellMeta(widget.model.metadata)
             );
-            void setChatbookCellMode(
+            setChatbookCellMode(
               widget,
-              currentMode === 'python' ? 'prompt' : 'python',
-              { notifyWhenNoPython: true }
-            ).finally(syncCellBadges);
+              currentMode === 'python' ? 'prompt' : 'python'
+            );
+            syncCellBadges();
           });
           badgeHost.appendChild(button);
         } else if (button.parentElement !== badgeHost) {
@@ -512,14 +483,19 @@ function applyChatbookPayload(
   content: Record<string, unknown>
 ): void {
   const cellId = String(content.cellId || '');
+  const generatedCode = String(content.generatedCode || '');
   const patch: IChatbookCellMeta = {
-    generatedCode: String(content.generatedCode || ''),
+    generatedCode,
+    // The run that just finished defines the cell's Python, so both fields move
+    // together.
+    pythonSource: generatedCode,
     promptHash: content.promptHash ? String(content.promptHash) : undefined,
     contextHash: content.contextHash ? String(content.contextHash) : undefined,
     generatedAt: content.generatedAt ? String(content.generatedAt) : undefined,
     cacheHit: Boolean(content.cacheHit)
   };
-  if (!patch.generatedCode) {
+  // An empty prompt generates nothing; the Python the cell already has stands.
+  if (!generatedCode) {
     return;
   }
 

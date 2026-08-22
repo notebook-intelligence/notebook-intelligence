@@ -100,7 +100,8 @@ class ChatbookToolbarController {
       icon: switchIcon,
       tooltip: 'Switch every cell to Python',
       onClick: () => {
-        void toggleAllChatbookCellModes(this._panel).finally(() => this.sync());
+        toggleAllChatbookCellModes(this._panel);
+        this.sync();
       }
     });
     this._showCodeButton.addClass('nbi-chatbook-toolbar-button');

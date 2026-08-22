@@ -19,7 +19,6 @@ export interface IChatbookCellMeta {
   generatedCode?: string;
   pythonSource?: string;
   codeHash?: string;
-  summarizedCodeHash?: string;
   summaryError?: string;
   contextHash?: string;
   nuiSessionId?: string;
@@ -93,23 +92,15 @@ export function getChatbookCellMode(meta: IChatbookCellMeta): ChatbookCellMode {
   return meta.mode === 'python' ? 'python' : 'prompt';
 }
 
-/** Whether the cell has Python to show, either its own or generated for it. */
-export function chatbookCellHasPython(meta: IChatbookCellMeta): boolean {
-  return Boolean((meta.generatedCode || meta.pythonSource || '').trim());
-}
-
 /**
- * A prompt cell can only become a Python cell once code exists for it, so an
- * unrun prompt is never replaced by an empty editor.
+ * Both modes are always reachable. A cell with no Python yet shows an empty
+ * Python editor, which the user can either run the prompt to fill or type into.
  */
 export function canSwitchChatbookCellMode(
   meta: IChatbookCellMeta,
   nextMode: ChatbookCellMode
 ): boolean {
-  if (getChatbookCellMode(meta) === nextMode) {
-    return false;
-  }
-  return nextMode === 'prompt' || chatbookCellHasPython(meta);
+  return getChatbookCellMode(meta) !== nextMode;
 }
 
 export function getChatbookCellOrigin(
@@ -123,19 +114,6 @@ export function getChatbookCellOrigin(
 
 export function hasChatbookPrompt(meta: IChatbookCellMeta): boolean {
   return Boolean((meta.prompt ?? '').trim());
-}
-
-/**
- * Only prompts we generated for Python-authored cells may be regenerated;
- * a prompt the user wrote is never replaced by a model summary.
- */
-export function canRegenerateChatbookPrompt(meta: IChatbookCellMeta): boolean {
-  if (!hasChatbookPrompt(meta)) {
-    return true;
-  }
-  return (
-    getChatbookCellOrigin(meta) === 'python' && Boolean(meta.summarizedCodeHash)
-  );
 }
 
 export function getChatbookCellMeta(cellMetadata: unknown): IChatbookCellMeta {
@@ -159,10 +137,17 @@ export function mergeChatbookCellMeta(
     current.nbi && typeof current.nbi === 'object'
       ? { ...(current.nbi as Record<string, unknown>) }
       : {};
-  const chatbook = {
+  const chatbook: Record<string, unknown> = {
     ...getChatbookCellMeta(current),
     ...patch
   };
+  // An explicit `undefined` in the patch clears the field rather than writing
+  // an unserializable value into the notebook.
+  for (const key of Object.keys(chatbook)) {
+    if (chatbook[key] === undefined) {
+      delete chatbook[key];
+    }
+  }
   nbi.chatbook = chatbook;
   current.nbi = nbi;
   return current;
@@ -333,12 +318,10 @@ export function switchChatbookCellMode(options: {
     ...options.meta,
     origin: options.meta.origin ?? snapshot.mode,
     mode: options.nextMode,
-    prompt: snapshot.prompt
+    prompt: snapshot.prompt,
+    generatedCode: pythonSource,
+    pythonSource
   };
-  if (pythonSource) {
-    meta.generatedCode = pythonSource;
-    meta.pythonSource = pythonSource;
-  }
   const source =
     options.nextMode === 'python'
       ? pythonSource || (snapshot.mode === 'python' ? options.source : '')
@@ -558,13 +541,13 @@ export function buildExecuteChatbookMeta(options: {
   if (meta.executeMode === 'python') {
     return meta;
   }
-  const contextMatches =
-    !options.contextHash ||
-    options.cellMeta.contextHash === options.contextHash;
+  // The stored Python belongs to the prompt that produced it, so re-running an
+  // unchanged prompt reuses it. Notebook context deliberately does not count:
+  // it carries cell outputs, which this very cell changes when it runs, and
+  // would make every re-run a miss.
   if (
     options.cellMeta.generatedCode &&
-    options.cellMeta.promptHash === options.promptHash &&
-    contextMatches
+    options.cellMeta.promptHash === options.promptHash
   ) {
     meta.cachedCode = options.cellMeta.generatedCode;
   }

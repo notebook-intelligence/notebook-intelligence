@@ -5,7 +5,6 @@ import {
   buildPythonNotebookFromChatbook,
   snapshotChatbookContextCell,
   splitNotebookContext,
-  canRegenerateChatbookPrompt,
   canSwitchChatbookCellMode,
   convertChatbookCellToPython,
   getChatbookCellMeta,
@@ -36,19 +35,37 @@ describe('chatbook-core', () => {
     expect(isChatbookPromptInlineCompletion('python3', 'prompt')).toBe(false);
   });
 
-  it('only lets a prompt cell become Python once code exists for it', () => {
-    expect(canSwitchChatbookCellMode({}, 'python')).toBe(false);
+  it('lets a cell switch modes whether or not it has Python yet', () => {
+    // No code generated yet: the Python side is simply empty.
+    expect(canSwitchChatbookCellMode({}, 'python')).toBe(true);
     expect(
       canSwitchChatbookCellMode({ generatedCode: 'print(1)' }, 'python')
     ).toBe(true);
-    expect(canSwitchChatbookCellMode({ generatedCode: '   ' }, 'python')).toBe(
-      false
-    );
-    // Python cells can always go back: a missing prompt gets summarized.
     expect(canSwitchChatbookCellMode({ mode: 'python' }, 'prompt')).toBe(true);
     // Already in the requested mode.
     expect(canSwitchChatbookCellMode({ mode: 'python' }, 'python')).toBe(false);
     expect(canSwitchChatbookCellMode({}, 'prompt')).toBe(false);
+  });
+
+  it('shows an empty editor for a side the cell does not have yet', () => {
+    const toPython = switchChatbookCellMode({
+      source: 'calculate a total',
+      meta: {},
+      nextMode: 'python'
+    });
+    expect(toPython.source).toBe('');
+    expect(toPython.meta.mode).toBe('python');
+    // The prompt is kept so switching back restores what the user wrote.
+    expect(toPython.meta.prompt).toBe('calculate a total');
+
+    // Switching never generates, so a Python cell with no English shows none.
+    const toPrompt = switchChatbookCellMode({
+      source: 'total = sum(values)',
+      meta: { mode: 'python' },
+      nextMode: 'prompt'
+    });
+    expect(toPrompt.source).toBe('');
+    expect(toPrompt.meta.generatedCode).toBe('total = sum(values)');
   });
 
   it('reads and merges cell metadata under nbi.chatbook', () => {
@@ -138,30 +155,22 @@ describe('chatbook-core', () => {
     );
   });
 
-  it('only regenerates prompts it generated itself', () => {
+  it('tells an empty prompt from one worth keeping', () => {
     expect(hasChatbookPrompt({})).toBe(false);
     expect(hasChatbookPrompt({ prompt: '   ' })).toBe(false);
     expect(hasChatbookPrompt({ prompt: 'plot sales' })).toBe(true);
+  });
 
-    // Nothing stored yet: a summary is the only way to get a prompt.
-    expect(canRegenerateChatbookPrompt({ mode: 'python' })).toBe(true);
-    // Written by the user, then switched to Python: keep it verbatim.
-    expect(
-      canRegenerateChatbookPrompt({
-        mode: 'python',
-        origin: 'prompt',
-        prompt: 'plot sales'
-      })
-    ).toBe(false);
-    // Previously summarized from Python: safe to refresh.
-    expect(
-      canRegenerateChatbookPrompt({
-        mode: 'python',
-        origin: 'python',
-        prompt: 'sums the values',
-        summarizedCodeHash: 'abc'
-      })
-    ).toBe(true);
+  it('treats an undefined patch field as a removal', () => {
+    const merged = mergeChatbookCellMeta(
+      {
+        nbi: { chatbook: { prompt: 'plot sales', summaryError: 'timed out' } }
+      },
+      { summaryError: undefined }
+    );
+    const chatbook = (merged.nbi as any).chatbook;
+    expect('summaryError' in chatbook).toBe(false);
+    expect(chatbook.prompt).toBe('plot sales');
   });
 
   it('stores nui session id on the notebook', () => {
@@ -303,8 +312,10 @@ describe('chatbook-core', () => {
     expect(meta.cachedCode).toBeUndefined();
   });
 
-  it('skips cache when notebook context hash changed', () => {
-    const miss = buildExecuteChatbookMeta({
+  it('reuses code for an unchanged prompt even as notebook context moves', () => {
+    // Running the cell changes its own output, and so the context hash. That
+    // must not count as a reason to regenerate.
+    const hit = buildExecuteChatbookMeta({
       cellId: 'c1',
       prompt: 'plot',
       promptHash: 'aaa',
@@ -315,20 +326,8 @@ describe('chatbook-core', () => {
         contextHash: 'ctx-old'
       }
     });
-    expect(miss.cachedCode).toBeUndefined();
-
-    const hit = buildExecuteChatbookMeta({
-      cellId: 'c1',
-      prompt: 'plot',
-      promptHash: 'aaa',
-      contextHash: 'ctx-same',
-      cellMeta: {
-        generatedCode: 'x = 1',
-        promptHash: 'aaa',
-        contextHash: 'ctx-same'
-      }
-    });
     expect(hit.cachedCode).toBe('x = 1');
+    expect(hit.contextHash).toBe('ctx-new');
   });
 
   it('splits notebook cells into prefix, cursor, and suffix', () => {
