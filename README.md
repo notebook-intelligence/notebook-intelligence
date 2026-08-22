@@ -363,7 +363,7 @@ To temporarily disable a configured server without removing it, set `"disabled":
 
 ## Rulesets
 
-NBI's ruleset system lets you define guidelines and best practices that get injected into AI prompts automatically — for consistent coding standards, project conventions, or domain knowledge. Rules are markdown files in `~/.jupyter/nbi/rules/` and can scope by file pattern, kernel, directory, or chat mode.
+NBI's ruleset system lets you define guidelines and best practices that get injected into AI prompts automatically — for consistent coding standards, project conventions, or domain knowledge. Rules are markdown files in `~/.jupyter/nbi/rules/` and can scope by file pattern, kernel, directory, or mode (`ask`, `agent`, `inline-chat`, `chatbook`).
 
 A two-line example:
 

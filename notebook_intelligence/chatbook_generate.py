@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, Optional
 
@@ -21,6 +22,8 @@ from notebook_intelligence.chatbook_kernel.codegen import (
     extract_python_cell,
 )
 from notebook_intelligence.chatbook_mentions import resolve_chatbook_mentions
+from notebook_intelligence.rule_injector import RuleInjector
+from notebook_intelligence.ruleset import RuleContext
 
 log = logging.getLogger(__name__)
 
@@ -290,6 +293,7 @@ def generate_python_with_chat_model(
     cell_id: str = "",
     prompt_hash: str = "",
     context_hash: str = "",
+    system_prompt: str = "",
 ) -> str:
     collector = CollectingChatResponse()
     mention_context = resolve_chatbook_mentions(
@@ -303,7 +307,10 @@ def generate_python_with_chat_model(
         context_hash=context_hash,
     )
     messages = [
-        {"role": "system", "content": CELL_CODEGEN_INSTRUCTIONS},
+        {
+            "role": "system",
+            "content": system_prompt or CELL_CODEGEN_INSTRUCTIONS,
+        },
         {
             "role": "user",
             "content": format_chatbook_user_message(
@@ -400,6 +407,7 @@ def generate_chatbook_python(
         working_directory=_jupyter_root(),
     )
     dynamic_context = _collect_dynamic_context(manager, context_request)
+    system_prompt = chatbook_system_prompt(manager, notebook_path)
     return generate_python_with_chat_model(
         model,
         prompt,
@@ -411,6 +419,7 @@ def generate_chatbook_python(
         cell_id=cell_id,
         prompt_hash=prompt_hash,
         context_hash=context_hash,
+        system_prompt=system_prompt,
     )
 
 
@@ -435,6 +444,29 @@ def _jupyter_root() -> str:
     from notebook_intelligence.util import get_jupyter_root_dir
 
     return get_jupyter_root_dir() or ""
+
+
+def chatbook_rule_context(notebook_path: str = "") -> RuleContext:
+    """Rule matching context for Chatbook code generation."""
+    relative = (notebook_path or "").strip() or "untitled.ipynb"
+    root = _jupyter_root()
+    directory = os.path.dirname(os.path.join(root, relative) if root else relative)
+    return RuleContext(
+        filename=relative,
+        language="python",
+        kernel_name="chatbook",
+        mode="chatbook",
+        directory=directory or None,
+    )
+
+
+def chatbook_system_prompt(manager: Any, notebook_path: str = "") -> str:
+    """Chatbook cell-codegen instructions plus applicable rules and AGENTS.md."""
+    return RuleInjector().inject_guidelines(
+        CELL_CODEGEN_INSTRUCTIONS,
+        host=manager,
+        rule_context=chatbook_rule_context(notebook_path),
+    )
 
 
 def _collect_dynamic_context(

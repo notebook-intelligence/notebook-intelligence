@@ -6,6 +6,7 @@ import pytest
 
 from notebook_intelligence.chatbook_generate import (
     _collect_dynamic_context,
+    chatbook_system_prompt,
     format_chatbook_dynamic_context,
     format_chatbook_mention_context,
     format_chatbook_user_message,
@@ -150,6 +151,73 @@ def test_chatbook_codegen_prompt_has_notebook_specific_guidance():
     assert '%pip install' in CELL_CODEGEN_INSTRUCTIONS
     assert 'Jupyter/IPython code cell' in CELL_CODEGEN_INSTRUCTIONS
     assert 'display(...)' in CELL_CODEGEN_INSTRUCTIONS
+    assert 'Additional Guidelines' in CELL_CODEGEN_INSTRUCTIONS
+
+
+def test_chatbook_system_prompt_includes_chatbook_rules_not_ask_rules(
+    tmp_path,
+):
+    from notebook_intelligence.rule_manager import RuleManager
+    from notebook_intelligence.util import (
+        get_jupyter_root_dir,
+        set_jupyter_root_dir,
+    )
+
+    rules_dir = tmp_path / 'rules'
+    (rules_dir / 'modes' / 'ask').mkdir(parents=True)
+    (rules_dir / 'modes' / 'chatbook').mkdir(parents=True)
+    (rules_dir / '01-global.md').write_text(
+        '---\nactive: true\n---\n# Shared\n- Use type hints\n',
+        encoding='utf-8',
+    )
+    (rules_dir / 'modes' / 'ask' / '01-ask.md').write_text(
+        '---\nactive: true\n---\n# Ask only\n- Explain every answer\n',
+        encoding='utf-8',
+    )
+    (rules_dir / 'modes' / 'chatbook' / '01-chatbook.md').write_text(
+        '---\nactive: true\n---\n# Chatbook only\n- Prefer pandas\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'AGENTS.md').write_text(
+        '# Repo\n- Keep notebooks tidy\n', encoding='utf-8'
+    )
+
+    class Host:
+        nbi_config = type('Cfg', (), {'rules_enabled': True})()
+
+        def get_rule_manager(self):
+            return RuleManager(str(rules_dir))
+
+    old_root = get_jupyter_root_dir()
+    set_jupyter_root_dir(str(tmp_path))
+    try:
+        prompt = chatbook_system_prompt(Host(), 'reports/analysis.ipynb')
+    finally:
+        set_jupyter_root_dir(old_root)
+
+    assert 'Use type hints' in prompt
+    assert 'Prefer pandas' in prompt
+    assert 'Keep notebooks tidy' in prompt
+    assert 'Explain every answer' not in prompt
+    captured = {}
+
+    class CapturingModel:
+        def completions(
+            self, messages, tools=None, response=None, cancel_token=None, options=None
+        ):
+            captured['system'] = messages[0]['content']
+            if response is not None:
+                response.stream({
+                    'choices': [{'delta': {'content': '```python\nx = 1\n```'}}]
+                })
+                response.finish()
+
+    generate_python_with_chat_model(
+        CapturingModel(),
+        'make x',
+        system_prompt=prompt,
+    )
+    assert captured['system'] == prompt
 
 
 def test_chatbook_provider_registration_rejects_duplicate_ids():

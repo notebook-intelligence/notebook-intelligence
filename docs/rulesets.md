@@ -34,7 +34,7 @@ priority: 10
 
 ### Mode-specific rules — apply only to a chat mode
 
-NBI has three chat modes: `ask` (Q&A), `agent` (autonomous tool use), and `inline-chat` (cell-level code generation and edit).
+NBI has four modes: `ask` (Q&A), `agent` (autonomous tool use), `inline-chat` (cell-level code generation and edit), and `chatbook` (natural-language Chatbook cells).
 
 Create `~/.jupyter/nbi/rules/modes/agent/01-testing.md`:
 
@@ -83,8 +83,11 @@ All `scope` fields are optional. A rule with no `scope` applies to every context
 └── modes/
     ├── ask/*.md                  # apply only in ask mode
     ├── agent/*.md                # apply only in agent mode
-    └── inline-chat/*.md          # apply only in inline-chat mode
+    ├── inline-chat/*.md          # apply only in inline-chat mode
+    └── chatbook/*.md             # apply only when generating Chatbook cells
 ```
+
+Chatbook uses global rules plus `modes/chatbook/`. Sidebar `ask` / `agent` / `inline-chat` rules do not apply to Chatbook generation. Scope Chatbook-only conventions with `modes/chatbook/`; keep shared coding standards as unscoped global rules. `AGENTS.md` is also injected into Chatbook's system prompt.
 
 ## Enabling, disabling, and managing rules
 

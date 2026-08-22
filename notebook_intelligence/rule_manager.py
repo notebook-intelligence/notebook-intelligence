@@ -75,8 +75,9 @@ class RuleManager:
             log.debug(f"No modes directory found at {modes_dir}")
             return mode_rules
         
-        # Valid workflow modes
-        valid_modes = ['ask', 'agent', 'inline-chat']
+        # Valid workflow modes. Chatbook is NL-to-Python cell generation, not
+        # sidebar chat or inline-chat cell edit.
+        valid_modes = ['ask', 'agent', 'inline-chat', 'chatbook']
         
         for mode_dir in modes_dir.iterdir():
             if not mode_dir.is_dir():

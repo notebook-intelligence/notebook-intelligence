@@ -88,6 +88,7 @@ from notebook_intelligence.chatbook_generate import (
     generate_chatbook_python,
     summarize_chatbook_python,
 )
+from notebook_intelligence.rule_injector import has_chatbook_guidelines
 from notebook_intelligence.chatbook_mentions import list_chatbook_mentions
 from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
@@ -703,6 +704,12 @@ class GetCapabilitiesHandler(APIHandler):
             # not satisfy an execution from its local generated-code cache.
             "chatbook_has_context_providers": bool(
                 ai_service_manager.get_chatbook_context_providers()
+            ),
+            # Rules and AGENTS.md are applied at generation time, so the
+            # frontend must not reuse locally cached Python for an unchanged
+            # prompt when guidelines can change independently.
+            "chatbook_has_guidelines": has_chatbook_guidelines(
+                ai_service_manager
             ),
             # Single source of truth lives on each domain's base handler so
             # `_setup_handlers` only writes one site per flag.

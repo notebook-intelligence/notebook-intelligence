@@ -80,7 +80,7 @@ def temp_rules_directory(tmp_path):
     modes_dir = rules_dir / "modes"
     modes_dir.mkdir()
     
-    for mode in ['ask', 'agent', 'inline-chat']:
+    for mode in ['ask', 'agent', 'inline-chat', 'chatbook']:
         (modes_dir / mode).mkdir()
     
     return str(rules_dir)

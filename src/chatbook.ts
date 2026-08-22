@@ -169,7 +169,9 @@ export function patchCodeCellExecute(): void {
       notebookContext,
       contextHash,
       allowCachedCode:
-        !NBIAPI.config.chatbookHasContextProviders && !hasMentionContext
+        !NBIAPI.config.chatbookHasContextProviders &&
+        !NBIAPI.config.chatbookHasGuidelines &&
+        !hasMentionContext
     }) as JSONObject;
     return original(cell, sessionContext, {
       ...(metadata || {}),

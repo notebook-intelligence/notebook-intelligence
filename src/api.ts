@@ -479,6 +479,10 @@ export class NBIConfig {
     return this.capabilities.chatbook_has_context_providers !== false;
   }
 
+  get chatbookHasGuidelines(): boolean {
+    return this.capabilities.chatbook_has_guidelines !== false;
+  }
+
   // Admin-supplied tour-copy overrides, served from the capabilities
   // response after server-side validation. Returns the raw dict; the
   // tour module decides how to apply it. Defaults to a shared frozen

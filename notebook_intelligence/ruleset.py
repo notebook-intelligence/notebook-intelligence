@@ -63,7 +63,7 @@ class Rule:
     scope: RuleScope
     active: bool
     content: str
-    mode: Optional[str] = None  # None for global rules, 'ask'/'agent'/'inline-chat' for mode-specific
+    mode: Optional[str] = None  # None for global; ask/agent/inline-chat/chatbook
     priority: int = 0  # For ordering rules (lower number = higher priority)
     
     @classmethod

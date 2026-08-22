@@ -105,6 +105,41 @@ active: true
             # Should skip invalid mode and log warning
             assert len(mode_rules) == 0
             mock_log.warning.assert_called()
+
+    def test_load_chatbook_mode_rules(self, temp_rules_directory):
+        rules_path = Path(temp_rules_directory)
+        chatbook_rule = """---
+apply: always
+active: true
+---
+# Chatbook cell conventions
+- Prefer pandas over csv module
+"""
+        (rules_path / "modes" / "chatbook" / "01-pandas.md").write_text(
+            chatbook_rule
+        )
+        manager = RuleManager(temp_rules_directory)
+        mode_rules = manager._load_mode_rules(rules_path)
+        assert [rule.mode for rule in mode_rules] == ["chatbook"]
+        assert "Prefer pandas" in mode_rules[0].content
+
+        context = RuleContext(
+            filename="reports/analysis.ipynb",
+            language="python",
+            kernel_name="chatbook",
+            mode="chatbook",
+        )
+        applicable = manager.get_applicable_rules(context)
+        assert any(rule.mode == "chatbook" for rule in applicable)
+
+        ask_context = RuleContext(
+            filename="reports/analysis.ipynb",
+            language="python",
+            kernel_name="python3",
+            mode="ask",
+        )
+        ask_rules = manager.get_applicable_rules(ask_context)
+        assert all(rule.mode != "chatbook" for rule in ask_rules)
     
     def test_load_rules(self, populated_rules_directory):
         manager = RuleManager(populated_rules_directory)

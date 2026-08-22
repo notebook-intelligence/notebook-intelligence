@@ -33,6 +33,10 @@ directory, prompt and context hashes, kernel name, and operation. Provider failu
 Returned text is bounded and sent to the model as reference data, not as system
 instructions.
 
+Durable conventions belong in the ruleset (`~/.jupyter/nbi/rules/` and optional
+`modes/chatbook/`) or project `AGENTS.md`, not in a context provider. See
+[`rulesets.md`](rulesets.md).
+
 ## Mention providers
 
 Subclass `ChatbookMentionProvider` to add a browsable root. List item values are
