@@ -1124,15 +1124,28 @@ class ClaudeChatModel(ChatModel):
             # don't burn an Anthropic request whose output has nowhere to go.
             response.finish()
             return
+        system_parts = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system" and message.get("content")
+        ]
+        anthropic_messages = [
+            message for message in messages if message.get("role") != "system"
+        ]
+        stream_options = {
+            "model": self._model_id,
+            "max_tokens": 10000,
+            "messages": anthropic_messages,
+        }
+        if system_parts:
+            stream_options["system"] = "\n\n".join(system_parts)
+        system_prompt = options.get("system_prompt")
+        if system_prompt:
+            existing = stream_options.get("system")
+            stream_options["system"] = (
+                f"{existing}\n\n{system_prompt}" if existing else system_prompt
+            )
         try:
-            stream_options: dict[str, Any] = {
-                "model": self._model_id,
-                "max_tokens": 10000,
-                "messages": messages,
-            }
-            system_prompt = options.get("system_prompt")
-            if system_prompt:
-                stream_options["system"] = system_prompt
             with self._client.messages.stream(**stream_options) as stream:
                 for chunk in stream.text_stream:
                     if cancel_token is not None and cancel_token.is_cancel_requested:

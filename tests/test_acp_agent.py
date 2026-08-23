@@ -418,13 +418,19 @@ class TestSingleFlight:
     """The ACP session runs one prompt at a time; a second concurrent turn
     must be rejected rather than interleave with the first."""
 
-    def _client(self):
+    def _client(self, *, force_safe_mode=False):
         from notebook_intelligence.acp_agent import AcpAgentClient
         host = SimpleNamespace(
             websocket_connector=None,
             nbi_config=SimpleNamespace(acp_settings={"enabled": True}),
         )
-        return AcpAgentClient(host)
+        return AcpAgentClient(host, force_safe_mode=force_safe_mode)
+
+    def test_safe_client_has_no_mcp_servers(self):
+        client = self._client(force_safe_mode=True)
+
+        assert client.safe_mode is True
+        assert client._mcp_servers() == []
 
     def test_second_concurrent_turn_is_rejected(self):
         client = self._client()
@@ -484,5 +490,43 @@ class TestSingleFlight:
         # Prior turn's tool-call cache was cleared, lock released, response reset.
         assert client._client._tool_state == {}
         assert client.current_response is None
+        assert client._turn_lock.acquire(blocking=False)
+        client._turn_lock.release()
+
+    def test_isolated_turn_disables_permissions_and_releases_lock(self):
+        client = self._client()
+        client._ensure_started = lambda: True
+        client._loop = object()
+        client._client = SimpleNamespace(_tool_state={"stale": {}})
+        observed = {}
+
+        async def fake_isolated(prompt):
+            observed["prompt"] = prompt
+            observed["permissions"] = client.current_permissions_enabled
+
+        client._run_isolated_prompt = fake_isolated
+
+        def fake_schedule(coro, loop):
+            asyncio.run(coro)
+            done = concurrent.futures.Future()
+            done.set_result(None)
+            return done
+
+        import notebook_intelligence.acp_agent as mod
+        orig = mod.asyncio.run_coroutine_threadsafe
+        mod.asyncio.run_coroutine_threadsafe = fake_schedule
+        try:
+            result = client.query_isolated("generate code", FakeResponse())
+        finally:
+            mod.asyncio.run_coroutine_threadsafe = orig
+
+        assert result is None
+        assert observed == {
+            "prompt": "generate code",
+            "permissions": False,
+        }
+        assert client.current_permissions_enabled is True
+        assert client.current_response is None
+        assert client._client._tool_state == {}
         assert client._turn_lock.acquire(blocking=False)
         client._turn_lock.release()

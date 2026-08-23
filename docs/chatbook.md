@@ -4,6 +4,19 @@ Chatbook cells generate Python from a natural-language prompt and can run that P
 
 There is no per-cell sandbox. Isolation, when you need it, is the Jupyter kernel process itself (for example a JupyterHub user container).
 
+## Generation backend
+
+Chatbook follows NBI's active mode:
+
+- Default mode uses the chat model configured under **General**.
+- Claude mode uses the model, API key, and base URL configured under
+  **Claude**.
+- ACP mode uses a dedicated instance of the configured ACP agent and sends each
+  request through a fresh session, separate from the chat sidebar conversation.
+  The Chatbook agent is always launched without full access, denies agent tool
+  permission requests, and is instructed to generate only from the supplied
+  notebook context.
+
 ## Execution modes
 
 Configure these in Settings → **Chatbook**. The default is **Always confirm**.

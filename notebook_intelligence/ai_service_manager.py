@@ -143,6 +143,7 @@ class AIServiceManager(Host):
         # Created lazily the first time ACP mode is active so the ACP SDK
         # import stays off the startup path (#378).
         self._acp_chat_participant = None
+        self._chatbook_acp_client = None
         self.register_llm_provider(GitHubCopilotLLMProvider())
         self.register_llm_provider(self._openai_compatible_llm_provider)
         self.register_llm_provider(self._litellm_compatible_llm_provider)
@@ -254,6 +255,22 @@ class AIServiceManager(Host):
         participant has never been created."""
         if self._acp_chat_participant is not None:
             self._acp_chat_participant.restart_client()
+        if self._chatbook_acp_client is not None:
+            self._chatbook_acp_client.shutdown()
+            self._chatbook_acp_client = None
+
+    def generate_chatbook_with_acp(
+        self, prompt: str, response: ChatResponse
+    ) -> Optional[str]:
+        """Run Chatbook generation through the active ACP agent."""
+        if not self.is_acp_mode:
+            return "ACP mode is not enabled"
+        if self._chatbook_acp_client is None:
+            from notebook_intelligence.acp_agent import AcpAgentClient
+            self._chatbook_acp_client = AcpAgentClient(
+                self, force_safe_mode=True
+            )
+        return self._chatbook_acp_client.query_isolated(prompt, response)
 
     def update_mcp_servers(self):
         self._mcp_manager.update_mcp_servers(self.nbi_config.mcp)
