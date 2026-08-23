@@ -164,6 +164,10 @@ import {
   toggleAllChatbookCellModes
 } from './chatbook';
 import { detectChatbookMentionTrigger } from './chatbook-mentions';
+import {
+  captureInlineCompletionOrigin,
+  isInlineCompletionOriginCurrent
+} from './inline-completion-origin';
 
 const addInlinePromptEffect = StateEffect.define<{
   pos: number;
@@ -601,10 +605,12 @@ class NBIInlineCompletionProvider
     let language = ActiveDocumentWatcher.activeDocumentInfo.language;
 
     let editorType = 'file-editor';
+    let notebookPanel: NotebookPanel | null = null;
 
     if (context.widget instanceof NotebookPanel) {
       editorType = 'notebook';
       const panel = context.widget;
+      notebookPanel = panel;
       const activeCell = panel.content.activeCell;
       const activeMode = activeCell
         ? getChatbookCellMode(getChatbookCellMeta(activeCell.model.metadata))
@@ -655,6 +661,7 @@ class NBIInlineCompletionProvider
       }
     }
 
+    const origin = captureInlineCompletionOrigin(notebookPanel, request.text);
     const nbiConfig = NBIAPI.config;
     const inlineCompletionsEnabled =
       nbiConfig.isInClaudeCodeMode ||
@@ -706,10 +713,6 @@ class NBIInlineCompletionProvider
               response.type === BackendMessageType.StreamMessage &&
               response.id === this._lastRequestInfo.messageId
             ) {
-              items.push({
-                insertText: response.data.completions
-              });
-
               const timeElapsed =
                 (new Date().getTime() -
                   this._lastRequestInfo.requestTime.getTime()) /
@@ -724,6 +727,12 @@ class NBIInlineCompletionProvider
                   timeElapsed
                 }
               });
+
+              if (isInlineCompletionOriginCurrent(origin)) {
+                items.push({
+                  insertText: response.data.completions
+                });
+              }
 
               resolve({ items });
             } else {
