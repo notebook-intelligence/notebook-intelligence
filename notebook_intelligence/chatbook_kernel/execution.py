@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import Optional
 
 CHATBOOK_EXECUTION_MODES = (
-    "generate-only",
     "always-confirm",
     "confirm-if-risky",
     "auto-run",
@@ -24,6 +23,8 @@ def parse_execution_mode(
     default: str = DEFAULT_CHATBOOK_EXECUTION_MODE,
 ) -> str:
     text = (value or "").strip()
+    if text == "generate-only":
+        text = "always-confirm"
     if text in _RANK:
         return text
     return default if default in _RANK else DEFAULT_CHATBOOK_EXECUTION_MODE

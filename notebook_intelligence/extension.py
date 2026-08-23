@@ -3826,8 +3826,8 @@ class NotebookIntelligence(ExtensionApp):
         help="""
         Cap how freely a user can auto-run Chatbook-generated Python.
         Users cannot choose a more permissive NL execution mode than this
-        value. Allowed: generate-only, always-confirm, confirm-if-risky,
-        auto-run (default, no cap). Overridden by
+        value. Allowed: always-confirm, confirm-if-risky, auto-run
+        (default, no cap). Overridden by
         NBI_CHATBOOK_MAX_EXECUTION_MODE.
         """,
         config=True,

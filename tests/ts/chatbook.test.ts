@@ -24,7 +24,6 @@ import {
   switchChatbookCellMode,
   withoutLegacyChatbookSourceView,
   clampChatbookExecutionMode,
-  chatbookCanConfirmRun,
   chatbookExecutionModeSummary,
   chatbookNeedsConfirm,
   parseChatbookExecutionMode,
@@ -390,10 +389,13 @@ describe('chatbook-core', () => {
 
   it('clamps execution modes and decides when to confirm', () => {
     expect(parseChatbookExecutionMode('nope')).toBe('always-confirm');
+    expect(parseChatbookExecutionMode('generate-only')).toBe('always-confirm');
+    expect(clampChatbookExecutionMode('auto-run', 'generate-only')).toBe(
+      'always-confirm'
+    );
     expect(clampChatbookExecutionMode('auto-run', 'always-confirm')).toBe(
       'always-confirm'
     );
-    expect(chatbookCanConfirmRun('generate-only')).toBe(false);
     expect(chatbookNeedsConfirm('always-confirm', 'clean')).toBe(true);
     expect(chatbookNeedsConfirm('confirm-if-risky', 'clean')).toBe(false);
     expect(chatbookNeedsConfirm('confirm-if-risky', 'risky')).toBe(true);
@@ -402,11 +404,6 @@ describe('chatbook-core', () => {
         alreadyExecutedThisSession: true
       })
     ).toBe(false);
-    expect(
-      chatbookNeedsConfirm('generate-only', 'clean', {
-        alreadyExecutedThisSession: true
-      })
-    ).toBe(true);
   });
 
   it('sends the NL execution policy with generate metadata', () => {

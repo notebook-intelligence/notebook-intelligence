@@ -32,7 +32,6 @@ import {
   splitNotebookContext,
   switchChatbookCellMode,
   withoutLegacyChatbookSourceView,
-  chatbookCanConfirmRun,
   chatbookExecutionModeSummary,
   chatbookNeedsConfirm,
   type ChatbookCellMode,
@@ -196,7 +195,7 @@ export function patchCodeCellExecute(): void {
     const executionMode = NBIAPI.config.chatbookExecutionMode;
     const alreadyExecuted = executedPromptByCell.get(cell.model) === promptHash;
     const cachedPython = getChatbookCellMeta(cell.model.metadata).generatedCode;
-    if (alreadyExecuted && executionMode !== 'generate-only' && cachedPython) {
+    if (alreadyExecuted && cachedPython) {
       return CodeCell.execute(cell, sessionContext, {
         ...(metadata || {}),
         nbi_chatbook: {
@@ -640,9 +639,7 @@ function maybeShowChatbookConfirm(
         executedPromptByCell.get(cell.model) === options.promptHash
     })
   ) {
-    if (mode !== 'generate-only') {
-      executedPromptByCell.set(cell.model, options.promptHash);
-    }
+    executedPromptByCell.set(cell.model, options.promptHash);
     hideChatbookConfirmBar(cell);
     return;
   }
@@ -724,17 +721,15 @@ function renderChatbookConfirmBar(
   } else {
     cell.node.appendChild(bar);
   }
-  const canRun = chatbookCanConfirmRun(pending.mode);
   const reasons = pending.reasons.length
     ? `<ul class="nbi-chatbook-confirm-reasons">${pending.reasons
         .map(reason => `<li>${escapeChatbookHtml(reason)}</li>`)
         .join('')}</ul>`
     : '';
-  const title = canRun
-    ? 'Review generated Python before running it in this kernel.'
-    : 'Generated Python is stored. Switch the cell to Py to run it.';
   bar.innerHTML = `
-    <div class="nbi-chatbook-confirm-header">${escapeChatbookHtml(title)}</div>
+    <div class="nbi-chatbook-confirm-header">${escapeChatbookHtml(
+      'Review generated Python before running it in this kernel.'
+    )}</div>
     <pre class="nbi-chatbook-confirm-code">${escapeChatbookHtml(pending.code)}</pre>
     ${reasons}
     <div class="nbi-chatbook-confirm-footer">
@@ -747,33 +742,31 @@ function renderChatbookConfirmBar(
   const actions = bar.querySelector(
     '.nbi-chatbook-confirm-actions'
   ) as HTMLElement;
-  if (canRun) {
-    const run = document.createElement('button');
-    run.type = 'button';
-    run.className = 'jp-mod-styled jp-mod-accept nbi-chatbook-confirm-run';
-    run.textContent = 'Run';
-    run.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      const current = pendingConfirmByCell.get(cell.model);
-      hideChatbookConfirmBar(cell);
-      if (!current) {
-        return;
+  const run = document.createElement('button');
+  run.type = 'button';
+  run.className = 'jp-mod-styled jp-mod-accept nbi-chatbook-confirm-run';
+  run.textContent = 'Run';
+  run.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const current = pendingConfirmByCell.get(cell.model);
+    hideChatbookConfirmBar(cell);
+    if (!current) {
+      return;
+    }
+    void CodeCell.execute(cell as unknown as CodeCell, panel.sessionContext, {
+      nbi_chatbook: {
+        cellId: cell.model.id,
+        executeMode: 'python',
+        pythonSource: current.code
       }
-      void CodeCell.execute(cell as unknown as CodeCell, panel.sessionContext, {
-        nbi_chatbook: {
-          cellId: cell.model.id,
-          executeMode: 'python',
-          pythonSource: current.code
-        }
-      } as JSONObject);
-    });
-    actions.appendChild(run);
-  }
+    } as JSONObject);
+  });
+  actions.appendChild(run);
   const discard = document.createElement('button');
   discard.type = 'button';
   discard.className = 'jp-mod-styled nbi-chatbook-confirm-discard';
-  discard.textContent = canRun ? "Don't run" : 'Dismiss';
+  discard.textContent = "Don't run";
   discard.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();

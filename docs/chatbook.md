@@ -8,18 +8,17 @@ There is no per-cell sandbox. Isolation, when you need it, is the Jupyter kernel
 
 Configure these in Settings → **Chatbook**. The default is **Always confirm**.
 
-| Mode             | Natural-language Run      | Executes generated Python?                                                          |
-| ---------------- | ------------------------- | ----------------------------------------------------------------------------------- |
-| Generate only    | Generate and store Python | Never from NL Run. Switch the cell to Py and run.                                   |
-| Always confirm   | Generate, show a preview  | Only after **Run** on the confirm bar.                                              |
-| Confirm if risky | Generate, static scan     | Auto-run when the scan is clean; confirm when it is risky or cannot parse the cell. |
-| Auto-run         | Generate and execute      | Yes, no prompt.                                                                     |
+| Mode             | Natural-language Run     | Executes generated Python?                                                          |
+| ---------------- | ------------------------ | ----------------------------------------------------------------------------------- |
+| Always confirm   | Generate, show a preview | Only after **Run** on the confirm bar.                                              |
+| Confirm if risky | Generate, static scan    | Auto-run when the scan is clean; confirm when it is risky or cannot parse the cell. |
+| Auto-run         | Generate and execute     | Yes, no prompt.                                                                     |
 
 The confirm bar names the mode that produced it and links to Settings → **Chatbook**, so the policy behind a prompt is always one click away.
 
 Python-authored cells are unchanged in every mode: the user typed the source, so Run executes it.
 
-An unchanged prompt that already executed in this session skips another confirm, except in **Generate only** (NL Run still never executes).
+An unchanged prompt that already executed in this session skips another confirm.
 
 ## Confirm-if-risky detection
 
@@ -36,6 +35,6 @@ Optional **Also classify with the chat model** (off by default): a second JSON c
 
 ## Admin cap
 
-`NBI_CHATBOOK_MAX_EXECUTION_MODE` (traitlet `chatbook_max_execution_mode`) caps how permissive a user can be. Values, from safest to least: `generate-only`, `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). A tenant can set `always-confirm` to hide Auto-run.
+`NBI_CHATBOOK_MAX_EXECUTION_MODE` (traitlet `chatbook_max_execution_mode`) caps how permissive a user can be. Values, from safest to least: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). A tenant can set `always-confirm` to hide Auto-run.
 
 User preference is stored as `chatbook_execution_mode` in `~/.jupyter/nbi/config.json`.

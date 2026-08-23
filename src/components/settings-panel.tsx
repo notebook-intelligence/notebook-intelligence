@@ -1231,11 +1231,6 @@ const CHATBOOK_MODE_LABELS: Record<
   ChatbookExecutionMode,
   { title: string; description: string }
 > = {
-  'generate-only': {
-    title: 'Generate only',
-    description:
-      'Create Python from the prompt. Natural-language Run never executes it — switch the cell to Py to run.'
-  },
   'always-confirm': {
     title: 'Always confirm',
     description:
@@ -1297,11 +1292,10 @@ function SettingsPanelComponentChatbook() {
           <div className="model-config-section-body">
             <div className="model-config-section-row">
               <span>
-                Chatbook generates Python and runs it in this notebook&apos;s
+                Chatbook generates Python and runs it in the notebook&apos;s
                 kernel. That process has the same privileges as any Jupyter
                 kernel: files, network, environment variables, and package
-                installs. JupyterHub or a container can isolate the whole
-                kernel; there is no per-cell sandbox.
+                installs.
               </span>
             </div>
             <fieldset className="nbi-chatbook-execution-modes">

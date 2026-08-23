@@ -7,14 +7,12 @@ export const CHATBOOK_LANGUAGE = 'chatbook';
 export type ChatbookCellMode = 'prompt' | 'python';
 export type ChatbookConvertTargetId = 'python';
 export type ChatbookExecutionMode =
-  | 'generate-only'
   | 'always-confirm'
   | 'confirm-if-risky'
   | 'auto-run';
 export type ChatbookDangerLevel = 'clean' | 'risky';
 
 export const CHATBOOK_EXECUTION_MODES: readonly ChatbookExecutionMode[] = [
-  'generate-only',
   'always-confirm',
   'confirm-if-risky',
   'auto-run'
@@ -25,18 +23,18 @@ export const DEFAULT_CHATBOOK_MAX_EXECUTION_MODE: ChatbookExecutionMode =
   'auto-run';
 
 const CHATBOOK_EXECUTION_MODE_RANK: Record<ChatbookExecutionMode, number> = {
-  'generate-only': 0,
-  'always-confirm': 1,
-  'confirm-if-risky': 2,
-  'auto-run': 3
+  'always-confirm': 0,
+  'confirm-if-risky': 1,
+  'auto-run': 2
 };
 
 export function parseChatbookExecutionMode(
   value: unknown,
   fallback: ChatbookExecutionMode = DEFAULT_CHATBOOK_EXECUTION_MODE
 ): ChatbookExecutionMode {
-  return CHATBOOK_EXECUTION_MODES.includes(value as ChatbookExecutionMode)
-    ? (value as ChatbookExecutionMode)
+  const text = value === 'generate-only' ? 'always-confirm' : value;
+  return CHATBOOK_EXECUTION_MODES.includes(text as ChatbookExecutionMode)
+    ? (text as ChatbookExecutionMode)
     : fallback;
 }
 
@@ -60,10 +58,10 @@ export function chatbookNeedsConfirm(
   scanLevel: ChatbookDangerLevel,
   options: { alreadyExecutedThisSession?: boolean } = {}
 ): boolean {
-  if (options.alreadyExecutedThisSession && mode !== 'generate-only') {
+  if (options.alreadyExecutedThisSession) {
     return false;
   }
-  if (mode === 'always-confirm' || mode === 'generate-only') {
+  if (mode === 'always-confirm') {
     return true;
   }
   if (mode === 'confirm-if-risky') {
@@ -72,13 +70,8 @@ export function chatbookNeedsConfirm(
   return false;
 }
 
-export function chatbookCanConfirmRun(mode: ChatbookExecutionMode): boolean {
-  return mode !== 'generate-only';
-}
-
 const CHATBOOK_EXECUTION_MODE_SUMMARIES: Record<ChatbookExecutionMode, string> =
   {
-    'generate-only': 'Chatbook is set to generate Python without running it.',
     'always-confirm': 'Chatbook is set to confirm every natural-language run.',
     'confirm-if-risky':
       'Chatbook is set to confirm only when the scan flags a risk.',

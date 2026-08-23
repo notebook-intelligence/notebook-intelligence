@@ -69,13 +69,13 @@ def test_merge_and_llm_parse():
 
 def test_execution_mode_clamp_and_run_policy():
     assert parse_execution_mode("nope") == "always-confirm"
+    assert parse_execution_mode("generate-only") == "always-confirm"
+    assert clamp_execution_mode("auto-run", "generate-only") == "always-confirm"
     assert clamp_execution_mode("auto-run", "always-confirm") == "always-confirm"
-    assert clamp_execution_mode("generate-only", "auto-run") == "generate-only"
     assert should_execute_generated("auto-run", "risky") is True
     assert should_execute_generated("confirm-if-risky", "clean") is True
     assert should_execute_generated("confirm-if-risky", "risky") is False
     assert should_execute_generated("always-confirm", "clean") is False
-    assert should_execute_generated("generate-only", "clean") is False
 
 
 def test_llm_classifier_uses_json_only():
