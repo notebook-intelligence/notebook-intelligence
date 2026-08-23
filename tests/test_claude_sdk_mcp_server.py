@@ -47,4 +47,9 @@ def test_compatible_sdk_mcp_server_lists_and_calls_tools():
     )
     result = asyncio.run(call_handler(request))
     assert result.root.content[0].text == "You said: hi"
-    assert not result.root.is_error
+    # mcp 1.x CallToolResult uses isError; the mcp 2.0 duck-typed
+    # fallback uses is_error. Accept either so both paths stay covered.
+    is_error = getattr(
+        result.root, "isError", getattr(result.root, "is_error", False)
+    )
+    assert not is_error
