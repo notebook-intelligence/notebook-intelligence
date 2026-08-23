@@ -225,11 +225,12 @@ Most settings panel toggles can be locked by org administrators. Two shapes:
 
 Chatbook NL execution is capped separately (not a boolean policy):
 
-| Env var / traitlet                | Effect                                                                                                                                     |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `NBI_CHATBOOK_MAX_EXECUTION_MODE` | Users cannot choose a more permissive Chatbook mode than this. Values: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). |
+| Env var / traitlet                | Effect                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NBI_ENABLE_CHATBOOK`             | Enable Chatbook. Default on; users do not set this. Set `false` to hide the kernel, Settings tab, and generate APIs. Traitlet `enable_chatbook`. |
+| `NBI_CHATBOOK_MAX_EXECUTION_MODE` | Users cannot choose a more permissive Chatbook mode than this. Values: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap).       |
 
-The matching traitlet is `c.NotebookIntelligence.chatbook_max_execution_mode`. See [`docs/chatbook.md`](docs/chatbook.md).
+The matching traitlets are `c.NotebookIntelligence.enable_chatbook` and `c.NotebookIntelligence.chatbook_max_execution_mode`. See [`docs/chatbook.md`](docs/chatbook.md).
 
 The first three also have matching traitlets on `NotebookIntelligence` (`explain_error_policy`, `output_followup_policy`, `output_toolbar_policy`); add the others as needed in the same shape:
 

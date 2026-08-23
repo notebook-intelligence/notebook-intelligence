@@ -974,16 +974,18 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     await NBIAPI.initialize();
 
-    registerChatbookLanguage(languageRegistry);
-    patchCodeCellExecute();
-    attachChatbookNotebooks(notebookTracker, {
-      languageRegistry,
-      onOpenSettings: () => {
-        void app.commands.execute(CommandIDs.openConfigurationDialog, {
-          tab: 'chatbook'
-        });
-      }
-    });
+    if (NBIAPI.config.chatbookEnabled) {
+      registerChatbookLanguage(languageRegistry);
+      patchCodeCellExecute();
+      attachChatbookNotebooks(notebookTracker, {
+        languageRegistry,
+        onOpenSettings: () => {
+          void app.commands.execute(CommandIDs.openConfigurationDialog, {
+            tab: 'chatbook'
+          });
+        }
+      });
+    }
 
     if (terminalTracker) {
       attachTerminalDragDrop({
@@ -1158,10 +1160,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         chatSidebarId: panel.id
       })
     );
-    app.docRegistry.addWidgetExtension(
-      'Notebook',
-      new ChatbookToolbarExtension(app)
-    );
+    if (NBIAPI.config.chatbookEnabled) {
+      app.docRegistry.addWidgetExtension(
+        'Notebook',
+        new ChatbookToolbarExtension(app)
+      );
+    }
 
     const updateSidebarIcon = () => {
       if (NBIAPI.getChatEnabled()) {
@@ -1415,6 +1419,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       label: 'Chatbook',
       caption: 'Create a notebook whose cells are natural-language prompts',
       icon: () => sidebarIcon,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: async () => {
         return app.commands.execute(CommandIDs.createNewNotebook, {
           kernelName: CHATBOOK_KERNEL_NAME
@@ -1441,6 +1446,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         }
         return Boolean(getChatbookCellMeta(cell.model.metadata).generatedCode);
       },
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: async () => {
         const current = app.shell.currentWidget;
         if (!(current instanceof NotebookPanel)) {
@@ -1490,6 +1496,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         'Switch the active Chatbook cell between natural language and code',
       isEnabled: () =>
         currentChatbookNotebook()?.content.activeCell?.model.type === 'code',
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: () => {
         const panel = currentChatbookNotebook();
         if (panel) {
@@ -1510,6 +1517,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
               'code'
         );
       },
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: async () => {
         const cell = currentChatbookNotebook()?.content.activeCell;
         if (cell?.model.type === 'code') {
@@ -1531,6 +1539,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       caption:
         'Switch every cell of this Chatbook between its prompt and its code',
       isEnabled: () => currentChatbookNotebook() !== null,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: () => {
         const panel = currentChatbookNotebook();
         if (!panel) {
@@ -1545,6 +1554,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       caption:
         'Create a new notebook from this Chatbook using the configured backend kernel, leaving the original unchanged',
       isEnabled: () => currentChatbookNotebook() !== null,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: async () => {
         const panel = currentChatbookNotebook();
         if (!panel) {

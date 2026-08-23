@@ -513,6 +513,12 @@ export class NBIConfig {
     );
   }
 
+  get chatbookEnabled(): boolean {
+    // Default-on: a missing key (older backend) must not hide Chatbook.
+    // Admins turn it off with NBI_ENABLE_CHATBOOK=false.
+    return this.capabilities.chatbook_enabled !== false;
+  }
+
   // Admin-supplied tour-copy overrides, served from the capabilities
   // response after server-side validation. Returns the raw dict; the
   // tour module decides how to apply it. Defaults to a shared frozen

@@ -115,6 +115,59 @@ def _resolve_chatbook_max_execution_mode(traitlet_value: str) -> str:
     )
 
 
+CHATBOOK_DISABLED_MESSAGE = "Chatbook is disabled by your administrator"
+CHATBOOK_KERNEL_NAME = "chatbook"
+
+
+def _finish_if_chatbook_disabled(handler) -> bool:
+    """Return True after writing a 403 when the admin Chatbook gate is off."""
+    if getattr(handler, "chatbook_enabled", True):
+        return False
+    handler.set_status(403)
+    handler.finish(json.dumps({"error": CHATBOOK_DISABLED_MESSAGE}))
+    return True
+
+
+def _hide_chatbook_kernelspec(kernel_spec_manager) -> None:
+    """Drop Chatbook from Jupyter's live kernelspec manager.
+
+    The kernelspec stays on disk from the package data files; filtering the
+    running manager is what removes the launcher tile and kernel picker.
+    Idempotent so a second call (tests, reload) does not wrap twice.
+    """
+    if kernel_spec_manager is None:
+        return
+    if getattr(kernel_spec_manager, "_nbi_chatbook_hidden", False):
+        return
+    from jupyter_client.kernelspec import NoSuchKernel
+
+    orig_find = kernel_spec_manager.find_kernel_specs
+    orig_get = kernel_spec_manager.get_kernel_spec
+    orig_all = getattr(kernel_spec_manager, "get_all_specs", None)
+
+    def find_kernel_specs(*args, **kwargs):
+        specs = orig_find(*args, **kwargs)
+        specs.pop(CHATBOOK_KERNEL_NAME, None)
+        return specs
+
+    def get_kernel_spec(kernel_name, *args, **kwargs):
+        if kernel_name == CHATBOOK_KERNEL_NAME:
+            raise NoSuchKernel(kernel_name)
+        return orig_get(kernel_name, *args, **kwargs)
+
+    kernel_spec_manager.find_kernel_specs = find_kernel_specs
+    kernel_spec_manager.get_kernel_spec = get_kernel_spec
+    if orig_all is not None:
+
+        def get_all_specs(*args, **kwargs):
+            specs = orig_all(*args, **kwargs)
+            specs.pop(CHATBOOK_KERNEL_NAME, None)
+            return specs
+
+        kernel_spec_manager.get_all_specs = get_all_specs
+    kernel_spec_manager._nbi_chatbook_hidden = True
+
+
 def _truncate_context_content(content: str, token_budget: int) -> str:
     if token_budget <= 0 or content == '':
         return ''
@@ -599,6 +652,7 @@ class GetCapabilitiesHandler(APIHandler):
     feature_policies = {}
     string_overrides = {}
     chatbook_max_execution_mode = DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    chatbook_enabled = True
     # Resolved at extension init from NBI_TOUR_CONFIG_PATH (or the
     # tour_config_path traitlet). Empty string disables the override.
     tour_config_path = ""
@@ -743,6 +797,7 @@ class GetCapabilitiesHandler(APIHandler):
                 ),
                 DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
             ),
+            "chatbook_enabled": self.chatbook_enabled,
             # Single source of truth lives on each domain's base handler so
             # `_setup_handlers` only writes one site per flag.
             "allow_github_skill_import": SkillsBaseHandler.allow_github_skill_import,
@@ -791,8 +846,12 @@ class GetCapabilitiesHandler(APIHandler):
 class ChatbookGenerateHandler(APIHandler):
     """Generate either Python or an English representation for Chatbook."""
 
+    chatbook_enabled = True
+
     @tornado.web.authenticated
     async def post(self):
+        if _finish_if_chatbook_disabled(self):
+            return
         try:
             data = json.loads(self.request.body or b"{}")
         except json.JSONDecodeError:
@@ -893,8 +952,12 @@ class ChatbookGenerateHandler(APIHandler):
 class ChatbookMentionsHandler(APIHandler):
     """List built-in and extension-provided mentions for Chatbook NL cells."""
 
+    chatbook_enabled = True
+
     @tornado.web.authenticated
     async def get(self):
+        if _finish_if_chatbook_disabled(self):
+            return
         parent = self.get_query_argument("parent", default="")
         query = self.get_query_argument("query", default="")
         notebook_path = self.get_query_argument("notebookPath", default="")
@@ -3842,6 +3905,19 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    enable_chatbook = Bool(
+        default_value=True,
+        help="""
+        Enable Chatbook (natural-language notebooks). Default True so users
+        need no extra env var. Set False (or NBI_ENABLE_CHATBOOK=false) to
+        hide the Chatbook kernelspec, Settings tab, launcher tile, and
+        generate/mention APIs. Overridden by the NBI_ENABLE_CHATBOOK env
+        var.
+        """,
+        allow_none=True,
+        config=True,
+    )
+
     upload_max_mb = Int(
         default_value=_DEFAULT_UPLOAD_MAX_MB,
         help="""
@@ -4120,6 +4196,16 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.enable_chat_feedback_always_visible = (
             self.enable_chat_feedback_always_visible
         )
+        chatbook_enabled = _resolve_bool_with_env(
+            "NBI_ENABLE_CHATBOOK", self.enable_chatbook
+        )
+        GetCapabilitiesHandler.chatbook_enabled = chatbook_enabled
+        ChatbookGenerateHandler.chatbook_enabled = chatbook_enabled
+        ChatbookMentionsHandler.chatbook_enabled = chatbook_enabled
+        if not chatbook_enabled:
+            _hide_chatbook_kernelspec(
+                getattr(self.serverapp, "kernel_spec_manager", None)
+            )
         # Tour copy overrides: env var wins if set, otherwise fall back to
         # the traitlet. Pre-resolve here so the handler doesn't have to
         # re-check os.environ on every call.

@@ -29,6 +29,7 @@ import {
   mimeTypeForNotebookLanguage,
   resolveChatbookBackendProfile
 } from '../../src/notebook-kernels';
+import { NBIConfig } from '../../src/api';
 
 describe('chatbook-core', () => {
   it('recognizes the chatbook kernel name', () => {
@@ -433,5 +434,20 @@ describe('chatbook-core', () => {
     );
     expect(mimeTypeForNotebookLanguage('R')).toBe('text/x-rsrc');
     expect(mimeTypeForNotebookLanguage('python')).toBe('text/x-python');
+  });
+});
+
+describe('NBIConfig.chatbookEnabled', () => {
+  it('defaults on when capabilities omit the flag', () => {
+    const config = new NBIConfig();
+    expect(config.chatbookEnabled).toBe(true);
+  });
+
+  it('is false only when capabilities explicitly disable Chatbook', () => {
+    const config = new NBIConfig();
+    config.capabilities = { chatbook_enabled: false };
+    expect(config.chatbookEnabled).toBe(false);
+    config.capabilities = { chatbook_enabled: true };
+    expect(config.chatbookEnabled).toBe(true);
   });
 });

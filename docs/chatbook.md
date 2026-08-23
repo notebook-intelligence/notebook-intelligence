@@ -52,6 +52,10 @@ The scan is a speed bump, not a security boundary. False positives (for example 
 
 For other backend languages the static scan fails closed (treats the cell as risky) so Confirm if risky still prompts. Optional **Also classify with the chat model** (off by default): a second JSON classifier may raise risk. A static hit always wins. Classifier timeout or invalid output confirms instead of auto-running. Mention and dynamic context are not sent to the classifier, only the generated code.
 
+## Enabling and disabling
+
+Chatbook is on by default. Users do not set an environment variable. An admin can turn it off with `NBI_ENABLE_CHATBOOK=false` (traitlet `enable_chatbook`). That hides the Chatbook kernelspec from the launcher and kernel picker, hides the Settings → Chatbook tab and Chatbook commands, and returns HTTP 403 from the generate and mention APIs.
+
 ## Admin cap
 
 `NBI_CHATBOOK_MAX_EXECUTION_MODE` (traitlet `chatbook_max_execution_mode`) caps how permissive a user can be. Values, from safest to least: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). A tenant can set `always-confirm` to hide Auto-run.
