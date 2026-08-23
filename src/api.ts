@@ -5,6 +5,13 @@ import { requestAPI } from './handler';
 import { URLExt } from '@jupyterlab/coreutils';
 import { Signal } from '@lumino/signaling';
 import {
+  clampChatbookExecutionMode,
+  DEFAULT_CHATBOOK_EXECUTION_MODE,
+  DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+  parseChatbookExecutionMode,
+  type ChatbookExecutionMode
+} from './chatbook-core';
+import {
   GITHUB_COPILOT_PROVIDER_ID,
   IChatCompletionResponseEmitter,
   IChatParticipant,
@@ -481,6 +488,25 @@ export class NBIConfig {
 
   get chatbookHasGuidelines(): boolean {
     return this.capabilities.chatbook_has_guidelines !== false;
+  }
+
+  get chatbookExecutionMode(): ChatbookExecutionMode {
+    return clampChatbookExecutionMode(
+      this.capabilities.chatbook_execution_mode ||
+        DEFAULT_CHATBOOK_EXECUTION_MODE,
+      this.chatbookMaxExecutionMode
+    );
+  }
+
+  get chatbookLlmDangerScan(): boolean {
+    return this.capabilities.chatbook_llm_danger_scan === true;
+  }
+
+  get chatbookMaxExecutionMode(): ChatbookExecutionMode {
+    return parseChatbookExecutionMode(
+      this.capabilities.chatbook_max_execution_mode,
+      DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    );
   }
 
   // Admin-supplied tour-copy overrides, served from the capabilities

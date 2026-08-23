@@ -85,8 +85,14 @@ from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_claude_
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
 from notebook_intelligence.chatbook_generate import (
+    classify_generated_python_danger,
     generate_chatbook_python,
     summarize_chatbook_python,
+)
+from notebook_intelligence.chatbook_kernel.execution import (
+    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+    clamp_execution_mode,
+    parse_execution_mode,
 )
 from notebook_intelligence.rule_injector import has_chatbook_guidelines
 from notebook_intelligence.chatbook_mentions import list_chatbook_mentions
@@ -100,6 +106,13 @@ thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
 def _token_count(text: str) -> int:
     return len(tiktoken_encoding.encode(text))
+
+
+def _resolve_chatbook_max_execution_mode(traitlet_value: str) -> str:
+    env = os.environ.get("NBI_CHATBOOK_MAX_EXECUTION_MODE", "").strip()
+    return parse_execution_mode(
+        env or traitlet_value, DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    )
 
 
 def _truncate_context_content(content: str, token_budget: int) -> str:
@@ -585,6 +598,7 @@ class GetCapabilitiesHandler(APIHandler):
     additional_skipped_workspace_directories = []
     feature_policies = {}
     string_overrides = {}
+    chatbook_max_execution_mode = DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
     # Resolved at extension init from NBI_TOUR_CONFIG_PATH (or the
     # tour_config_path traitlet). Empty string disables the override.
     tour_config_path = ""
@@ -711,6 +725,23 @@ class GetCapabilitiesHandler(APIHandler):
             "chatbook_has_guidelines": has_chatbook_guidelines(
                 ai_service_manager
             ),
+            "chatbook_execution_mode": clamp_execution_mode(
+                nbi_config.chatbook_execution_mode,
+                getattr(
+                    self,
+                    "chatbook_max_execution_mode",
+                    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                ),
+            ),
+            "chatbook_llm_danger_scan": nbi_config.chatbook_llm_danger_scan,
+            "chatbook_max_execution_mode": parse_execution_mode(
+                getattr(
+                    self,
+                    "chatbook_max_execution_mode",
+                    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                ),
+                DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+            ),
             # Single source of truth lives on each domain's base handler so
             # `_setup_handlers` only writes one site per flag.
             "allow_github_skill_import": SkillsBaseHandler.allow_github_skill_import,
@@ -774,10 +805,16 @@ class ChatbookGenerateHandler(APIHandler):
         )
         prompt = data.get("prompt") if isinstance(data, dict) else None
         code_source = data.get("code") if isinstance(data, dict) else None
-        required_value = code_source if operation == "summarize" else prompt
+        required_value = (
+            code_source
+            if operation in {"summarize", "danger_scan"}
+            else prompt
+        )
         if not str(required_value).strip():
             self.set_status(400)
-            field = "code" if operation == "summarize" else "prompt"
+            field = (
+                "code" if operation in {"summarize", "danger_scan"} else "prompt"
+            )
             self.finish(json.dumps({"error": f"{field} is required"}))
             return
         notebook_context = None
@@ -810,6 +847,15 @@ class ChatbookGenerateHandler(APIHandler):
                     ),
                 )
                 self.finish(json.dumps({"prompt": english}))
+                return
+            if operation == "danger_scan":
+                scan = await tornado.ioloop.IOLoop.current().run_in_executor(
+                    None,
+                    lambda: classify_generated_python_danger(
+                        ai_service_manager, str(code_source)
+                    ),
+                )
+                self.finish(json.dumps(scan))
                 return
             code = await tornado.ioloop.IOLoop.current().run_in_executor(
                 None,
@@ -879,6 +925,7 @@ class ChatbookMentionsHandler(APIHandler):
 class ConfigHandler(APIHandler):
     feature_policies = {}
     string_overrides = {}
+    chatbook_max_execution_mode = DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
 
     @tornado.web.authenticated
     def post(self):
@@ -896,6 +943,8 @@ class ConfigHandler(APIHandler):
             "enable_output_followup",
             "enable_output_toolbar",
             "refresh_open_files_on_disk_change",
+            "chatbook_execution_mode",
+            "chatbook_llm_danger_scan",
         ])
         # Top-level keys whose write is rejected outright when locked.
         locked_keys = set()
@@ -986,6 +1035,17 @@ class ConfigHandler(APIHandler):
                 has_acp_settings_change = (
                     value != (ai_service_manager.nbi_config.get("acp_settings") or {})
                 )
+            elif key == "chatbook_execution_mode":
+                value = clamp_execution_mode(
+                    value,
+                    getattr(
+                        self,
+                        "chatbook_max_execution_mode",
+                        DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                    ),
+                )
+            elif key == "chatbook_llm_danger_scan":
+                value = bool(value)
             ai_service_manager.nbi_config.set(key, value)
             if key == "store_github_access_token":
                 if value:
@@ -3761,6 +3821,18 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    chatbook_max_execution_mode = Unicode(
+        default_value=DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+        help="""
+        Cap how freely a user can auto-run Chatbook-generated Python.
+        Users cannot choose a more permissive NL execution mode than this
+        value. Allowed: generate-only, always-confirm, confirm-if-risky,
+        auto-run (default, no cap). Overridden by
+        NBI_CHATBOOK_MAX_EXECUTION_MODE.
+        """,
+        config=True,
+    )
+
     upload_max_mb = Int(
         default_value=_DEFAULT_UPLOAD_MAX_MB,
         help="""
@@ -3876,6 +3948,11 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.string_overrides = string_overrides
         ConfigHandler.feature_policies = feature_policies
         ConfigHandler.string_overrides = string_overrides
+        max_mode = _resolve_chatbook_max_execution_mode(
+            getattr(self, "chatbook_max_execution_mode", DEFAULT_CHATBOOK_MAX_EXECUTION_MODE)
+        )
+        GetCapabilitiesHandler.chatbook_max_execution_mode = max_mode
+        ConfigHandler.chatbook_max_execution_mode = max_mode
 
     def initialize_handlers(self):
         NotebookIntelligence.root_dir = self.serverapp.root_dir

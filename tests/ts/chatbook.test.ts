@@ -22,7 +22,13 @@ import {
   resolveChatbookPrompt,
   sha256Hex,
   switchChatbookCellMode,
-  withoutLegacyChatbookSourceView
+  withoutLegacyChatbookSourceView,
+  clampChatbookExecutionMode,
+  chatbookCanConfirmRun,
+  chatbookExecutionModeSummary,
+  chatbookNeedsConfirm,
+  parseChatbookExecutionMode,
+  CHATBOOK_EXECUTION_MODES
 } from '../../src/chatbook-core';
 
 describe('chatbook-core', () => {
@@ -313,6 +319,7 @@ describe('chatbook-core', () => {
       prompt: '',
       promptHash: '',
       executeMode: 'python',
+      pythonSource: 'value = 42',
       cellMeta: {
         mode: 'python',
         generatedCode: 'value = 42',
@@ -320,6 +327,7 @@ describe('chatbook-core', () => {
       }
     });
     expect(meta.executeMode).toBe('python');
+    expect(meta.pythonSource).toBe('value = 42');
     expect(meta.cachedCode).toBeUndefined();
   });
 
@@ -378,5 +386,49 @@ describe('chatbook-core', () => {
     expect(digest).toBe(
       '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
     );
+  });
+
+  it('clamps execution modes and decides when to confirm', () => {
+    expect(parseChatbookExecutionMode('nope')).toBe('always-confirm');
+    expect(clampChatbookExecutionMode('auto-run', 'always-confirm')).toBe(
+      'always-confirm'
+    );
+    expect(chatbookCanConfirmRun('generate-only')).toBe(false);
+    expect(chatbookNeedsConfirm('always-confirm', 'clean')).toBe(true);
+    expect(chatbookNeedsConfirm('confirm-if-risky', 'clean')).toBe(false);
+    expect(chatbookNeedsConfirm('confirm-if-risky', 'risky')).toBe(true);
+    expect(
+      chatbookNeedsConfirm('always-confirm', 'risky', {
+        alreadyExecutedThisSession: true
+      })
+    ).toBe(false);
+    expect(
+      chatbookNeedsConfirm('generate-only', 'clean', {
+        alreadyExecutedThisSession: true
+      })
+    ).toBe(true);
+  });
+
+  it('sends the NL execution policy with generate metadata', () => {
+    const meta = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: 'plot',
+      promptHash: 'aaa',
+      executionPolicy: 'always-confirm',
+      llmDangerScan: true,
+      cellMeta: {}
+    });
+    expect(meta.executionPolicy).toBe('always-confirm');
+    expect(meta.llmDangerScan).toBe(true);
+    expect(meta.executeMode).toBe('prompt');
+  });
+
+  it('summarizes every execution mode for the confirm bar', () => {
+    for (const mode of CHATBOOK_EXECUTION_MODES) {
+      expect(chatbookExecutionModeSummary(mode)).toMatch(
+        /^Chatbook is set to /
+      );
+    }
+    expect(chatbookExecutionModeSummary('confirm-if-risky')).toContain('risk');
   });
 });

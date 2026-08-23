@@ -30,11 +30,6 @@ class NBIClient:
         prompt_hash: str = "",
         context_hash: str = "",
     ) -> dict:
-        url = resolve_generate_url(generate_url)
-        token = jupyter_api_token()
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"token {token}"
         payload: dict = {"prompt": prompt}
         if notebook_context:
             payload["notebookContext"] = notebook_context
@@ -46,6 +41,32 @@ class NBIClient:
             payload["promptHash"] = prompt_hash
         if context_hash:
             payload["contextHash"] = context_hash
+        return self._post(payload, generate_url=generate_url, timeout=timeout)
+
+    def danger_scan(self, code: str, generate_url: str = "", timeout: float = 20.0) -> dict:
+        rec = self._post(
+            {"operation": "danger_scan", "code": code},
+            generate_url=generate_url,
+            timeout=timeout,
+        )
+        level = rec.get("level") or rec.get("dangerLevel") or "risky"
+        reasons = rec.get("reasons") or rec.get("dangerReasons") or []
+        if not isinstance(reasons, list):
+            reasons = [str(reasons)]
+        if level not in {"clean", "risky"}:
+            level = "risky"
+            reasons = list(reasons) + ["Danger classifier returned an invalid level"]
+        return {
+            "level": level,
+            "reasons": [str(item) for item in reasons if str(item).strip()],
+        }
+
+    def _post(self, payload: dict, generate_url: str = "", timeout: float = 600.0) -> dict:
+        url = resolve_generate_url(generate_url)
+        token = jupyter_api_token()
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"token {token}"
         req = Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

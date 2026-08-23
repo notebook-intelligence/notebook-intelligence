@@ -32,7 +32,12 @@ import {
   splitNotebookContext,
   switchChatbookCellMode,
   withoutLegacyChatbookSourceView,
+  chatbookCanConfirmRun,
+  chatbookExecutionModeSummary,
+  chatbookNeedsConfirm,
   type ChatbookCellMode,
+  type ChatbookDangerLevel,
+  type ChatbookExecutionMode,
   type IChatbookCellMeta,
   type IChatbookNotebookContext
 } from './chatbook-core';
@@ -53,6 +58,26 @@ export {
 } from './chatbook-core';
 
 let codeCellExecutePatched = false;
+const executedPromptByCell = new WeakMap<object, string>();
+const pendingConfirmByCell = new WeakMap<object, IChatbookPendingConfirm>();
+let openChatbookSettings: (() => void) | undefined;
+
+interface IChatbookPendingConfirm {
+  code: string;
+  prompt: string;
+  promptHash: string;
+  reasons: string[];
+  mode: ChatbookExecutionMode;
+}
+
+function nbiChatbookFromMetadata(
+  metadata?: JSONObject
+): Record<string, unknown> {
+  const value = metadata?.nbi_chatbook;
+  return value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
 export function isChatbookSession(
   sessionContext: ISessionContext | null | undefined
@@ -119,14 +144,22 @@ export function patchCodeCellExecute(): void {
     const notebook = cell.parent?.parent as NotebookPanel | undefined;
     const source = cell.model.sharedModel.getSource();
     const mode = getChatbookCellMode(cellMeta);
-    if (mode === 'python') {
-      const python = resolveChatbookPython(source, cellMeta);
-      writeChatbookCellMeta(cell, {
-        mode: 'python',
-        origin: getChatbookCellOrigin(cellMeta),
-        pythonSource: python,
-        generatedCode: python
-      });
+    const incoming = nbiChatbookFromMetadata(metadata);
+    const forcePython = incoming.executeMode === 'python';
+    if (mode === 'python' || forcePython) {
+      const python = forcePython
+        ? String(
+            incoming.pythonSource || resolveChatbookPython(source, cellMeta)
+          )
+        : resolveChatbookPython(source, cellMeta);
+      if (mode === 'python') {
+        writeChatbookCellMeta(cell, {
+          mode: 'python',
+          origin: getChatbookCellOrigin(cellMeta),
+          pythonSource: python,
+          generatedCode: python
+        });
+      }
       const execution = await original(cell, sessionContext, {
         ...(metadata || {}),
         cellId:
@@ -134,17 +167,24 @@ export function patchCodeCellExecute(): void {
           cell.model.id,
         nbi_chatbook: {
           cellId: cell.model.id,
-          executeMode: 'python'
+          executeMode: 'python',
+          pythonSource: python
         }
       });
       const status = (
         execution as unknown as { content?: { status?: string } } | undefined
       )?.content?.status;
-      // A run is the only moment we write the English side of a Python cell,
-      // and only when the cell has none yet.
-      if (status !== 'error') {
+      if (mode === 'python' && status !== 'error') {
         void summarizePythonCell(cell, python);
       }
+      if (status !== 'error') {
+        const promptHash =
+          getChatbookCellMeta(cell.model.metadata).promptHash || '';
+        if (promptHash) {
+          executedPromptByCell.set(cell.model, promptHash);
+        }
+      }
+      hideChatbookConfirmBar(cell);
       return execution;
     }
     const prompt = resolveChatbookPrompt(source, cellMeta);
@@ -152,9 +192,22 @@ export function patchCodeCellExecute(): void {
       prompt,
       origin: getChatbookCellOrigin(cellMeta)
     });
+    const promptHash = await sha256Hex(prompt);
+    const executionMode = NBIAPI.config.chatbookExecutionMode;
+    const alreadyExecuted = executedPromptByCell.get(cell.model) === promptHash;
+    const cachedPython = getChatbookCellMeta(cell.model.metadata).generatedCode;
+    if (alreadyExecuted && executionMode !== 'generate-only' && cachedPython) {
+      return CodeCell.execute(cell, sessionContext, {
+        ...(metadata || {}),
+        nbi_chatbook: {
+          cellId: cell.model.id,
+          executeMode: 'python',
+          pythonSource: cachedPython
+        }
+      });
+    }
     const notebookContext = snapshotNotebookContext(notebook, cell);
     const notebookPath = notebook?.context.path || '';
-    const promptHash = await sha256Hex(prompt);
     const contextHash = notebookContext
       ? await sha256Hex(JSON.stringify({ notebookPath, notebookContext }))
       : undefined;
@@ -168,6 +221,8 @@ export function patchCodeCellExecute(): void {
       notebookPath,
       notebookContext,
       contextHash,
+      executionPolicy: executionMode,
+      llmDangerScan: NBIAPI.config.chatbookLlmDangerScan,
       allowCachedCode:
         !NBIAPI.config.chatbookHasContextProviders &&
         !NBIAPI.config.chatbookHasGuidelines &&
@@ -308,8 +363,10 @@ export function toggleAllChatbookCellModes(
 }
 
 export function attachChatbookNotebooks(
-  tracker: INotebookTracker
+  tracker: INotebookTracker,
+  options: { onOpenSettings?: () => void } = {}
 ): IDisposable {
+  openChatbookSettings = options.onOpenSettings;
   const attached = new WeakSet<NotebookPanel>();
 
   const attach = (panel: NotebookPanel) => {
@@ -396,6 +453,7 @@ export function attachChatbookNotebooks(
           badgeHost.appendChild(button);
         }
       }
+      syncChatbookConfirmBars(panel);
     };
     const onAnyMessage = (
       _sender: Kernel.IKernelConnection,
@@ -521,6 +579,17 @@ function applyChatbookPayload(
       return;
     }
     writeChatbookCellMeta(cell, patch);
+    maybeShowChatbookConfirm(panel, cell, {
+      code: generatedCode,
+      promptHash: String(content.promptHash || ''),
+      reasons: Array.isArray(content.dangerReasons)
+        ? content.dangerReasons.map(item => String(item)).filter(Boolean)
+        : [],
+      level:
+        content.dangerLevel === 'risky'
+          ? 'risky'
+          : ('clean' as ChatbookDangerLevel)
+    });
   }
 }
 
@@ -544,6 +613,203 @@ function writeChatbookCellMeta(
   if (merged.nbi) {
     cell.model.setMetadata('nbi', merged.nbi);
   }
+}
+
+function maybeShowChatbookConfirm(
+  panel: NotebookPanel,
+  cell: {
+    model: {
+      id: string;
+      metadata: unknown;
+      sharedModel: { getSource: () => string };
+    };
+    node: HTMLElement;
+  },
+  options: {
+    code: string;
+    promptHash: string;
+    reasons: string[];
+    level: ChatbookDangerLevel;
+  }
+): void {
+  const mode = NBIAPI.config.chatbookExecutionMode;
+  const prompt = cell.model.sharedModel.getSource();
+  if (
+    !chatbookNeedsConfirm(mode, options.level, {
+      alreadyExecutedThisSession:
+        executedPromptByCell.get(cell.model) === options.promptHash
+    })
+  ) {
+    if (mode !== 'generate-only') {
+      executedPromptByCell.set(cell.model, options.promptHash);
+    }
+    hideChatbookConfirmBar(cell);
+    return;
+  }
+  pendingConfirmByCell.set(cell.model, {
+    code: options.code,
+    prompt,
+    promptHash: options.promptHash,
+    reasons: options.reasons,
+    mode
+  });
+  renderChatbookConfirmBar(panel, cell);
+}
+
+function syncChatbookConfirmBars(panel: NotebookPanel): void {
+  for (const widget of panel.content.widgets) {
+    if (widget.model.type !== 'code') {
+      continue;
+    }
+    const pending = pendingConfirmByCell.get(widget.model);
+    if (
+      !pending ||
+      getChatbookCellMode(getChatbookCellMeta(widget.model.metadata)) ===
+        'python'
+    ) {
+      hideChatbookConfirmBar(widget);
+      continue;
+    }
+    if (widget.model.sharedModel.getSource() !== pending.prompt) {
+      pendingConfirmByCell.delete(widget.model);
+      hideChatbookConfirmBar(widget);
+      continue;
+    }
+    renderChatbookConfirmBar(panel, widget);
+  }
+}
+
+function hideChatbookConfirmBar(cell: {
+  node: HTMLElement;
+  model?: object;
+}): void {
+  cell.node.querySelector('.nbi-chatbook-confirm')?.remove();
+  if (cell.model) {
+    pendingConfirmByCell.delete(cell.model);
+  }
+}
+
+function renderChatbookConfirmBar(
+  panel: NotebookPanel,
+  cell: {
+    node: HTMLElement;
+    model: { id: string; sharedModel: { getSource: () => string } };
+  }
+): void {
+  const pending = pendingConfirmByCell.get(cell.model);
+  if (!pending) {
+    hideChatbookConfirmBar(cell);
+    return;
+  }
+  const existing = cell.node.querySelector(
+    '.nbi-chatbook-confirm'
+  ) as HTMLElement | null;
+  const signature = chatbookConfirmSignature(pending);
+  if (existing) {
+    // Both `contentChanged` and `activeCellChanged` land here, and the second
+    // one fires while the pointer is still down on Run. Rebuilding the bar at
+    // that point destroys the button before it sees the click, which costs the
+    // user a second click, so an unchanged bar is left in place.
+    if (existing.dataset.nbiConfirmSignature === signature) {
+      return;
+    }
+    existing.remove();
+  }
+  const bar = document.createElement('div');
+  bar.className = 'nbi-chatbook-confirm';
+  bar.dataset.nbiConfirmSignature = signature;
+  const input = cell.node.querySelector('.jp-Cell-inputWrapper');
+  if (input?.parentElement) {
+    input.parentElement.insertBefore(bar, input.nextSibling);
+  } else {
+    cell.node.appendChild(bar);
+  }
+  const canRun = chatbookCanConfirmRun(pending.mode);
+  const reasons = pending.reasons.length
+    ? `<ul class="nbi-chatbook-confirm-reasons">${pending.reasons
+        .map(reason => `<li>${escapeChatbookHtml(reason)}</li>`)
+        .join('')}</ul>`
+    : '';
+  const title = canRun
+    ? 'Review generated Python before running it in this kernel.'
+    : 'Generated Python is stored. Switch the cell to Py to run it.';
+  bar.innerHTML = `
+    <div class="nbi-chatbook-confirm-header">${escapeChatbookHtml(title)}</div>
+    <pre class="nbi-chatbook-confirm-code">${escapeChatbookHtml(pending.code)}</pre>
+    ${reasons}
+    <div class="nbi-chatbook-confirm-footer">
+      <div class="nbi-chatbook-confirm-actions"></div>
+      <div class="nbi-chatbook-confirm-hint">
+        <span>${escapeChatbookHtml(chatbookExecutionModeSummary(pending.mode))}</span>
+      </div>
+    </div>
+  `;
+  const actions = bar.querySelector(
+    '.nbi-chatbook-confirm-actions'
+  ) as HTMLElement;
+  if (canRun) {
+    const run = document.createElement('button');
+    run.type = 'button';
+    run.className = 'jp-mod-styled jp-mod-accept nbi-chatbook-confirm-run';
+    run.textContent = 'Run';
+    run.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const current = pendingConfirmByCell.get(cell.model);
+      hideChatbookConfirmBar(cell);
+      if (!current) {
+        return;
+      }
+      void CodeCell.execute(cell as unknown as CodeCell, panel.sessionContext, {
+        nbi_chatbook: {
+          cellId: cell.model.id,
+          executeMode: 'python',
+          pythonSource: current.code
+        }
+      } as JSONObject);
+    });
+    actions.appendChild(run);
+  }
+  const discard = document.createElement('button');
+  discard.type = 'button';
+  discard.className = 'jp-mod-styled nbi-chatbook-confirm-discard';
+  discard.textContent = canRun ? "Don't run" : 'Dismiss';
+  discard.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    hideChatbookConfirmBar(cell);
+  });
+  actions.appendChild(discard);
+  const hint = bar.querySelector('.nbi-chatbook-confirm-hint') as HTMLElement;
+  const settingsLink = document.createElement('button');
+  settingsLink.type = 'button';
+  settingsLink.className = 'nbi-chatbook-confirm-settings-link';
+  settingsLink.textContent = 'Change in NBI Settings';
+  settingsLink.title =
+    'Open the Chatbook tab of Notebook Intelligence Settings';
+  settingsLink.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    openChatbookSettings?.();
+  });
+  hint.appendChild(settingsLink);
+}
+
+function chatbookConfirmSignature(pending: IChatbookPendingConfirm): string {
+  return JSON.stringify([
+    pending.mode,
+    pending.promptHash,
+    pending.code,
+    pending.reasons
+  ]);
+}
+
+function escapeChatbookHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function forEachCodeCell(

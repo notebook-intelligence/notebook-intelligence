@@ -35,7 +35,8 @@ instructions.
 
 Durable conventions belong in the ruleset (`~/.jupyter/nbi/rules/` and optional
 `modes/chatbook/`) or project `AGENTS.md`, not in a context provider. See
-[`rulesets.md`](rulesets.md).
+[`rulesets.md`](rulesets.md). Execution policy (confirm before running generated
+Python) is configured in Settings → Chatbook; see [`chatbook.md`](chatbook.md).
 
 ## Mention providers
 

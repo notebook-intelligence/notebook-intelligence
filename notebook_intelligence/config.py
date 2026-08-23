@@ -18,6 +18,10 @@ from notebook_intelligence.feature_flags import (
     apply_claude_policies,
     apply_string_overrides,
 )
+from notebook_intelligence.chatbook_kernel.execution import (
+    DEFAULT_CHATBOOK_EXECUTION_MODE,
+    parse_execution_mode,
+)
 
 log = logging.getLogger(__name__)
 
@@ -221,6 +225,16 @@ class NBIConfig:
     def refresh_open_files_on_disk_change(self) -> bool:
         """User preference for the open-files refresh watcher (default on)."""
         return bool(self.get('refresh_open_files_on_disk_change', True))
+
+    @property
+    def chatbook_execution_mode(self) -> str:
+        return parse_execution_mode(
+            self.get('chatbook_execution_mode', DEFAULT_CHATBOOK_EXECUTION_MODE)
+        )
+
+    @property
+    def chatbook_llm_danger_scan(self) -> bool:
+        return bool(self.get('chatbook_llm_danger_scan', False))
 
     @property
     def rules_directory(self) -> str:

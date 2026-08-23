@@ -6,6 +6,94 @@ export const CHATBOOK_LANGUAGE = 'chatbook';
 
 export type ChatbookCellMode = 'prompt' | 'python';
 export type ChatbookConvertTargetId = 'python';
+export type ChatbookExecutionMode =
+  | 'generate-only'
+  | 'always-confirm'
+  | 'confirm-if-risky'
+  | 'auto-run';
+export type ChatbookDangerLevel = 'clean' | 'risky';
+
+export const CHATBOOK_EXECUTION_MODES: readonly ChatbookExecutionMode[] = [
+  'generate-only',
+  'always-confirm',
+  'confirm-if-risky',
+  'auto-run'
+];
+export const DEFAULT_CHATBOOK_EXECUTION_MODE: ChatbookExecutionMode =
+  'always-confirm';
+export const DEFAULT_CHATBOOK_MAX_EXECUTION_MODE: ChatbookExecutionMode =
+  'auto-run';
+
+const CHATBOOK_EXECUTION_MODE_RANK: Record<ChatbookExecutionMode, number> = {
+  'generate-only': 0,
+  'always-confirm': 1,
+  'confirm-if-risky': 2,
+  'auto-run': 3
+};
+
+export function parseChatbookExecutionMode(
+  value: unknown,
+  fallback: ChatbookExecutionMode = DEFAULT_CHATBOOK_EXECUTION_MODE
+): ChatbookExecutionMode {
+  return CHATBOOK_EXECUTION_MODES.includes(value as ChatbookExecutionMode)
+    ? (value as ChatbookExecutionMode)
+    : fallback;
+}
+
+export function clampChatbookExecutionMode(
+  mode: unknown,
+  maxMode: unknown
+): ChatbookExecutionMode {
+  const chosen = parseChatbookExecutionMode(mode);
+  const cap = parseChatbookExecutionMode(
+    maxMode,
+    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+  );
+  return CHATBOOK_EXECUTION_MODE_RANK[chosen] >
+    CHATBOOK_EXECUTION_MODE_RANK[cap]
+    ? cap
+    : chosen;
+}
+
+export function chatbookNeedsConfirm(
+  mode: ChatbookExecutionMode,
+  scanLevel: ChatbookDangerLevel,
+  options: { alreadyExecutedThisSession?: boolean } = {}
+): boolean {
+  if (options.alreadyExecutedThisSession && mode !== 'generate-only') {
+    return false;
+  }
+  if (mode === 'always-confirm' || mode === 'generate-only') {
+    return true;
+  }
+  if (mode === 'confirm-if-risky') {
+    return scanLevel !== 'clean';
+  }
+  return false;
+}
+
+export function chatbookCanConfirmRun(mode: ChatbookExecutionMode): boolean {
+  return mode !== 'generate-only';
+}
+
+const CHATBOOK_EXECUTION_MODE_SUMMARIES: Record<ChatbookExecutionMode, string> =
+  {
+    'generate-only': 'Chatbook is set to generate Python without running it.',
+    'always-confirm': 'Chatbook is set to confirm every natural-language run.',
+    'confirm-if-risky':
+      'Chatbook is set to confirm only when the scan flags a risk.',
+    'auto-run': 'Chatbook is set to run generated Python immediately.'
+  };
+
+/**
+ * One-line reminder of the mode that produced a confirmation, so the bar can
+ * point at the setting behind it.
+ */
+export function chatbookExecutionModeSummary(
+  mode: ChatbookExecutionMode
+): string {
+  return CHATBOOK_EXECUTION_MODE_SUMMARIES[mode];
+}
 
 export const CHATBOOK_CONTEXT_MAX_FIELD_CHARS = 8000;
 export const CHATBOOK_CONTEXT_MAX_OUTPUT_CHARS = 4000;
@@ -76,6 +164,9 @@ export interface IChatbookExecuteMeta {
   workingDir?: string;
   notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
+  pythonSource?: string;
+  executionPolicy?: ChatbookExecutionMode;
+  llmDangerScan?: boolean;
 }
 
 export function isChatbookKernelName(name: string | undefined | null): boolean {
@@ -535,6 +626,9 @@ export function buildExecuteChatbookMeta(options: {
   contextHash?: string;
   executeMode?: ChatbookCellMode;
   allowCachedCode?: boolean;
+  pythonSource?: string;
+  executionPolicy?: ChatbookExecutionMode;
+  llmDangerScan?: boolean;
 }): IChatbookExecuteMeta {
   const meta: IChatbookExecuteMeta = {
     cellId: options.cellId,
@@ -542,7 +636,16 @@ export function buildExecuteChatbookMeta(options: {
     executeMode: options.executeMode || 'prompt'
   };
   if (meta.executeMode === 'python') {
+    if (options.pythonSource) {
+      meta.pythonSource = options.pythonSource;
+    }
     return meta;
+  }
+  if (options.executionPolicy) {
+    meta.executionPolicy = options.executionPolicy;
+  }
+  if (options.llmDangerScan) {
+    meta.llmDangerScan = true;
   }
   // The stored Python belongs to the prompt that produced it, so re-running an
   // unchanged prompt reuses it. Notebook context deliberately does not count:

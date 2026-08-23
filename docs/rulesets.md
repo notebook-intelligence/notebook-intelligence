@@ -114,4 +114,4 @@ export NBI_RULES_AUTO_RELOAD=true    # default
 
 - Use `priority` to break ties when multiple rules cover the same topic. Lower number wins.
 - Keep individual rules short and focused. The LLM benefits more from five concise rules than one sprawling one.
-- For machine-generated rules (e.g., committed to a project repo), set `apply: manual` so users must explicitly enable them in the Rules tab.
+- Chatbook natural-language **execution** (confirm before running generated Python) is a Settings → Chatbook control, not a rule. See [`chatbook.md`](chatbook.md).

@@ -966,7 +966,13 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     registerChatbookLanguage(languageRegistry);
     patchCodeCellExecute();
-    attachChatbookNotebooks(notebookTracker);
+    attachChatbookNotebooks(notebookTracker, {
+      onOpenSettings: () => {
+        void app.commands.execute(CommandIDs.openConfigurationDialog, {
+          tab: 'chatbook'
+        });
+      }
+    });
 
     if (terminalTracker) {
       attachTerminalDragDrop({
@@ -2228,8 +2234,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     app.commands.addCommand(CommandIDs.openConfigurationDialog, {
       label: 'Notebook Intelligence Settings',
       execute: args => {
+        const tab = typeof args?.tab === 'string' ? args.tab : undefined;
         if (settingsWidget.isDisposed) {
           settingsWidget = createNewSettingsWidget();
+        }
+        if (tab) {
+          settingsWidget.content.selectTab(tab);
         }
         if (!settingsWidget.isAttached) {
           app.shell.add(settingsWidget, 'main');

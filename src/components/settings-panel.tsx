@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ReactWidget } from '@jupyterlab/apputils';
+import { ISignal, Signal } from '@lumino/signaling';
 import { VscWarning } from '../icons';
 import * as path from 'path';
 
@@ -25,6 +26,11 @@ import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
 import { writeTextToClipboard } from '../utils';
+import {
+  CHATBOOK_EXECUTION_MODES,
+  clampChatbookExecutionMode,
+  type ChatbookExecutionMode
+} from '../chatbook-core';
 
 const lockedTip = (locked: boolean): string =>
   locked ? 'Locked by your administrator' : '';
@@ -108,11 +114,22 @@ export class SettingsPanel extends ReactWidget {
   constructor(options: {
     onSave: () => void;
     onEditMCPConfigClicked: () => void;
+    initialTab?: string;
   }) {
     super();
 
     this._onSave = options.onSave;
     this._onEditMCPConfigClicked = options.onEditMCPConfigClicked;
+    this._activeTab = options.initialTab ?? 'general';
+  }
+
+  /**
+   * Deep link into a section. The signal covers a panel that is already
+   * mounted; `_activeTab` covers one that mounts right after this call.
+   */
+  selectTab(tab: string): void {
+    this._activeTab = tab;
+    this._tabRequested.emit(tab);
   }
 
   render(): JSX.Element {
@@ -120,12 +137,16 @@ export class SettingsPanel extends ReactWidget {
       <SettingsPanelComponent
         onSave={this._onSave}
         onEditMCPConfigClicked={this._onEditMCPConfigClicked}
+        initialTab={this._activeTab}
+        tabRequested={this._tabRequested}
       />
     );
   }
 
   private _onSave: () => void;
   private _onEditMCPConfigClicked: () => void;
+  private _activeTab: string;
+  private _tabRequested = new Signal<this, string>(this);
 }
 
 // Tab declaration. Adding a new tab is one entry here plus an icon
@@ -156,6 +177,12 @@ const TABS: TabSpec[] = [
         onEditMCPConfigClicked={props.onEditMCPConfigClicked}
       />
     )
+  },
+  {
+    id: 'chatbook',
+    label: 'Chatbook',
+    visible: () => true,
+    render: () => <SettingsPanelComponentChatbook />
   },
   {
     id: 'claude',
@@ -226,7 +253,7 @@ const TABS: TabSpec[] = [
 ];
 
 function SettingsPanelComponent(props: any) {
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState(props.initialTab || 'general');
   const { featurePolicies } = useNbiPolicies();
   const [isInClaudeCodeMode, setIsInClaudeCodeMode] = useState(
     NBIAPI.config.isInClaudeCodeMode
@@ -245,6 +272,20 @@ function SettingsPanelComponent(props: any) {
       NBIAPI.configChanged.disconnect(handler);
     };
   }, []);
+
+  useEffect(() => {
+    const requested: ISignal<unknown, string> | undefined = props.tabRequested;
+    if (!requested) {
+      return;
+    }
+    const handler = (_sender: unknown, tab: string) => {
+      setActiveTab(tab);
+    };
+    requested.connect(handler);
+    return () => {
+      requested.disconnect(handler);
+    };
+  }, [props.tabRequested]);
 
   const ctx: TabVisibilityContext = {
     featurePolicies,
@@ -1179,6 +1220,134 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CHATBOOK_MODE_LABELS: Record<
+  ChatbookExecutionMode,
+  { title: string; description: string }
+> = {
+  'generate-only': {
+    title: 'Generate only',
+    description:
+      'Create Python from the prompt. Natural-language Run never executes it — switch the cell to Py to run.'
+  },
+  'always-confirm': {
+    title: 'Always confirm',
+    description:
+      "Show the generated Python and wait for Run or Don't run on every natural-language Run."
+  },
+  'confirm-if-risky': {
+    title: 'Confirm if risky',
+    description:
+      'Auto-run when a static scan looks clean. Confirm when the scan flags shell, files, network, installs, or cannot parse the cell.'
+  },
+  'auto-run': {
+    title: 'Auto-run',
+    description:
+      'Generate and execute immediately, same as a normal notebook cell. Inspect Python afterward if you need to.'
+  }
+};
+
+function SettingsPanelComponentChatbook() {
+  const nbiConfig = NBIAPI.config;
+  const maxMode = nbiConfig.chatbookMaxExecutionMode;
+  const [executionMode, setExecutionMode] = useState<ChatbookExecutionMode>(
+    nbiConfig.chatbookExecutionMode
+  );
+  const [llmDangerScan, setLlmDangerScan] = useState(
+    nbiConfig.chatbookLlmDangerScan
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      setExecutionMode(NBIAPI.config.chatbookExecutionMode);
+      setLlmDangerScan(NBIAPI.config.chatbookLlmDangerScan);
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
+  }, []);
+
+  const save = (
+    nextMode: ChatbookExecutionMode,
+    nextLlm: boolean = llmDangerScan
+  ) => {
+    const mode = clampChatbookExecutionMode(nextMode, maxMode);
+    setExecutionMode(mode);
+    setLlmDangerScan(nextLlm);
+    NBIAPI.setConfig({
+      chatbook_execution_mode: mode,
+      chatbook_llm_danger_scan: nextLlm
+    });
+  };
+
+  return (
+    <div className="config-dialog">
+      <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Natural-language execution
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                Chatbook generates Python and runs it in this notebook&apos;s
+                kernel. That process has the same privileges as any Jupyter
+                kernel: files, network, environment variables, and package
+                installs. JupyterHub or a container can isolate the whole
+                kernel; there is no per-cell sandbox.
+              </span>
+            </div>
+            <fieldset className="nbi-chatbook-execution-modes">
+              <legend className="nbi-sr-only">Execution mode</legend>
+              {CHATBOOK_EXECUTION_MODES.map(mode => {
+                const spec = CHATBOOK_MODE_LABELS[mode];
+                const disabled =
+                  clampChatbookExecutionMode(mode, maxMode) !== mode;
+                return (
+                  <label
+                    key={mode}
+                    className="nbi-chatbook-execution-mode"
+                    title={
+                      disabled
+                        ? 'Locked by your administrator'
+                        : spec.description
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="chatbook-execution-mode"
+                      value={mode}
+                      checked={executionMode === mode}
+                      disabled={disabled}
+                      onChange={() => save(mode)}
+                    />
+                    <span>
+                      <strong>{spec.title}</strong>
+                      <span className="nbi-chatbook-execution-mode-help">
+                        {spec.description}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            {executionMode === 'confirm-if-risky' && (
+              <div className="model-config-section-row">
+                <CheckBoxItem
+                  label="Also classify with the chat model"
+                  title="Optional extra check. A static scan hit always wins; the model can only raise risk. Classifier failures confirm instead of auto-running."
+                  checked={llmDangerScan}
+                  onClick={() => save(executionMode, !llmDangerScan)}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

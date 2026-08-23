@@ -223,6 +223,14 @@ Most settings panel toggles can be locked by org administrators. Two shapes:
 | `NBI_TERMINAL_DRAG_DROP_POLICY`                | Terminal drag-drop file attach feature                                                                                                                                                                                       |
 | `NBI_REFRESH_OPEN_FILES_ON_DISK_CHANGE_POLICY` | "Refresh open files when changed on disk"                                                                                                                                                                                    |
 
+Chatbook NL execution is capped separately (not a boolean policy):
+
+| Env var / traitlet                | Effect                                                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NBI_CHATBOOK_MAX_EXECUTION_MODE` | Users cannot choose a more permissive Chatbook mode than this. Values: `generate-only`, `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). |
+
+The matching traitlet is `c.NotebookIntelligence.chatbook_max_execution_mode`. See [`docs/chatbook.md`](docs/chatbook.md).
+
 The first three also have matching traitlets on `NotebookIntelligence` (`explain_error_policy`, `output_followup_policy`, `output_toolbar_policy`); add the others as needed in the same shape:
 
 ```python
@@ -427,6 +435,7 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 - [`docs/admin-guide.md`](docs/admin-guide.md) — deployment, env vars, security model, air-gap, multi-tenancy.
 - [`docs/skills.md`](docs/skills.md) — Claude Skills management and the org-manifest reconciler.
 - [`docs/rulesets.md`](docs/rulesets.md) — ruleset frontmatter and discovery.
+- [`docs/chatbook.md`](docs/chatbook.md) — Chatbook execution modes and why there is no per-cell sandbox.
 - [`docs/chatbook-extensions.md`](docs/chatbook-extensions.md) — dynamic Chatbook context and mention providers.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems with copy-pasteable fixes.
 - [`PRIVACY.md`](PRIVACY.md) — what NBI sends to which provider, and the egress allowlist.
