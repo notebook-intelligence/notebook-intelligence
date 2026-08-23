@@ -102,8 +102,6 @@ export interface IChatbookCellMeta {
   codeHash?: string;
   summaryError?: string;
   contextHash?: string;
-  nuiSessionId?: string;
-  nuiRunId?: string;
   generatedAt?: string;
   cacheHit?: boolean;
 }
@@ -122,10 +120,6 @@ export interface IChatbookNotebookContext {
   prefix: IChatbookContextCell[];
   current: IChatbookContextCell;
   suffix: IChatbookContextCell[];
-}
-
-export interface INotebookChatbookMeta {
-  nuiSessionId?: string;
 }
 
 export interface IChatbookConvertTarget {
@@ -238,30 +232,6 @@ export function mergeChatbookCellMeta(
   return current;
 }
 
-export function getNotebookChatbookMeta(
-  notebookMetadata: unknown
-): INotebookChatbookMeta {
-  if (!notebookMetadata || typeof notebookMetadata !== 'object') {
-    return {};
-  }
-  const nbi = (
-    notebookMetadata as { nbi?: { chatbook?: INotebookChatbookMeta } }
-  ).nbi;
-  const chatbook = nbi?.chatbook;
-  if (!chatbook || typeof chatbook !== 'object') {
-    return {};
-  }
-  const meta: INotebookChatbookMeta = {};
-  if (typeof chatbook.nuiSessionId === 'string') {
-    meta.nuiSessionId = chatbook.nuiSessionId;
-  }
-  return meta;
-}
-
-export function getNotebookNuiSessionId(notebookMetadata: unknown): string {
-  return (getNotebookChatbookMeta(notebookMetadata).nuiSessionId ?? '').trim();
-}
-
 /**
  * Notebooks written before cell mode became the only state carry a notebook-wide
  * `sourceView`; in `code` view their prompt cells hold generated Python.
@@ -295,34 +265,6 @@ export function withoutLegacyChatbookSourceView(
   nbi.chatbook = chatbook;
   current.nbi = nbi;
   return current;
-}
-
-export function mergeNotebookChatbookMeta(
-  notebookMetadata: unknown,
-  patch: INotebookChatbookMeta
-): Record<string, unknown> {
-  const current =
-    notebookMetadata && typeof notebookMetadata === 'object'
-      ? { ...(notebookMetadata as Record<string, unknown>) }
-      : {};
-  const nbi =
-    current.nbi && typeof current.nbi === 'object'
-      ? { ...(current.nbi as Record<string, unknown>) }
-      : {};
-  const chatbook = {
-    ...getNotebookChatbookMeta(current),
-    ...patch
-  };
-  nbi.chatbook = chatbook;
-  current.nbi = nbi;
-  return current;
-}
-
-export function mergeNotebookNuiSessionId(
-  notebookMetadata: unknown,
-  nuiSessionId: string
-): Record<string, unknown> {
-  return mergeNotebookChatbookMeta(notebookMetadata, { nuiSessionId });
 }
 
 export function isChatbookConvertTargetId(

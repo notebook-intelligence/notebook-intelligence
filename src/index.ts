@@ -1413,7 +1413,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     app.commands.addCommand(CommandIDs.showChatbookGeneratedCode, {
       label: 'Show generated code',
-      caption: 'Show the hidden Python nui generated for this Chatbook cell',
+      caption: 'Show the hidden Python code generated for this Chatbook cell',
       isEnabled: () => {
         const current = app.shell.currentWidget;
         if (!(current instanceof NotebookPanel)) {

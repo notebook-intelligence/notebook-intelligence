@@ -1,6 +1,6 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-"""Generate Chatbook cell Python using the NBI chat model (not nui)."""
+"""Generate Chatbook cell Python using the NBI chat model."""
 
 from __future__ import annotations
 

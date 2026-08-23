@@ -16,7 +16,6 @@ import {
   isChatbookKernelName,
   isChatbookPromptInlineCompletion,
   mergeChatbookCellMeta,
-  mergeNotebookNuiSessionId,
   promptAsHashComment,
   pythonExportNotebookPath,
   resolveChatbookPrompt,
@@ -176,11 +175,6 @@ describe('chatbook-core', () => {
     const chatbook = (merged.nbi as any).chatbook;
     expect('summaryError' in chatbook).toBe(false);
     expect(chatbook.prompt).toBe('plot sales');
-  });
-
-  it('stores nui session id on the notebook', () => {
-    const merged = mergeNotebookNuiSessionId({}, 'sess-1');
-    expect((merged.nbi as any).chatbook.nuiSessionId).toBe('sess-1');
   });
 
   it('drops the notebook-wide source view left by older notebooks', () => {
