@@ -38,6 +38,11 @@ The active document is the source code the user is looking at right now.
 You can only give one reply for each conversation turn.
 """
 
+INLINE_CHAT_SYSTEM_PROMPT = """You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_instruction} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."""
+
+INLINE_CHAT_EXISTING_CODE_INSTRUCTION = " Update the existing code section and return a modified version. Don't just return the update, recreate the existing code section with the update."
+
+
 class Prompts:
     @staticmethod
     def generic_chat_prompt(model_provider: str, model_name: str) -> str:
@@ -46,3 +51,18 @@ class Prompts:
     @staticmethod
     def github_copilot_chat_prompt(model_provider: str, model_name: str) -> str:
         return CHAT_SYSTEM_PROMPT.format(AI_ASSISTANT_NAME="GitHub Copilot", IDE_NAME=IDE_NAME, OS_TYPE=OS_TYPE, MODEL_NAME=model_name, MODEL_PROVIDER=model_provider)
+
+    @staticmethod
+    def inline_chat_system_prompt(
+        language: str,
+        modifying_existing_code: bool = False,
+    ) -> str:
+        existing_code_instruction = (
+            INLINE_CHAT_EXISTING_CODE_INSTRUCTION
+            if modifying_existing_code
+            else ""
+        )
+        return INLINE_CHAT_SYSTEM_PROMPT.format(
+            language=language,
+            existing_code_instruction=existing_code_instruction,
+        )

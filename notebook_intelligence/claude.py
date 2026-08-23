@@ -894,11 +894,15 @@ class ClaudeChatModel(ChatModel):
             response.finish()
             return
         try:
-            with self._client.messages.stream(
-                model=self._model_id,
-                max_tokens=10000,
-                messages=messages
-            ) as stream:
+            stream_options: dict[str, Any] = {
+                "model": self._model_id,
+                "max_tokens": 10000,
+                "messages": messages,
+            }
+            system_prompt = options.get("system_prompt")
+            if system_prompt:
+                stream_options["system"] = system_prompt
+            with self._client.messages.stream(**stream_options) as stream:
                 for chunk in stream.text_stream:
                     if cancel_token is not None and cancel_token.is_cancel_requested:
                         break
@@ -2214,7 +2218,22 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
                 claude_settings.get('base_url', None)
             )
             messages = request.chat_history.copy()
-            chat_model.completions(messages, response=response, cancel_token=request.cancel_token)
+            completion_options = options.copy()
+            base_system_prompt = completion_options.get("system_prompt", "")
+            system_prompt = self._inject_rules_into_system_prompt(
+                base_system_prompt,
+                request,
+            )
+            if system_prompt:
+                completion_options["system_prompt"] = system_prompt
+            else:
+                completion_options.pop("system_prompt", None)
+            chat_model.completions(
+                messages,
+                response=response,
+                cancel_token=request.cancel_token,
+                options=completion_options,
+            )
         except Exception as e:
             log.error(f"Error while handling chat request!\n{e}")
             response.stream(MarkdownData(f"Oops! There was a problem handling chat request. Please try again with a different prompt."))
