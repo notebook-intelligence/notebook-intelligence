@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
-from ipykernel.ipkernel import IPythonKernel
+from ipykernel.kernelbase import Kernel
 
+from notebook_intelligence.config import NBIConfig
+
+from .backend import ChatbookBackend, load_kernel_specs, resolve_backend_kernel
 from .codegen import (
     CHATBOOK_MSG_TYPE,
     ChatbookCodegenError,
     resolve_executable_source,
 )
-from .danger import merge_danger_scans, scan_generated_python
+from .danger import merge_danger_scans, scan_generated_code
 from .execution import parse_execution_mode, should_execute_generated
 from .nbi_client import NBIClient, NBIClientError
 
+log = logging.getLogger(__name__)
 
-class ChatbookKernel(IPythonKernel):
+
+class ChatbookKernel(Kernel):
     implementation = "chatbook"
     implementation_version = "1.0"
     language = "chatbook"
@@ -28,42 +35,62 @@ class ChatbookKernel(IPythonKernel):
         "file_extension": ".chatbook",
         "pygments_lexer": "text",
     }
-    banner = "Chatbook — natural-language cells, Python via Notebook Intelligence"
+    banner = "Chatbook — natural-language cells, code via Notebook Intelligence"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._nbi = NBIClient()
+        self._backend: Optional[ChatbookBackend] = None
+        self._backend_info: dict[str, str] = {
+            "name": "",
+            "language": "python",
+            "display_name": "",
+        }
+
+    def do_shutdown(self, restart):
+        backend = self._backend
+        self._backend = None
+        if backend is not None:
+            backend.shutdown()
+        return super().do_shutdown(restart)
+
+    def interrupt_request(self, stream, ident, parent):
+        if self._backend is not None:
+            try:
+                self._backend.interrupt()
+            except Exception:
+                log.debug("Backend interrupt failed", exc_info=True)
+        interrupt = getattr(super(), "interrupt_request", None)
+        if callable(interrupt):
+            return interrupt(stream, ident, parent)
+        return None
 
     def execute_request(self, stream, ident, parent):
-        try:
-            self.set_parent(ident, parent)
-        except TypeError:
-            self.set_parent(ident, parent, "shell")
         content = dict(parent.get("content") or {})
         prompt = content.get("code") or ""
         metadata = parent.get("metadata") or {}
         chatbook_meta = metadata.get("nbi_chatbook") or {}
         cell_id = chatbook_meta.get("cellId") or metadata.get("cellId")
 
-        if is_python_execute(chatbook_meta):
-            python = chatbook_meta.get("pythonSource")
-            if isinstance(python, str) and python:
-                content["code"] = python
-                parent = dict(parent)
-                parent["content"] = content
-            return super().execute_request(stream, ident, parent)
+        try:
+            self._ensure_backend()
+        except Exception as exc:
+            return self._reply_error(stream, ident, parent, str(exc))
+
+        if is_code_execute(chatbook_meta):
+            authored = chatbook_meta.get("codeSource")
+            code = authored if isinstance(authored, str) and authored else prompt
+            return self._execute_in_backend(stream, ident, parent, code)
 
         try:
             generated, info = resolve_executable_source(
                 prompt, chatbook_meta, self._generate
             )
         except (ChatbookCodegenError, NBIClientError) as exc:
-            content["code"] = _raise_runtime(str(exc))
-            parent = dict(parent)
-            parent["content"] = content
-            return super().execute_request(stream, ident, parent)
+            return self._reply_error(stream, ident, parent, str(exc))
 
-        scan = scan_generated_python(generated)
+        language = self._backend_info.get("language") or "python"
+        scan = scan_generated_code(generated, language)
         if chatbook_meta.get("llmDangerScan") and scan.get("level") != "risky":
             scan = merge_danger_scans(
                 scan,
@@ -86,11 +113,66 @@ class ChatbookKernel(IPythonKernel):
 
         policy = parse_execution_mode(chatbook_meta.get("executionPolicy"))
         if generated and should_execute_generated(policy, scan.get("level") or "risky"):
-            content["code"] = generated
-            parent = dict(parent)
-            parent["content"] = content
-            return super().execute_request(stream, ident, parent)
+            return self._execute_in_backend(stream, ident, parent, generated)
         return self._reply_ok_without_execute(stream, ident, parent)
+
+    def _ensure_backend(self) -> ChatbookBackend:
+        if self._backend is not None and self._backend.ready:
+            return self._backend
+        preferred = ""
+        try:
+            preferred = NBIConfig().chatbook_backend_kernel
+        except Exception:
+            preferred = ""
+        info = resolve_backend_kernel(preferred, load_kernel_specs())
+        backend = ChatbookBackend(info["name"], cwd=os.getcwd())
+        try:
+            backend.start()
+        except Exception as exc:
+            try:
+                backend.shutdown()
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Could not start Chatbook backend kernel '{info['name']}'. "
+                "Choose another kernelspec in Settings → Chatbook."
+            ) from exc
+        self._backend = backend
+        self._backend_info = info
+        return self._backend
+
+    def _execute_in_backend(self, stream, ident, parent, code: str):
+        try:
+            reply = self._backend.execute(
+                code,
+                lambda msg_type, content: self.send_response(
+                    self.iopub_socket, msg_type, content
+                ),
+            )
+        except Exception as exc:
+            return self._reply_error(stream, ident, parent, str(exc))
+        # The child owns the prompt numbers the frontend already saw on its
+        # relayed execute_input.
+        count = reply.get("execution_count")
+        if isinstance(count, int):
+            self.execution_count = count
+        else:
+            self.execution_count += 1
+        status = reply.get("status") or "ok"
+        reply_content = {
+            "status": status,
+            "execution_count": self.execution_count,
+            "user_expressions": reply.get("user_expressions") or {},
+            "payload": reply.get("payload") or [],
+        }
+        if status == "error":
+            reply_content["ename"] = reply.get("ename") or "ExecutionError"
+            reply_content["evalue"] = reply.get("evalue") or ""
+            reply_content["traceback"] = list(reply.get("traceback") or [])
+        self.session.send(
+            stream, "execute_reply", reply_content, parent, ident=ident
+        )
+        return None
 
     def _generate(self, prompt: str, chatbook_meta: dict) -> dict[str, Any]:
         context = chatbook_meta.get("notebookContext")
@@ -102,6 +184,9 @@ class ChatbookKernel(IPythonKernel):
             cell_id=str(chatbook_meta.get("cellId") or ""),
             prompt_hash=str(chatbook_meta.get("promptHash") or ""),
             context_hash=str(chatbook_meta.get("contextHash") or ""),
+            language=str(self._backend_info.get("language") or "python"),
+            kernel_name=str(self._backend_info.get("name") or ""),
+            display_name=str(self._backend_info.get("display_name") or ""),
         )
         return {
             "generatedCode": rec.get("generatedCode") or rec.get("output") or ""
@@ -112,6 +197,7 @@ class ChatbookKernel(IPythonKernel):
             return self._nbi.danger_scan(
                 code,
                 generate_url=str(chatbook_meta.get("generateUrl") or ""),
+                language=str(self._backend_info.get("language") or "python"),
             )
         except NBIClientError as exc:
             return {
@@ -123,13 +209,7 @@ class ChatbookKernel(IPythonKernel):
         self.send_response(self.iopub_socket, CHATBOOK_MSG_TYPE, payload)
 
     def _reply_ok_without_execute(self, stream, ident, parent):
-        """Complete execute_request without running generated Python."""
-        publish_status = getattr(self, "_publish_status", None)
-        if callable(publish_status):
-            try:
-                publish_status("busy", parent)
-            except TypeError:
-                publish_status("busy")
+        """Complete execute_request without running generated code."""
         reply_content = {
             "status": "ok",
             "execution_count": self.execution_count,
@@ -139,16 +219,34 @@ class ChatbookKernel(IPythonKernel):
         self.session.send(
             stream, "execute_reply", reply_content, parent, ident=ident
         )
-        if callable(publish_status):
-            try:
-                publish_status("idle", parent)
-            except TypeError:
-                publish_status("idle")
+
+    def _reply_error(self, stream, ident, parent, message: str):
+        traceback = [str(message)]
+        self.send_response(
+            self.iopub_socket,
+            "error",
+            {
+                "ename": "ChatbookError",
+                "evalue": str(message),
+                "traceback": traceback,
+            },
+        )
+        self.session.send(
+            stream,
+            "execute_reply",
+            {
+                "status": "error",
+                "ename": "ChatbookError",
+                "evalue": str(message),
+                "traceback": traceback,
+                "execution_count": self.execution_count,
+                "user_expressions": {},
+                "payload": [],
+            },
+            parent,
+            ident=ident,
+        )
 
 
-def _raise_runtime(message: str) -> str:
-    return f"raise RuntimeError({message!r})"
-
-
-def is_python_execute(chatbook_meta: dict | None) -> bool:
-    return bool(chatbook_meta and chatbook_meta.get("executeMode") == "python")
+def is_code_execute(chatbook_meta: dict | None) -> bool:
+    return (chatbook_meta or {}).get("executeMode") == "code"

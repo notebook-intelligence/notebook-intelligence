@@ -1,33 +1,34 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import {
+  buildCodeNotebookFromChatbook,
   buildExecuteChatbookMeta,
-  buildPythonNotebookFromChatbook,
   snapshotChatbookContextCell,
   splitNotebookContext,
   canSwitchChatbookCellMode,
-  convertChatbookCellToPython,
+  convertChatbookCellToCode,
   getChatbookCellMeta,
   getChatbookCellMode,
   getChatbookCellOrigin,
   hasChatbookPrompt,
-  hasLegacyChatbookCodeView,
-  isChatbookConvertTargetId,
   isChatbookKernelName,
   isChatbookPromptInlineCompletion,
   mergeChatbookCellMeta,
   promptAsHashComment,
-  pythonExportNotebookPath,
+  chatbookExportNotebookPath,
   resolveChatbookPrompt,
   sha256Hex,
   switchChatbookCellMode,
-  withoutLegacyChatbookSourceView,
   clampChatbookExecutionMode,
   chatbookExecutionModeSummary,
   chatbookNeedsConfirm,
   parseChatbookExecutionMode,
   CHATBOOK_EXECUTION_MODES
 } from '../../src/chatbook-core';
+import {
+  mimeTypeForNotebookLanguage,
+  resolveChatbookBackendProfile
+} from '../../src/notebook-kernels';
 
 describe('chatbook-core', () => {
   it('recognizes the chatbook kernel name', () => {
@@ -35,37 +36,37 @@ describe('chatbook-core', () => {
     expect(isChatbookKernelName('python3')).toBe(false);
     expect(isChatbookKernelName('')).toBe(false);
     expect(isChatbookPromptInlineCompletion('chatbook', 'prompt')).toBe(true);
-    expect(isChatbookPromptInlineCompletion('chatbook', 'python')).toBe(false);
+    expect(isChatbookPromptInlineCompletion('chatbook', 'code')).toBe(false);
     expect(isChatbookPromptInlineCompletion('python3', 'prompt')).toBe(false);
   });
 
-  it('lets a cell switch modes whether or not it has Python yet', () => {
-    // No code generated yet: the Python side is simply empty.
-    expect(canSwitchChatbookCellMode({}, 'python')).toBe(true);
+  it('lets a cell switch modes whether or not it has code yet', () => {
+    // Nothing generated yet: the code side is simply empty.
+    expect(canSwitchChatbookCellMode({}, 'code')).toBe(true);
     expect(
-      canSwitchChatbookCellMode({ generatedCode: 'print(1)' }, 'python')
+      canSwitchChatbookCellMode({ generatedCode: 'print(1)' }, 'code')
     ).toBe(true);
-    expect(canSwitchChatbookCellMode({ mode: 'python' }, 'prompt')).toBe(true);
+    expect(canSwitchChatbookCellMode({ mode: 'code' }, 'prompt')).toBe(true);
     // Already in the requested mode.
-    expect(canSwitchChatbookCellMode({ mode: 'python' }, 'python')).toBe(false);
+    expect(canSwitchChatbookCellMode({ mode: 'code' }, 'code')).toBe(false);
     expect(canSwitchChatbookCellMode({}, 'prompt')).toBe(false);
   });
 
   it('shows an empty editor for a side the cell does not have yet', () => {
-    const toPython = switchChatbookCellMode({
+    const toCode = switchChatbookCellMode({
       source: 'calculate a total',
       meta: {},
-      nextMode: 'python'
+      nextMode: 'code'
     });
-    expect(toPython.source).toBe('');
-    expect(toPython.meta.mode).toBe('python');
+    expect(toCode.source).toBe('');
+    expect(toCode.meta.mode).toBe('code');
     // The prompt is kept so switching back restores what the user wrote.
-    expect(toPython.meta.prompt).toBe('calculate a total');
+    expect(toCode.meta.prompt).toBe('calculate a total');
 
-    // Switching never generates, so a Python cell with no English shows none.
+    // Switching never generates, so a code cell with no English shows none.
     const toPrompt = switchChatbookCellMode({
       source: 'total = sum(values)',
-      meta: { mode: 'python' },
+      meta: { mode: 'code' },
       nextMode: 'prompt'
     });
     expect(toPrompt.source).toBe('');
@@ -82,25 +83,25 @@ describe('chatbook-core', () => {
     expect((merged.nbi as any).chatbook.generatedCode).toBe('print(1)');
     expect(getChatbookCellMeta(merged).promptHash).toBe('abc');
     expect(getChatbookCellMode({})).toBe('prompt');
-    expect(getChatbookCellMode({ mode: 'python' })).toBe('python');
+    expect(getChatbookCellMode({ mode: 'code' })).toBe('code');
   });
 
-  it('switches between natural language and Python representations', () => {
-    const python = switchChatbookCellMode({
+  it('switches between natural language and code representations', () => {
+    const code = switchChatbookCellMode({
       source: 'calculate a total',
       meta: { generatedCode: 'total = sum(values)' },
-      nextMode: 'python'
+      nextMode: 'code'
     });
-    expect(python.source).toBe('total = sum(values)');
-    expect(python.meta.mode).toBe('python');
-    expect(python.meta.prompt).toBe('calculate a total');
+    expect(code.source).toBe('total = sum(values)');
+    expect(code.meta.mode).toBe('code');
+    expect(code.meta.prompt).toBe('calculate a total');
 
     const prompt = switchChatbookCellMode({
       source: 'total = sum(values)',
       meta: {
-        mode: 'python',
+        mode: 'code',
         prompt: 'calculate a total',
-        pythonSource: 'total = sum(values)'
+        codeSource: 'total = sum(values)'
       },
       nextMode: 'prompt'
     });
@@ -116,46 +117,46 @@ describe('chatbook-core', () => {
       meta: { ...original.meta, generatedCode: 'total = sum(values)' }
     };
 
-    const toPython = switchChatbookCellMode({
+    const toCode = switchChatbookCellMode({
       ...generated,
-      nextMode: 'python'
+      nextMode: 'code'
     });
     const backToPrompt = switchChatbookCellMode({
-      source: toPython.source,
-      meta: toPython.meta,
+      source: toCode.source,
+      meta: toCode.meta,
       nextMode: 'prompt'
     });
     expect(backToPrompt.source).toBe('calculate a total');
 
-    const toPythonAgain = switchChatbookCellMode({
+    const toCodeAgain = switchChatbookCellMode({
       source: backToPrompt.source,
       meta: backToPrompt.meta,
-      nextMode: 'python'
+      nextMode: 'code'
     });
-    expect(toPythonAgain.source).toBe('total = sum(values)');
-    expect(toPythonAgain.meta.mode).toBe('python');
+    expect(toCodeAgain.source).toBe('total = sum(values)');
+    expect(toCodeAgain.meta.mode).toBe('code');
   });
 
   it('records the authoring input type and keeps it across switches', () => {
-    const toPython = switchChatbookCellMode({
+    const toCode = switchChatbookCellMode({
       source: 'calculate a total',
       meta: { generatedCode: 'total = sum(values)' },
-      nextMode: 'python'
+      nextMode: 'code'
     });
-    expect(toPython.meta.origin).toBe('prompt');
+    expect(toCode.meta.origin).toBe('prompt');
 
     const backToPrompt = switchChatbookCellMode({
-      source: toPython.source,
-      meta: toPython.meta,
+      source: toCode.source,
+      meta: toCode.meta,
       nextMode: 'prompt'
     });
     expect(backToPrompt.meta.origin).toBe('prompt');
     expect(backToPrompt.source).toBe('calculate a total');
 
     expect(getChatbookCellOrigin({})).toBe('prompt');
-    expect(getChatbookCellOrigin({ mode: 'python' })).toBe('python');
-    expect(getChatbookCellOrigin({ mode: 'prompt', origin: 'python' })).toBe(
-      'python'
+    expect(getChatbookCellOrigin({ mode: 'code' })).toBe('code');
+    expect(getChatbookCellOrigin({ mode: 'prompt', origin: 'code' })).toBe(
+      'code'
     );
   });
 
@@ -177,27 +178,15 @@ describe('chatbook-core', () => {
     expect(chatbook.prompt).toBe('plot sales');
   });
 
-  it('drops the notebook-wide source view left by older notebooks', () => {
-    const legacy = { nbi: { chatbook: { sourceView: 'code' } } };
-    expect(hasLegacyChatbookCodeView(legacy)).toBe(true);
-    expect(hasLegacyChatbookCodeView({ nbi: { chatbook: {} } })).toBe(false);
-    expect(hasLegacyChatbookCodeView({})).toBe(false);
-
-    const cleaned = withoutLegacyChatbookSourceView(legacy);
-    expect((cleaned.nbi as any).chatbook.sourceView).toBeUndefined();
-    // The original is left untouched for callers holding on to it.
-    expect(legacy.nbi.chatbook.sourceView).toBe('code');
-  });
-
-  it('converts cells to python, commenting prompts without generated code', () => {
-    const withCode = convertChatbookCellToPython({
+  it('converts cells to code, commenting prompts without generated code', () => {
+    const withCode = convertChatbookCellToCode({
       source: 'plot sales',
       meta: { generatedCode: 'print(1)' }
     });
     expect(withCode.source).toBe('print(1)');
     expect(withCode.meta.prompt).toBe('plot sales');
 
-    const commented = convertChatbookCellToPython({
+    const commented = convertChatbookCellToCode({
       source: 'plot sales\nby region',
       meta: {}
     });
@@ -207,15 +196,13 @@ describe('chatbook-core', () => {
     expect(resolveChatbookPrompt('plot sales', {})).toBe('plot sales');
     expect(
       resolveChatbookPrompt('print(1)', {
-        mode: 'python',
+        mode: 'code',
         prompt: 'plot sales'
       })
     ).toBe('plot sales');
-    expect(isChatbookConvertTargetId('python')).toBe(true);
-    expect(isChatbookConvertTargetId('ruby')).toBe(false);
   });
 
-  it('builds a python notebook copy without mutating the source', () => {
+  it('builds a code notebook copy without mutating the source', () => {
     const source = {
       nbformat: 4,
       cells: [
@@ -229,7 +216,7 @@ describe('chatbook-core', () => {
       ],
       metadata: {}
     };
-    const out = buildPythonNotebookFromChatbook(source, {
+    const out = buildCodeNotebookFromChatbook(source, {
       name: 'python3',
       display_name: 'Python 3',
       language: 'python'
@@ -240,15 +227,18 @@ describe('chatbook-core', () => {
     expect((out.cells as any)[0].source).toBe('# hi');
     expect((out.cells as any)[1].source).toBe('print(1)');
     expect((out.metadata as any).kernelspec.name).toBe('python3');
-    expect(pythonExportNotebookPath('analysis.ipynb')).toBe(
+    expect(chatbookExportNotebookPath('analysis.ipynb', 'python')).toBe(
       'analysis-python.ipynb'
     );
-    expect(pythonExportNotebookPath('work/analysis.ipynb', 1)).toBe(
+    expect(chatbookExportNotebookPath('work/analysis.ipynb', 'python', 1)).toBe(
       'work/analysis-python-1.ipynb'
+    );
+    expect(chatbookExportNotebookPath('analysis.ipynb', 'R')).toBe(
+      'analysis-r.ipynb'
     );
   });
 
-  it('exports Python-authored cells without rewriting their source', () => {
+  it('exports code-authored cells without rewriting their source', () => {
     const source = {
       nbformat: 4,
       cells: [
@@ -258,9 +248,9 @@ describe('chatbook-core', () => {
           metadata: {
             nbi: {
               chatbook: {
-                mode: 'python',
+                mode: 'code',
                 prompt: 'Set value to 42',
-                pythonSource: 'value = 42'
+                codeSource: 'value = 42'
               }
             }
           },
@@ -269,7 +259,7 @@ describe('chatbook-core', () => {
       ],
       metadata: {}
     };
-    const out = buildPythonNotebookFromChatbook(source, {
+    const out = buildCodeNotebookFromChatbook(source, {
       name: 'python3',
       display_name: 'Python 3',
       language: 'python'
@@ -306,21 +296,21 @@ describe('chatbook-core', () => {
     expect(dynamic.notebookPath).toBe('reports/analysis.ipynb');
   });
 
-  it('marks direct Python execution without a codegen cache', () => {
+  it('marks direct code execution without a codegen cache', () => {
     const meta = buildExecuteChatbookMeta({
       cellId: 'c1',
       prompt: '',
       promptHash: '',
-      executeMode: 'python',
-      pythonSource: 'value = 42',
+      executeMode: 'code',
+      codeSource: 'value = 42',
       cellMeta: {
-        mode: 'python',
+        mode: 'code',
         generatedCode: 'value = 42',
         promptHash: 'old'
       }
     });
-    expect(meta.executeMode).toBe('python');
-    expect(meta.pythonSource).toBe('value = 42');
+    expect(meta.executeMode).toBe('code');
+    expect(meta.codeSource).toBe('value = 42');
     expect(meta.cachedCode).toBeUndefined();
   });
 
@@ -421,5 +411,27 @@ describe('chatbook-core', () => {
       );
     }
     expect(chatbookExecutionModeSummary('confirm-if-risky')).toContain('risk');
+  });
+
+  it('resolves a Chatbook backend kernelspec and MIME type', () => {
+    const specs = {
+      chatbook: {
+        name: 'chatbook',
+        language: 'chatbook',
+        display_name: 'Chatbook'
+      },
+      python3: {
+        name: 'python3',
+        language: 'python',
+        display_name: 'Python 3'
+      },
+      ir: { name: 'ir', language: 'R', display_name: 'R' }
+    } as any;
+    expect(resolveChatbookBackendProfile(specs, 'ir').kernelName).toBe('ir');
+    expect(resolveChatbookBackendProfile(specs, 'chatbook').kernelName).toBe(
+      'python3'
+    );
+    expect(mimeTypeForNotebookLanguage('R')).toBe('text/x-rsrc');
+    expect(mimeTypeForNotebookLanguage('python')).toBe('text/x-python');
   });
 });

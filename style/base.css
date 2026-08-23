@@ -3657,7 +3657,7 @@ svg.access-token-warning {
 }
 
 .jp-Cell.nbi-chatbook-cell-prompt,
-.jp-Cell.nbi-chatbook-cell-python {
+.jp-Cell.nbi-chatbook-cell-code {
   --nbi-chatbook-cell-mode-width: 36px;
 
   /* Matches the height of the cell toolbar's buttons. */
@@ -3684,7 +3684,7 @@ svg.access-token-warning {
  * badge also lives, so reserve room for the badge plus a gap.
  */
 .jp-Cell.nbi-chatbook-cell-prompt .jp-cell-toolbar,
-.jp-Cell.nbi-chatbook-cell-python .jp-cell-toolbar {
+.jp-Cell.nbi-chatbook-cell-code .jp-cell-toolbar {
   right: calc(
     var(--nbi-chatbook-cell-mode-right) + var(--nbi-chatbook-cell-mode-width) +
       var(--nbi-chatbook-cell-mode-gap)
@@ -3724,7 +3724,7 @@ svg.access-token-warning {
   opacity: 1;
 }
 
-.nbi-chatbook-cell-python .nbi-chatbook-cell-mode {
+.nbi-chatbook-cell-code .nbi-chatbook-cell-mode {
   color: var(--jp-brand-color1);
   border-color: var(--jp-brand-color1);
 }

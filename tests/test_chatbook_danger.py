@@ -10,7 +10,7 @@ from notebook_intelligence.chatbook_kernel.execution import (
     parse_execution_mode,
     should_execute_generated,
 )
-from notebook_intelligence.chatbook_generate import classify_generated_python_danger
+from notebook_intelligence.chatbook_generate import classify_generated_code_danger
 
 
 def test_scan_flags_subprocess_and_shell():
@@ -90,6 +90,6 @@ def test_llm_classifier_uses_json_only():
     class Manager:
         chat_model = Model()
 
-    scan = classify_generated_python_danger(Manager(), "print(1)")
+    scan = classify_generated_code_danger(Manager(), "print(1)")
     assert scan["level"] == "risky"
     assert scan["reasons"] == ["shell"]

@@ -103,3 +103,56 @@ export function listKernelProfiles(
       };
     });
 }
+
+export function listChatbookBackendProfiles(
+  specs: Record<string, KernelSpec.ISpecModel> | undefined
+): INotebookKernelProfile[] {
+  return listKernelProfiles(specs).filter(
+    profile => profile.kernelName !== CHATBOOK_KERNEL.kernelName
+  );
+}
+
+export function resolveChatbookBackendProfile(
+  specs: Record<string, KernelSpec.ISpecModel> | undefined,
+  preferredKernelName?: string
+): INotebookKernelProfile {
+  const backends = listChatbookBackendProfiles(specs);
+  const wanted = (preferredKernelName ?? '').trim();
+  const named =
+    wanted && wanted !== CHATBOOK_KERNEL.kernelName
+      ? backends.find(profile => profile.kernelName === wanted)
+      : undefined;
+  if (named) {
+    return named;
+  }
+  const python3 = backends.find(
+    profile => profile.kernelName === DEFAULT_NOTEBOOK_KERNEL.kernelName
+  );
+  if (python3) {
+    return python3;
+  }
+  const python = backends.find(
+    profile => profile.language === DEFAULT_NOTEBOOK_KERNEL.language
+  );
+  if (python) {
+    return python;
+  }
+  if (backends[0]) {
+    return backends[0];
+  }
+  return DEFAULT_NOTEBOOK_KERNEL;
+}
+
+export function mimeTypeForNotebookLanguage(language: string): string {
+  const lang = normalizeNotebookLanguage(language);
+  const mimeByLanguage: Record<string, string> = {
+    python: 'text/x-python',
+    r: 'text/x-rsrc',
+    julia: 'text/x-julia',
+    javascript: 'text/javascript',
+    typescript: 'text/typescript',
+    scala: 'text/x-scala',
+    sql: 'text/x-sql'
+  };
+  return mimeByLanguage[lang] || `text/x-${lang}`;
+}

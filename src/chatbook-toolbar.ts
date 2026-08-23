@@ -9,15 +9,16 @@ import { LabIcon, ToolbarButton } from '@jupyterlab/ui-components';
 import { IDisposable, DisposableDelegate } from '@lumino/disposable';
 
 import {
-  CHATBOOK_CONVERT_TARGETS,
-  exportChatbookNotebookAsPython,
+  exportChatbookNotebookAsCode,
   isChatbookSession,
   nextChatbookNotebookMode,
   toggleAllChatbookCellModes
 } from './chatbook';
+import { NBIAPI } from './api';
 import {
   NotebookKernelNotFoundError,
-  findKernelProfile
+  findKernelProfile,
+  resolveChatbookBackendProfile
 } from './notebook-kernels';
 import switchSvgstr from '../style/icons/chatbook-switch.svg';
 import exportSvgstr from '../style/icons/chatbook-export.svg';
@@ -41,32 +42,26 @@ export async function confirmConvertChatbookNotebook(
   if (!isChatbookSession(panel.sessionContext)) {
     return;
   }
-  const target = CHATBOOK_CONVERT_TARGETS.python;
+  const kernels = new KernelSpecManager();
+  await kernels.ready;
+  const profile = resolveChatbookBackendProfile(
+    kernels.specs?.kernelspecs,
+    NBIAPI.config.chatbookBackendKernel
+  );
   const result = await showDialog({
-    title: `Export as ${target.label}`,
-    body: 'Create a new Python notebook from this Chatbook. The original Chatbook is left unchanged. Cells that have not been run become comments.',
+    title: `Export as ${profile.language} notebook`,
+    body: `Create a new ${profile.displayName} notebook from this Chatbook. The original Chatbook is left unchanged. Cells that have not been run become comments.`,
     buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Export' })]
   });
   if (!result.button.accept) {
     return;
   }
 
-  const kernels = new KernelSpecManager();
-  await kernels.ready;
-  let profile;
+  let resolved = profile;
   try {
-    try {
-      profile = findKernelProfile(kernels.specs?.kernelspecs, {
-        kernelName: target.defaultKernelName
-      });
-    } catch (error) {
-      if (!(error instanceof NotebookKernelNotFoundError)) {
-        throw error;
-      }
-      profile = findKernelProfile(kernels.specs?.kernelspecs, {
-        language: target.language
-      });
-    }
+    resolved = findKernelProfile(kernels.specs?.kernelspecs, {
+      kernelName: profile.kernelName
+    });
   } catch (error) {
     if (error instanceof NotebookKernelNotFoundError) {
       void app.commands.execute('apputils:notify', {
@@ -79,9 +74,9 @@ export async function confirmConvertChatbookNotebook(
     throw error;
   }
 
-  const path = await exportChatbookNotebookAsPython(
+  const path = await exportChatbookNotebookAsCode(
     panel,
-    profile,
+    resolved,
     app.serviceManager.contents
   );
   await app.commands.execute('docmanager:open', { path });
@@ -98,7 +93,7 @@ class ChatbookToolbarController {
     this._panel = panel;
     this._showCodeButton = new ToolbarButton({
       icon: switchIcon,
-      tooltip: 'Switch every cell to Python',
+      tooltip: 'Switch every cell to code',
       onClick: () => {
         toggleAllChatbookCellModes(this._panel);
         this.sync();
@@ -107,7 +102,7 @@ class ChatbookToolbarController {
     this._showCodeButton.addClass('nbi-chatbook-toolbar-button');
     this._convertButton = new ToolbarButton({
       icon: exportIcon,
-      tooltip: 'Export as a new Python notebook',
+      tooltip: 'Export as a notebook for the Chatbook backend kernel',
       onClick: () => {
         void confirmConvertChatbookNotebook(this._app, this._panel);
       }
@@ -145,7 +140,7 @@ class ChatbookToolbarController {
     this._showCodeButton.pressed = allPython;
     this._showCodeButton.node.title = allPython
       ? 'Switch every cell to natural language'
-      : 'Switch every cell to Python';
+      : 'Switch every cell to code';
   }
 
   dispose(): void {

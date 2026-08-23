@@ -237,6 +237,11 @@ class NBIConfig:
         return bool(self.get('chatbook_llm_danger_scan', False))
 
     @property
+    def chatbook_backend_kernel(self) -> str:
+        """Kernelspec name used to execute Chatbook-generated code (not 'chatbook')."""
+        return str(self.get('chatbook_backend_kernel', '') or '').strip()
+
+    @property
     def rules_directory(self) -> str:
         """Get the rules directory path."""
         return os.path.join(self.nbi_user_dir, 'rules')

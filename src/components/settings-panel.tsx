@@ -26,11 +26,17 @@ import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
 import { writeTextToClipboard } from '../utils';
+import { KernelSpecManager } from '@jupyterlab/services';
 import {
   CHATBOOK_EXECUTION_MODES,
   clampChatbookExecutionMode,
   type ChatbookExecutionMode
 } from '../chatbook-core';
+import {
+  listChatbookBackendProfiles,
+  resolveChatbookBackendProfile,
+  type INotebookKernelProfile
+} from '../notebook-kernels';
 
 const lockedTip = (locked: boolean): string =>
   locked ? 'Locked by your administrator' : '';
@@ -1234,7 +1240,7 @@ const CHATBOOK_MODE_LABELS: Record<
   'always-confirm': {
     title: 'Always confirm',
     description:
-      "Show the generated Python and wait for Run or Don't run on every natural-language Run."
+      "Show the generated code and wait for Run or Don't run on every natural-language Run."
   },
   'confirm-if-risky': {
     title: 'Confirm if risky',
@@ -1244,7 +1250,7 @@ const CHATBOOK_MODE_LABELS: Record<
   'auto-run': {
     title: 'Auto-run',
     description:
-      'Generate and execute immediately, same as a normal notebook cell. Inspect Python afterward if you need to.'
+      'Generate and execute immediately, same as a normal notebook cell. Inspect generated code afterward if you need to.'
   }
 };
 
@@ -1257,11 +1263,19 @@ function SettingsPanelComponentChatbook() {
   const [llmDangerScan, setLlmDangerScan] = useState(
     nbiConfig.chatbookLlmDangerScan
   );
+  const [backendKernel, setBackendKernel] = useState(
+    nbiConfig.chatbookBackendKernel
+  );
+  const [backendProfiles, setBackendProfiles] = useState<
+    INotebookKernelProfile[]
+  >([]);
+  const [restartHint, setRestartHint] = useState(false);
 
   useEffect(() => {
     const handler = () => {
       setExecutionMode(NBIAPI.config.chatbookExecutionMode);
       setLlmDangerScan(NBIAPI.config.chatbookLlmDangerScan);
+      setBackendKernel(NBIAPI.config.chatbookBackendKernel);
     };
     NBIAPI.configChanged.connect(handler);
     return () => {
@@ -1269,22 +1283,96 @@ function SettingsPanelComponentChatbook() {
     };
   }, []);
 
+  useEffect(() => {
+    const kernels = new KernelSpecManager();
+    void kernels.ready.then(() => {
+      const profiles = listChatbookBackendProfiles(kernels.specs?.kernelspecs);
+      setBackendProfiles(profiles);
+      if (!NBIAPI.config.chatbookBackendKernel && profiles.length) {
+        setBackendKernel(
+          resolveChatbookBackendProfile(kernels.specs?.kernelspecs).kernelName
+        );
+      }
+    });
+  }, []);
+
   const save = (
     nextMode: ChatbookExecutionMode,
-    nextLlm: boolean = llmDangerScan
+    nextLlm: boolean = llmDangerScan,
+    nextBackend: string = backendKernel
   ) => {
     const mode = clampChatbookExecutionMode(nextMode, maxMode);
     setExecutionMode(mode);
     setLlmDangerScan(nextLlm);
+    setBackendKernel(nextBackend);
     NBIAPI.setConfig({
       chatbook_execution_mode: mode,
-      chatbook_llm_danger_scan: nextLlm
+      chatbook_llm_danger_scan: nextLlm,
+      chatbook_backend_kernel: nextBackend
     });
   };
+
+  const selectedBackend =
+    backendProfiles.find(profile => profile.kernelName === backendKernel) ||
+    resolveChatbookBackendProfile(undefined, backendKernel);
 
   return (
     <div className="config-dialog">
       <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Backend kernel</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                Chatbook stays the notebook kernel, but generated code runs in
+                this Jupyter kernelspec. Language, syntax highlighting, and
+                export follow that kernel. Restart open Chatbook notebooks after
+                changing it.
+              </span>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div id="nbi-chatbook-backend-kernel-label">
+                  Execution kernel
+                </div>
+                <select
+                  className="jp-mod-styled"
+                  aria-labelledby="nbi-chatbook-backend-kernel-label"
+                  value={backendKernel}
+                  onChange={event => {
+                    const next = event.target.value;
+                    setRestartHint(
+                      next !== NBIAPI.config.chatbookBackendKernel
+                    );
+                    save(executionMode, llmDangerScan, next);
+                  }}
+                >
+                  {backendKernel &&
+                    !backendProfiles.some(
+                      profile => profile.kernelName === backendKernel
+                    ) && (
+                      <option value={backendKernel}>
+                        {backendKernel} (not installed)
+                      </option>
+                    )}
+                  {backendProfiles.map(profile => (
+                    <option key={profile.kernelName} value={profile.kernelName}>
+                      {profile.displayName} ({profile.language})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {restartHint && (
+              <div className="model-config-section-row">
+                <span>
+                  Restart the Chatbook kernel in open notebooks so they pick up{' '}
+                  {selectedBackend.displayName}.
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
         <div className="model-config-section">
           <div className="model-config-section-header">
             Natural-language execution
@@ -1292,10 +1380,10 @@ function SettingsPanelComponentChatbook() {
           <div className="model-config-section-body">
             <div className="model-config-section-row">
               <span>
-                Chatbook generates Python and runs it in the notebook&apos;s
-                kernel. That process has the same privileges as any Jupyter
-                kernel: files, network, environment variables, and package
-                installs.
+                Chatbook generates {selectedBackend.language} and runs it in{' '}
+                {selectedBackend.displayName}. That process has the same
+                privileges as any Jupyter kernel: files, network, environment
+                variables, and package installs.
               </span>
             </div>
             <fieldset className="nbi-chatbook-execution-modes">

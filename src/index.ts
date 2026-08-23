@@ -152,6 +152,7 @@ import {
   CHATBOOK_KERNEL_NAME,
   CHATBOOK_LANGUAGE,
   attachChatbookNotebooks,
+  getChatbookBackendLanguage,
   getChatbookCellMode,
   getChatbookCellMeta,
   isChatbookPromptInlineCompletion,
@@ -159,7 +160,7 @@ import {
   nextChatbookNotebookMode,
   patchCodeCellExecute,
   registerChatbookLanguage,
-  summarizePythonCell,
+  summarizeCodeCell,
   toggleActiveChatbookCellMode,
   toggleAllChatbookCellModes
 } from './chatbook';
@@ -629,9 +630,9 @@ class NBIInlineCompletionProvider
         language = CHATBOOK_LANGUAGE;
       } else if (
         isChatbookSession(panel.sessionContext) &&
-        activeMode === 'python'
+        activeMode === 'code'
       ) {
-        language = 'python';
+        language = getChatbookBackendLanguage();
       } else if (activeCell?.model.sharedModel.cell_type === 'markdown') {
         language = 'markdown';
       }
@@ -976,6 +977,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     registerChatbookLanguage(languageRegistry);
     patchCodeCellExecute();
     attachChatbookNotebooks(notebookTracker, {
+      languageRegistry,
       onOpenSettings: () => {
         void app.commands.execute(CommandIDs.openConfigurationDialog, {
           tab: 'chatbook'
@@ -1422,7 +1424,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     app.commands.addCommand(CommandIDs.showChatbookGeneratedCode, {
       label: 'Show generated code',
-      caption: 'Show the hidden Python code generated for this Chatbook cell',
+      caption: 'Show the hidden code generated for this Chatbook cell',
       isEnabled: () => {
         const current = app.shell.currentWidget;
         if (!(current instanceof NotebookPanel)) {
@@ -1480,12 +1482,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         const mode = cell
           ? getChatbookCellMode(getChatbookCellMeta(cell.model.metadata))
           : 'prompt';
-        return mode === 'python'
+        return mode === 'code'
           ? 'Switch cell to natural language'
-          : 'Switch cell to Python';
+          : 'Switch cell to code';
       },
       caption:
-        'Switch the active Chatbook cell between natural language and Python',
+        'Switch the active Chatbook cell between natural language and code',
       isEnabled: () =>
         currentChatbookNotebook()?.content.activeCell?.model.type === 'code',
       execute: () => {
@@ -1498,20 +1500,20 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     app.commands.addCommand(CommandIDs.refreshChatbookEnglish, {
       label: 'Refresh English representation',
-      caption: 'Regenerate the English representation of this Python cell',
+      caption: 'Regenerate the English representation of this code cell',
       isEnabled: () => {
         const cell = currentChatbookNotebook()?.content.activeCell;
         return Boolean(
           cell &&
             cell.model.type === 'code' &&
             getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) ===
-              'python'
+              'code'
         );
       },
       execute: async () => {
         const cell = currentChatbookNotebook()?.content.activeCell;
         if (cell?.model.type === 'code') {
-          await summarizePythonCell(cell, cell.model.sharedModel.getSource(), {
+          await summarizeCodeCell(cell, cell.model.sharedModel.getSource(), {
             notifyOnError: true,
             force: true
           });
@@ -1524,10 +1526,10 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         const panel = currentChatbookNotebook();
         return panel && nextChatbookNotebookMode(panel) === 'prompt'
           ? 'Switch all cells to natural language'
-          : 'Switch all cells to Python';
+          : 'Switch all cells to code';
       },
       caption:
-        'Switch every cell of this Chatbook between its prompt and its Python',
+        'Switch every cell of this Chatbook between its prompt and its code',
       isEnabled: () => currentChatbookNotebook() !== null,
       execute: () => {
         const panel = currentChatbookNotebook();
@@ -1539,9 +1541,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     });
 
     app.commands.addCommand(CommandIDs.convertChatbookNotebook, {
-      label: 'Export as Python notebook',
+      label: 'Export as code notebook',
       caption:
-        'Create a new Python notebook from this Chatbook, leaving the original unchanged',
+        'Create a new notebook from this Chatbook using the configured backend kernel, leaving the original unchanged',
       isEnabled: () => currentChatbookNotebook() !== null,
       execute: async () => {
         const panel = currentChatbookNotebook();

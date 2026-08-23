@@ -1,8 +1,14 @@
 # Chatbook execution
 
-Chatbook cells generate Python from a natural-language prompt and can run that Python in the Chatbook kernel. Generation uses Notebook Intelligence (`POST /notebook-intelligence/chatbook/generate`). Execution uses the same IPython kernel as the rest of the notebook: files, network, environment variables, `%pip`, and display all work, and PREFIX cells share state with later cells.
+Chatbook cells generate code from a natural-language prompt and run that code in a **backend Jupyter kernelspec** you choose in Settings → **Chatbook**. Chatbook remains the notebook kernel (`chatbook`); it starts the selected kernelspec as a child and executes generated (or Cd-authored) code there. Language, syntax highlighting, and export follow that kernelspec.
 
-There is no per-cell sandbox. Isolation, when you need it, is the Jupyter kernel process itself (for example a JupyterHub user container).
+Generation uses Notebook Intelligence (`POST /notebook-intelligence/chatbook/generate`). There is no per-cell sandbox. Isolation, when you need it, is the Jupyter kernel process itself (for example a JupyterHub user container).
+
+## Backend kernel
+
+The Chatbook setting **Execution kernel** lists installed Jupyter kernelspecs except `chatbook`. The default is `python3` when that spec exists, otherwise the first Python spec, otherwise the first non-chatbook spec. Change requires restarting open Chatbook notebooks so the child kernel is recreated.
+
+Cell badges show **NL** (natural language) and **Cd** (code). Code cells use the backend language for highlighting.
 
 ## Generation backend
 
@@ -21,7 +27,7 @@ Chatbook follows NBI's active mode:
 
 Configure these in Settings → **Chatbook**. The default is **Always confirm**.
 
-| Mode             | Natural-language Run     | Executes generated Python?                                                          |
+| Mode             | Natural-language Run     | Executes generated code?                                                            |
 | ---------------- | ------------------------ | ----------------------------------------------------------------------------------- |
 | Always confirm   | Generate, show a preview | Only after **Run** on the confirm bar.                                              |
 | Confirm if risky | Generate, static scan    | Auto-run when the scan is clean; confirm when it is risky or cannot parse the cell. |
@@ -29,7 +35,7 @@ Configure these in Settings → **Chatbook**. The default is **Always confirm**.
 
 The confirm bar names the mode that produced it and links to Settings → **Chatbook**, so the policy behind a prompt is always one click away.
 
-Python-authored cells are unchanged in every mode: the user typed the source, so Run executes it.
+Code-authored cells are unchanged in every mode: the user typed the source, so Run executes it.
 
 An unchanged prompt that already executed in this session skips another confirm.
 
@@ -37,17 +43,17 @@ An unchanged prompt that already executed in this session skips another confirm.
 
 The scan is a speed bump, not a security boundary. False positives (for example saving a CSV) are expected: click Run. False negatives are inevitable; data libraries can still exfiltrate.
 
-**Static scan (always on for this mode):**
+**Static scan (always on for this mode when the backend language is Python):**
 
 - `ast.parse` failure → risky (fail closed).
 - Imports such as `os`, `subprocess`, `socket`, `requests`, `http`, `urllib`, `ctypes`, `importlib`, `pickle`, `webbrowser`.
 - Calls such as `eval`, `exec`, `compile`, `__import__`, `Path.unlink` / `rmdir`, `shutil.rmtree` / `move`, `open(..., "w"|"a"|"x")`, `to_csv` / `to_parquet` / `to_sql`.
 - IPython/shell: lines starting with `!`, and magics `%run`, `%env`, `%set_env`, `%pip`, `%conda`, `%%bash` / `%%sh` / `%%script`.
 
-Optional **Also classify with the chat model** (off by default): a second JSON classifier may raise risk. A static hit always wins. Classifier timeout or invalid output confirms instead of auto-running. Mention and dynamic context are not sent to the classifier, only the generated Python.
+For other backend languages the static scan fails closed (treats the cell as risky) so Confirm if risky still prompts. Optional **Also classify with the chat model** (off by default): a second JSON classifier may raise risk. A static hit always wins. Classifier timeout or invalid output confirms instead of auto-running. Mention and dynamic context are not sent to the classifier, only the generated code.
 
 ## Admin cap
 
 `NBI_CHATBOOK_MAX_EXECUTION_MODE` (traitlet `chatbook_max_execution_mode`) caps how permissive a user can be. Values, from safest to least: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). A tenant can set `always-confirm` to hide Auto-run.
 
-User preference is stored as `chatbook_execution_mode` in `~/.jupyter/nbi/config.json`.
+User preference is stored as `chatbook_execution_mode` and `chatbook_backend_kernel` in `~/.jupyter/nbi/config.json`.

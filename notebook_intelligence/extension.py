@@ -85,9 +85,9 @@ from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_claude_
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
 from notebook_intelligence.chatbook_generate import (
-    classify_generated_python_danger,
-    generate_chatbook_python,
-    summarize_chatbook_python,
+    classify_generated_code_danger,
+    generate_chatbook_code,
+    summarize_chatbook_code,
 )
 from notebook_intelligence.chatbook_kernel.execution import (
     DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
@@ -734,6 +734,7 @@ class GetCapabilitiesHandler(APIHandler):
                 ),
             ),
             "chatbook_llm_danger_scan": nbi_config.chatbook_llm_danger_scan,
+            "chatbook_backend_kernel": nbi_config.chatbook_backend_kernel,
             "chatbook_max_execution_mode": parse_execution_mode(
                 getattr(
                     self,
@@ -822,6 +823,7 @@ class ChatbookGenerateHandler(APIHandler):
         cell_id = ""
         prompt_hash = ""
         context_hash = ""
+        language = "python"
         if isinstance(data, dict):
             notebook_context = data.get("notebookContext") or data.get(
                 "notebook_context"
@@ -838,12 +840,13 @@ class ChatbookGenerateHandler(APIHandler):
             context_hash = str(
                 data.get("contextHash") or data.get("context_hash") or ""
             )
+            language = str(data.get("language") or "python")
         try:
             if operation == "summarize":
                 english = await tornado.ioloop.IOLoop.current().run_in_executor(
                     None,
-                    lambda: summarize_chatbook_python(
-                        ai_service_manager, str(code_source)
+                    lambda: summarize_chatbook_code(
+                        ai_service_manager, str(code_source), language
                     ),
                 )
                 self.finish(json.dumps({"prompt": english}))
@@ -851,15 +854,15 @@ class ChatbookGenerateHandler(APIHandler):
             if operation == "danger_scan":
                 scan = await tornado.ioloop.IOLoop.current().run_in_executor(
                     None,
-                    lambda: classify_generated_python_danger(
-                        ai_service_manager, str(code_source)
+                    lambda: classify_generated_code_danger(
+                        ai_service_manager, str(code_source), language
                     ),
                 )
                 self.finish(json.dumps(scan))
                 return
             code = await tornado.ioloop.IOLoop.current().run_in_executor(
                 None,
-                lambda: generate_chatbook_python(
+                lambda: generate_chatbook_code(
                     ai_service_manager,
                     prompt,
                     notebook_context,
@@ -867,6 +870,7 @@ class ChatbookGenerateHandler(APIHandler):
                     cell_id,
                     prompt_hash,
                     context_hash,
+                    language,
                 ),
             )
         except ChatbookCodegenError as exc:
@@ -945,6 +949,7 @@ class ConfigHandler(APIHandler):
             "refresh_open_files_on_disk_change",
             "chatbook_execution_mode",
             "chatbook_llm_danger_scan",
+            "chatbook_backend_kernel",
         ])
         # Top-level keys whose write is rejected outright when locked.
         locked_keys = set()
@@ -1046,6 +1051,10 @@ class ConfigHandler(APIHandler):
                 )
             elif key == "chatbook_llm_danger_scan":
                 value = bool(value)
+            elif key == "chatbook_backend_kernel":
+                value = str(value or "").strip()
+                if value == "chatbook":
+                    value = ""
             ai_service_manager.nbi_config.set(key, value)
             if key == "store_github_access_token":
                 if value:

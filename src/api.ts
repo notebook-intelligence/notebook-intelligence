@@ -502,6 +502,10 @@ export class NBIConfig {
     return this.capabilities.chatbook_llm_danger_scan === true;
   }
 
+  get chatbookBackendKernel(): string {
+    return String(this.capabilities.chatbook_backend_kernel || '').trim();
+  }
+
   get chatbookMaxExecutionMode(): ChatbookExecutionMode {
     return parseChatbookExecutionMode(
       this.capabilities.chatbook_max_execution_mode,

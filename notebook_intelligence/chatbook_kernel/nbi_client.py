@@ -29,6 +29,9 @@ class NBIClient:
         cell_id: str = "",
         prompt_hash: str = "",
         context_hash: str = "",
+        language: str = "python",
+        kernel_name: str = "",
+        display_name: str = "",
     ) -> dict:
         payload: dict = {"prompt": prompt}
         if notebook_context:
@@ -41,11 +44,27 @@ class NBIClient:
             payload["promptHash"] = prompt_hash
         if context_hash:
             payload["contextHash"] = context_hash
+        if language:
+            payload["language"] = language
+        if kernel_name:
+            payload["kernelName"] = kernel_name
+        if display_name:
+            payload["kernelDisplayName"] = display_name
         return self._post(payload, generate_url=generate_url, timeout=timeout)
 
-    def danger_scan(self, code: str, generate_url: str = "", timeout: float = 20.0) -> dict:
+    def danger_scan(
+        self,
+        code: str,
+        generate_url: str = "",
+        timeout: float = 20.0,
+        language: str = "python",
+    ) -> dict:
         rec = self._post(
-            {"operation": "danger_scan", "code": code},
+            {
+                "operation": "danger_scan",
+                "code": code,
+                "language": language,
+            },
             generate_url=generate_url,
             timeout=timeout,
         )

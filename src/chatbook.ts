@@ -6,32 +6,34 @@ import { EditorView } from '@codemirror/view';
 import { ISessionContext, Notification } from '@jupyterlab/apputils';
 import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
-import { Contents, Kernel } from '@jupyterlab/services';
+import { Contents, Kernel, KernelSpecManager } from '@jupyterlab/services';
 import { JSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 
-import { INotebookKernelProfile } from './notebook-kernels';
+import {
+  INotebookKernelProfile,
+  mimeTypeForNotebookLanguage,
+  resolveChatbookBackendProfile
+} from './notebook-kernels';
 import {
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
+  buildCodeNotebookFromChatbook,
   buildExecuteChatbookMeta,
-  buildPythonNotebookFromChatbook,
   canSwitchChatbookCellMode,
   getChatbookCellMode,
   getChatbookCellMeta,
   getChatbookCellOrigin,
   hasChatbookPrompt,
-  hasLegacyChatbookCodeView,
   isChatbookKernelName,
   mergeChatbookCellMeta,
-  pythonExportNotebookPath,
+  chatbookExportNotebookPath,
+  resolveChatbookCode,
   resolveChatbookPrompt,
-  resolveChatbookPython,
   sha256Hex,
   snapshotChatbookContextCell,
   splitNotebookContext,
   switchChatbookCellMode,
-  withoutLegacyChatbookSourceView,
   chatbookExecutionModeSummary,
   chatbookNeedsConfirm,
   type ChatbookCellMode,
@@ -45,13 +47,11 @@ import { setChatbookMentionsEnabled } from './chatbook-mentions';
 import { cellOutputAsText } from './utils';
 
 export {
-  CHATBOOK_CONVERT_TARGETS,
   CHATBOOK_KERNEL_NAME,
   CHATBOOK_LANGUAGE,
   CHATBOOK_MSG_TYPE,
   getChatbookCellMeta,
   getChatbookCellMode,
-  isChatbookConvertTargetId,
   isChatbookKernelName,
   isChatbookPromptInlineCompletion
 } from './chatbook-core';
@@ -60,6 +60,40 @@ let codeCellExecutePatched = false;
 const executedPromptByCell = new WeakMap<object, string>();
 const pendingConfirmByCell = new WeakMap<object, IChatbookPendingConfirm>();
 let openChatbookSettings: (() => void) | undefined;
+let chatbookBackendLanguage = 'python';
+let chatbookBackendDisplayName = 'Python';
+let chatbookLanguageRegistry: IEditorLanguageRegistry | undefined;
+
+export async function refreshChatbookBackendProfile(): Promise<INotebookKernelProfile> {
+  const kernels = new KernelSpecManager();
+  await kernels.ready;
+  const profile = resolveChatbookBackendProfile(
+    kernels.specs?.kernelspecs,
+    NBIAPI.config.chatbookBackendKernel
+  );
+  chatbookBackendLanguage = profile.language;
+  chatbookBackendDisplayName = profile.displayName;
+  return profile;
+}
+
+function chatbookCodeMimeType(): string {
+  const language = chatbookBackendLanguage || 'python';
+  if (chatbookLanguageRegistry) {
+    const found = chatbookLanguageRegistry.findByName(language);
+    const mime = found?.mime;
+    if (typeof mime === 'string' && mime) {
+      return mime;
+    }
+    if (Array.isArray(mime) && typeof mime[0] === 'string' && mime[0]) {
+      return mime[0];
+    }
+  }
+  return mimeTypeForNotebookLanguage(language);
+}
+
+export function getChatbookBackendLanguage(): string {
+  return chatbookBackendLanguage || 'python';
+}
 
 interface IChatbookPendingConfirm {
   code: string;
@@ -144,19 +178,17 @@ export function patchCodeCellExecute(): void {
     const source = cell.model.sharedModel.getSource();
     const mode = getChatbookCellMode(cellMeta);
     const incoming = nbiChatbookFromMetadata(metadata);
-    const forcePython = incoming.executeMode === 'python';
-    if (mode === 'python' || forcePython) {
-      const python = forcePython
-        ? String(
-            incoming.pythonSource || resolveChatbookPython(source, cellMeta)
-          )
-        : resolveChatbookPython(source, cellMeta);
-      if (mode === 'python') {
+    const forceCode = incoming.executeMode === 'code';
+    if (mode === 'code' || forceCode) {
+      const code = forceCode
+        ? String(incoming.codeSource || resolveChatbookCode(source, cellMeta))
+        : resolveChatbookCode(source, cellMeta);
+      if (mode === 'code') {
         writeChatbookCellMeta(cell, {
-          mode: 'python',
+          mode: 'code',
           origin: getChatbookCellOrigin(cellMeta),
-          pythonSource: python,
-          generatedCode: python
+          codeSource: code,
+          generatedCode: code
         });
       }
       const execution = await original(cell, sessionContext, {
@@ -166,15 +198,15 @@ export function patchCodeCellExecute(): void {
           cell.model.id,
         nbi_chatbook: {
           cellId: cell.model.id,
-          executeMode: 'python',
-          pythonSource: python
+          executeMode: 'code',
+          codeSource: code
         }
       });
       const status = (
         execution as unknown as { content?: { status?: string } } | undefined
       )?.content?.status;
-      if (mode === 'python' && status !== 'error') {
-        void summarizePythonCell(cell, python);
+      if (mode === 'code' && status !== 'error') {
+        void summarizeCodeCell(cell, code);
       }
       if (status !== 'error') {
         const promptHash =
@@ -194,14 +226,14 @@ export function patchCodeCellExecute(): void {
     const promptHash = await sha256Hex(prompt);
     const executionMode = NBIAPI.config.chatbookExecutionMode;
     const alreadyExecuted = executedPromptByCell.get(cell.model) === promptHash;
-    const cachedPython = getChatbookCellMeta(cell.model.metadata).generatedCode;
-    if (alreadyExecuted && cachedPython) {
+    const cachedCode = getChatbookCellMeta(cell.model.metadata).generatedCode;
+    if (alreadyExecuted && cachedCode) {
       return CodeCell.execute(cell, sessionContext, {
         ...(metadata || {}),
         nbi_chatbook: {
           cellId: cell.model.id,
-          executeMode: 'python',
-          pythonSource: cachedPython
+          executeMode: 'code',
+          codeSource: cachedCode
         }
       });
     }
@@ -238,16 +270,16 @@ export function patchCodeCellExecute(): void {
 }
 
 /**
- * Fill in the English representation of a Python cell. A cell that already has
+ * Fill in the English representation of a code cell. A cell that already has
  * one keeps it: the summary is generated only for an empty English side, or on
  * explicit request through `force`.
  */
-export async function summarizePythonCell(
+export async function summarizeCodeCell(
   cell: IChatbookEditableCell,
-  python?: string,
+  code?: string,
   options: { notifyOnError?: boolean; force?: boolean } = {}
 ): Promise<string | undefined> {
-  const source = python ?? cell.model.sharedModel.getSource();
+  const source = code ?? cell.model.sharedModel.getSource();
   if (!source.trim()) {
     return '';
   }
@@ -257,9 +289,9 @@ export async function summarizePythonCell(
   }
   const codeHash = await sha256Hex(source);
   writeChatbookCellMeta(cell, {
-    mode: 'python',
+    mode: 'code',
     origin: getChatbookCellOrigin(meta),
-    pythonSource: source,
+    codeSource: source,
     generatedCode: source,
     codeHash,
     summaryError: undefined
@@ -270,7 +302,7 @@ export async function summarizePythonCell(
     const latestHash = await sha256Hex(latestSource);
     if (
       latestHash !== codeHash ||
-      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) !== 'python'
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) !== 'code'
     ) {
       return undefined;
     }
@@ -321,27 +353,27 @@ export function toggleActiveChatbookCellMode(panel: NotebookPanel): void {
     return;
   }
   const mode = getChatbookCellMode(getChatbookCellMeta(cell.model.metadata));
-  setChatbookCellMode(cell, mode === 'python' ? 'prompt' : 'python');
+  setChatbookCellMode(cell, mode === 'code' ? 'prompt' : 'code');
 }
 
 /**
  * Mode every cell would land on if the notebook were switched as a whole: back
- * to prompts once every cell already shows its Python.
+ * to prompts once every cell already shows its code.
  */
 export function nextChatbookNotebookMode(
   panel: NotebookPanel
 ): ChatbookCellMode {
   let total = 0;
-  let python = 0;
+  let codeCells = 0;
   forEachCodeCell(panel, cell => {
     total += 1;
     if (
-      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'python'
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'code'
     ) {
-      python += 1;
+      codeCells += 1;
     }
   });
-  return total > 0 && python === total ? 'prompt' : 'python';
+  return total > 0 && codeCells === total ? 'prompt' : 'code';
 }
 
 export function setAllChatbookCellModes(
@@ -363,10 +395,23 @@ export function toggleAllChatbookCellModes(
 
 export function attachChatbookNotebooks(
   tracker: INotebookTracker,
-  options: { onOpenSettings?: () => void } = {}
+  options: {
+    onOpenSettings?: () => void;
+    languageRegistry?: IEditorLanguageRegistry;
+  } = {}
 ): IDisposable {
   openChatbookSettings = options.onOpenSettings;
+  chatbookLanguageRegistry = options.languageRegistry;
   const attached = new WeakSet<NotebookPanel>();
+  const resyncBadges: Array<() => void> = [];
+  void refreshChatbookBackendProfile();
+  NBIAPI.configChanged.connect(() => {
+    void refreshChatbookBackendProfile().then(() => {
+      for (const sync of resyncBadges) {
+        sync();
+      }
+    });
+  });
 
   const attach = (panel: NotebookPanel) => {
     if (attached.has(panel)) {
@@ -395,7 +440,7 @@ export function attachChatbookNotebooks(
           existing?.remove();
           widget.node.classList.remove(
             'nbi-chatbook-cell-prompt',
-            'nbi-chatbook-cell-python'
+            'nbi-chatbook-cell-code'
           );
           continue;
         }
@@ -410,7 +455,7 @@ export function attachChatbookNotebooks(
           );
         }
         const desiredMime =
-          mode === 'python' ? 'text/x-python' : 'text/x-chatbook';
+          mode === 'code' ? chatbookCodeMimeType() : 'text/x-chatbook';
         const cellModel = widget.model as unknown as { mimeType: string };
         if (cellModel.mimeType !== desiredMime) {
           cellModel.mimeType = desiredMime;
@@ -419,18 +464,16 @@ export function attachChatbookNotebooks(
           'nbi-chatbook-cell-prompt',
           mode === 'prompt'
         );
-        widget.node.classList.toggle(
-          'nbi-chatbook-cell-python',
-          mode === 'python'
-        );
+        widget.node.classList.toggle('nbi-chatbook-cell-code', mode === 'code');
         const button = existing || document.createElement('button');
         button.className = 'nbi-chatbook-cell-mode';
         button.type = 'button';
-        button.textContent = mode === 'python' ? 'Py' : 'NL';
+        const languageLabel = chatbookBackendDisplayName || 'code';
+        button.textContent = mode === 'code' ? 'Cd' : 'NL';
         button.title =
-          mode === 'python'
-            ? 'Python cell — switch to its English representation'
-            : 'Natural-language cell — switch to Python';
+          mode === 'code'
+            ? `Code cell (${languageLabel}) — switch to natural language`
+            : `Natural-language cell — switch to ${languageLabel} code`;
         button.setAttribute('aria-label', button.title);
         if (!existing) {
           button.addEventListener('click', event => {
@@ -443,7 +486,7 @@ export function attachChatbookNotebooks(
             );
             setChatbookCellMode(
               widget,
-              currentMode === 'python' ? 'prompt' : 'python'
+              currentMode === 'code' ? 'prompt' : 'code'
             );
             syncCellBadges();
           });
@@ -483,11 +526,9 @@ export function attachChatbookNotebooks(
     panel.sessionContext.kernelChanged.connect(connectKernel);
     panel.model?.contentChanged.connect(syncCellBadges);
     panel.content.activeCellChanged.connect(syncCellBadges);
+    resyncBadges.push(syncCellBadges);
     void panel.sessionContext.ready.then(connectKernel);
-    void panel.context.ready.then(() => {
-      migrateLegacyCodeView(panel);
-      syncCellBadges();
-    });
+    void panel.context.ready.then(syncCellBadges);
     syncCellBadges();
     panel.disposed.connect(() => {
       if (kernelConnection) {
@@ -496,6 +537,10 @@ export function attachChatbookNotebooks(
       }
       panel.model?.contentChanged.disconnect(syncCellBadges);
       panel.content.activeCellChanged.disconnect(syncCellBadges);
+      const index = resyncBadges.indexOf(syncCellBadges);
+      if (index >= 0) {
+        resyncBadges.splice(index, 1);
+      }
     });
   };
 
@@ -554,15 +599,15 @@ function applyChatbookPayload(
   const generatedCode = String(content.generatedCode || '');
   const patch: IChatbookCellMeta = {
     generatedCode,
-    // The run that just finished defines the cell's Python, so both fields move
+    // The run that just finished defines the cell's code, so both fields move
     // together.
-    pythonSource: generatedCode,
+    codeSource: generatedCode,
     promptHash: content.promptHash ? String(content.promptHash) : undefined,
     contextHash: content.contextHash ? String(content.contextHash) : undefined,
     generatedAt: content.generatedAt ? String(content.generatedAt) : undefined,
     cacheHit: Boolean(content.cacheHit)
   };
-  // An empty prompt generates nothing; the Python the cell already has stands.
+  // An empty prompt generates nothing; the code the cell already has stands.
   if (!generatedCode) {
     return;
   }
@@ -573,7 +618,7 @@ function applyChatbookPayload(
     : panel.content.activeCell;
   if (cell) {
     if (
-      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'python'
+      getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) === 'code'
     ) {
       return;
     }
@@ -661,8 +706,7 @@ function syncChatbookConfirmBars(panel: NotebookPanel): void {
     const pending = pendingConfirmByCell.get(widget.model);
     if (
       !pending ||
-      getChatbookCellMode(getChatbookCellMeta(widget.model.metadata)) ===
-        'python'
+      getChatbookCellMode(getChatbookCellMeta(widget.model.metadata)) === 'code'
     ) {
       hideChatbookConfirmBar(widget);
       continue;
@@ -728,7 +772,7 @@ function renderChatbookConfirmBar(
     : '';
   bar.innerHTML = `
     <div class="nbi-chatbook-confirm-header">${escapeChatbookHtml(
-      'Review generated Python before running it in this kernel.'
+      'Review generated code before running it in this kernel.'
     )}</div>
     <pre class="nbi-chatbook-confirm-code">${escapeChatbookHtml(pending.code)}</pre>
     ${reasons}
@@ -757,8 +801,8 @@ function renderChatbookConfirmBar(
     void CodeCell.execute(cell as unknown as CodeCell, panel.sessionContext, {
       nbi_chatbook: {
         cellId: cell.model.id,
-        executeMode: 'python',
-        pythonSource: current.code
+        executeMode: 'code',
+        codeSource: current.code
       }
     } as JSONObject);
   });
@@ -816,37 +860,7 @@ function forEachCodeCell(
   }
 }
 
-/**
- * Notebooks saved while the old notebook-wide code view was on hold generated
- * Python in cells still marked as prompts. Those cells are Python cells now.
- */
-function migrateLegacyCodeView(panel: NotebookPanel): void {
-  if (!panel.model || !hasLegacyChatbookCodeView(panel.model.metadata)) {
-    return;
-  }
-  forEachCodeCell(panel, cell => {
-    const meta = getChatbookCellMeta(cell.model.metadata);
-    const source = cell.model.sharedModel.getSource();
-    if (
-      getChatbookCellMode(meta) === 'python' ||
-      !source.trim() ||
-      source.trim() !== (meta.generatedCode || '').trim()
-    ) {
-      return;
-    }
-    writeChatbookCellMeta(cell, {
-      mode: 'python',
-      origin: getChatbookCellOrigin(meta),
-      pythonSource: source
-    });
-  });
-  const metadata = withoutLegacyChatbookSourceView(panel.model.metadata);
-  if (metadata.nbi) {
-    panel.model.setMetadata('nbi', metadata.nbi);
-  }
-}
-
-export async function exportChatbookNotebookAsPython(
+export async function exportChatbookNotebookAsCode(
   panel: NotebookPanel,
   profile: INotebookKernelProfile,
   contents: Contents.IManager
@@ -857,16 +871,24 @@ export async function exportChatbookNotebookAsPython(
   const notebook = structuredClone(
     panel.model.toJSON() as Record<string, unknown>
   );
-  const content = buildPythonNotebookFromChatbook(notebook, {
+  const content = buildCodeNotebookFromChatbook(notebook, {
     name: profile.kernelName,
     display_name: profile.displayName,
     language: profile.language
   });
   let attempt = 0;
-  let path = pythonExportNotebookPath(panel.context.path, attempt);
+  let path = chatbookExportNotebookPath(
+    panel.context.path,
+    profile.language,
+    attempt
+  );
   while (await contentsPathExists(contents, path)) {
     attempt += 1;
-    path = pythonExportNotebookPath(panel.context.path, attempt);
+    path = chatbookExportNotebookPath(
+      panel.context.path,
+      profile.language,
+      attempt
+    );
   }
   await contents.save(path, {
     type: 'notebook',

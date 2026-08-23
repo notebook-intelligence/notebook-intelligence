@@ -4,8 +4,7 @@ export const CHATBOOK_KERNEL_NAME = 'chatbook';
 export const CHATBOOK_MSG_TYPE = 'nbi_chatbook_code';
 export const CHATBOOK_LANGUAGE = 'chatbook';
 
-export type ChatbookCellMode = 'prompt' | 'python';
-export type ChatbookConvertTargetId = 'python';
+export type ChatbookCellMode = 'prompt' | 'code';
 export type ChatbookExecutionMode =
   | 'always-confirm'
   | 'confirm-if-risky'
@@ -75,7 +74,7 @@ const CHATBOOK_EXECUTION_MODE_SUMMARIES: Record<ChatbookExecutionMode, string> =
     'always-confirm': 'Chatbook is set to confirm every natural-language run.',
     'confirm-if-risky':
       'Chatbook is set to confirm only when the scan flags a risk.',
-    'auto-run': 'Chatbook is set to run generated Python immediately.'
+    'auto-run': 'Chatbook is set to run generated code immediately.'
   };
 
 /**
@@ -98,7 +97,7 @@ export interface IChatbookCellMeta {
   prompt?: string;
   promptHash?: string;
   generatedCode?: string;
-  pythonSource?: string;
+  codeSource?: string;
   codeHash?: string;
   summaryError?: string;
   contextHash?: string;
@@ -122,25 +121,6 @@ export interface IChatbookNotebookContext {
   suffix: IChatbookContextCell[];
 }
 
-export interface IChatbookConvertTarget {
-  id: ChatbookConvertTargetId;
-  label: string;
-  language: string;
-  defaultKernelName: string;
-}
-
-export const CHATBOOK_CONVERT_TARGETS: Record<
-  ChatbookConvertTargetId,
-  IChatbookConvertTarget
-> = {
-  python: {
-    id: 'python',
-    label: 'Python notebook',
-    language: 'python',
-    defaultKernelName: 'python3'
-  }
-};
-
 export interface IChatbookExecuteMeta {
   cellId?: string;
   executeMode?: ChatbookCellMode;
@@ -151,7 +131,7 @@ export interface IChatbookExecuteMeta {
   workingDir?: string;
   notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
-  pythonSource?: string;
+  codeSource?: string;
   executionPolicy?: ChatbookExecutionMode;
   llmDangerScan?: boolean;
 }
@@ -164,16 +144,16 @@ export function isChatbookPromptInlineCompletion(
   kernelName: string | undefined | null,
   cellMode: ChatbookCellMode = 'prompt'
 ): boolean {
-  return isChatbookKernelName(kernelName) && cellMode === 'prompt';
+  return isChatbookKernelName(kernelName) && cellMode !== 'code';
 }
 
 export function getChatbookCellMode(meta: IChatbookCellMeta): ChatbookCellMode {
-  return meta.mode === 'python' ? 'python' : 'prompt';
+  return meta.mode === 'code' ? 'code' : 'prompt';
 }
 
 /**
- * Both modes are always reachable. A cell with no Python yet shows an empty
- * Python editor, which the user can either run the prompt to fill or type into.
+ * Both modes are always reachable. A cell with no code yet shows an empty
+ * code editor, which the user can either run the prompt to fill or type into.
  */
 export function canSwitchChatbookCellMode(
   meta: IChatbookCellMeta,
@@ -185,7 +165,7 @@ export function canSwitchChatbookCellMode(
 export function getChatbookCellOrigin(
   meta: IChatbookCellMeta
 ): ChatbookCellMode {
-  if (meta.origin === 'python' || meta.origin === 'prompt') {
+  if (meta.origin === 'prompt' || meta.origin === 'code') {
     return meta.origin;
   }
   return getChatbookCellMode(meta);
@@ -232,62 +212,21 @@ export function mergeChatbookCellMeta(
   return current;
 }
 
-/**
- * Notebooks written before cell mode became the only state carry a notebook-wide
- * `sourceView`; in `code` view their prompt cells hold generated Python.
- */
-export function hasLegacyChatbookCodeView(notebookMetadata: unknown): boolean {
-  if (!notebookMetadata || typeof notebookMetadata !== 'object') {
-    return false;
-  }
-  const chatbook = (
-    notebookMetadata as { nbi?: { chatbook?: { sourceView?: unknown } } }
-  ).nbi?.chatbook;
-  return Boolean(chatbook) && chatbook?.sourceView === 'code';
-}
-
-export function withoutLegacyChatbookSourceView(
-  notebookMetadata: unknown
-): Record<string, unknown> {
-  const current =
-    notebookMetadata && typeof notebookMetadata === 'object'
-      ? { ...(notebookMetadata as Record<string, unknown>) }
-      : {};
-  const nbi =
-    current.nbi && typeof current.nbi === 'object'
-      ? { ...(current.nbi as Record<string, unknown>) }
-      : {};
-  const chatbook =
-    nbi.chatbook && typeof nbi.chatbook === 'object'
-      ? { ...(nbi.chatbook as Record<string, unknown>) }
-      : {};
-  delete chatbook.sourceView;
-  nbi.chatbook = chatbook;
-  current.nbi = nbi;
-  return current;
-}
-
-export function isChatbookConvertTargetId(
-  value: unknown
-): value is ChatbookConvertTargetId {
-  return typeof value === 'string' && value in CHATBOOK_CONVERT_TARGETS;
-}
-
 export function resolveChatbookPrompt(
   source: string,
   meta: IChatbookCellMeta
 ): string {
-  if (getChatbookCellMode(meta) === 'python') {
+  if (getChatbookCellMode(meta) === 'code') {
     return meta.prompt ?? '';
   }
   return source;
 }
 
-export function resolveChatbookPython(
+export function resolveChatbookCode(
   source: string,
   meta: IChatbookCellMeta
 ): string {
-  if (getChatbookCellMode(meta) === 'python') {
+  if (getChatbookCellMode(meta) === 'code') {
     return source;
   }
   return meta.generatedCode || '';
@@ -310,26 +249,26 @@ function snapshotChatbookCell(options: {
 }): {
   prompt: string;
   generatedCode: string;
-  pythonSource: string;
+  codeSource: string;
   mode: ChatbookCellMode;
 } {
   const mode = getChatbookCellMode(options.meta);
-  if (mode === 'python') {
-    const pythonSource = options.source;
+  if (mode === 'code') {
+    const codeSource = options.source;
     return {
       prompt: options.meta.prompt || '',
-      generatedCode: pythonSource,
-      pythonSource,
+      generatedCode: codeSource,
+      codeSource,
       mode
     };
   }
-  // A run refreshes `generatedCode` alone, so `pythonSource` left over from an
-  // earlier stint as a Python cell can be stale.
+  // A run refreshes `generatedCode` alone, so `codeSource` left over from an
+  // earlier stint as a code cell can be stale.
   const generatedCode = options.meta.generatedCode ?? '';
   return {
     prompt: options.source,
     generatedCode,
-    pythonSource: generatedCode,
+    codeSource: generatedCode,
     mode
   };
 }
@@ -340,36 +279,37 @@ export function switchChatbookCellMode(options: {
   nextMode: ChatbookCellMode;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
-  const pythonSource = snapshot.pythonSource || snapshot.generatedCode;
+  const codeSource = snapshot.codeSource || snapshot.generatedCode;
+  const nextMode = options.nextMode;
   const meta: IChatbookCellMeta = {
     ...options.meta,
     origin: options.meta.origin ?? snapshot.mode,
-    mode: options.nextMode,
+    mode: nextMode,
     prompt: snapshot.prompt,
-    generatedCode: pythonSource,
-    pythonSource
+    generatedCode: codeSource,
+    codeSource
   };
   const source =
-    options.nextMode === 'python'
-      ? pythonSource || (snapshot.mode === 'python' ? options.source : '')
+    nextMode === 'code'
+      ? codeSource || (snapshot.mode === 'code' ? options.source : '')
       : snapshot.prompt;
   return { source, meta };
 }
 
-export function convertChatbookCellToPython(options: {
+export function convertChatbookCellToCode(options: {
   source: string;
   meta: IChatbookCellMeta;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
-  if (snapshot.mode === 'python') {
-    const python = snapshot.pythonSource || snapshot.generatedCode;
+  if (snapshot.mode === 'code') {
+    const code = snapshot.codeSource || snapshot.generatedCode;
     return {
-      source: python || options.source,
+      source: code || options.source,
       meta: {
         ...options.meta,
-        mode: 'python',
+        mode: 'code',
         prompt: snapshot.prompt,
-        pythonSource: python || options.source
+        codeSource: code || options.source
       }
     };
   }
@@ -400,8 +340,9 @@ export function cellSourceToString(source: unknown): string {
   return '';
 }
 
-export function pythonExportNotebookPath(
+export function chatbookExportNotebookPath(
   sourcePath: string,
+  language: string,
   attempt = 0
 ): string {
   const normalized = sourcePath.replace(/\\/g, '/');
@@ -409,19 +350,22 @@ export function pythonExportNotebookPath(
   const dir = slash >= 0 ? normalized.slice(0, slash) : '';
   const file = slash >= 0 ? normalized.slice(slash + 1) : normalized;
   const stem = file.replace(/\.ipynb$/i, '') || 'notebook';
-  const suffix = attempt > 0 ? `-python-${attempt}` : '-python';
+  const slug = language.trim().toLowerCase() || 'code';
+  const suffix = attempt > 0 ? `-${slug}-${attempt}` : `-${slug}`;
   const name = `${stem}${suffix}.ipynb`;
   return dir ? `${dir}/${name}` : name;
 }
 
-export function buildPythonNotebookFromChatbook(
+export function buildCodeNotebookFromChatbook(
   notebook: Record<string, unknown>,
   kernelspec: IChatbookKernelSpec
 ): Record<string, unknown> {
   const cells = Array.isArray(notebook.cells)
-    ? notebook.cells.map(cell => convertNotebookCellToPython(cell))
+    ? notebook.cells.map(cell => convertNotebookCellToCode(cell))
     : [];
-  const metadata = withoutLegacyChatbookSourceView(notebook.metadata || {});
+  const metadata: Record<string, unknown> = {
+    ...((notebook.metadata as Record<string, unknown>) || {})
+  };
   metadata.kernelspec = kernelspec;
   metadata.language_info = { name: kernelspec.language };
   return {
@@ -431,7 +375,7 @@ export function buildPythonNotebookFromChatbook(
   };
 }
 
-function convertNotebookCellToPython(cell: unknown): unknown {
+function convertNotebookCellToCode(cell: unknown): unknown {
   if (!cell || typeof cell !== 'object') {
     return cell;
   }
@@ -439,7 +383,7 @@ function convertNotebookCellToPython(cell: unknown): unknown {
   if (next.cell_type !== 'code') {
     return next;
   }
-  const converted = convertChatbookCellToPython({
+  const converted = convertChatbookCellToCode({
     source: cellSourceToString(next.source),
     meta: getChatbookCellMeta(next.metadata)
   });
@@ -480,8 +424,8 @@ export function snapshotChatbookContextCell(options: {
   }
   const mode = getChatbookCellMode(options.cellMeta);
   cell.mode = mode;
-  if (mode === 'python') {
-    const python = resolveChatbookPython(options.source, options.cellMeta);
+  if (mode === 'code') {
+    const code = resolveChatbookCode(options.source, options.cellMeta);
     const prompt = options.cellMeta.prompt || '';
     if (prompt) {
       cell.prompt = truncateChatbookContextField(
@@ -489,9 +433,9 @@ export function snapshotChatbookContextCell(options: {
         CHATBOOK_CONTEXT_MAX_FIELD_CHARS
       );
     }
-    if (python) {
+    if (code) {
       cell.generatedCode = truncateChatbookContextField(
-        python,
+        code,
         CHATBOOK_CONTEXT_MAX_FIELD_CHARS
       );
     }
@@ -561,18 +505,18 @@ export function buildExecuteChatbookMeta(options: {
   contextHash?: string;
   executeMode?: ChatbookCellMode;
   allowCachedCode?: boolean;
-  pythonSource?: string;
+  codeSource?: string;
   executionPolicy?: ChatbookExecutionMode;
   llmDangerScan?: boolean;
 }): IChatbookExecuteMeta {
   const meta: IChatbookExecuteMeta = {
     cellId: options.cellId,
     promptHash: options.promptHash,
-    executeMode: options.executeMode || 'prompt'
+    executeMode: options.executeMode === 'code' ? 'code' : 'prompt'
   };
-  if (meta.executeMode === 'python') {
-    if (options.pythonSource) {
-      meta.pythonSource = options.pythonSource;
+  if (meta.executeMode === 'code') {
+    if (options.codeSource) {
+      meta.codeSource = options.codeSource;
     }
     return meta;
   }
@@ -582,7 +526,7 @@ export function buildExecuteChatbookMeta(options: {
   if (options.llmDangerScan) {
     meta.llmDangerScan = true;
   }
-  // The stored Python belongs to the prompt that produced it, so re-running an
+  // The stored code belongs to the prompt that produced it, so re-running an
   // unchanged prompt reuses it. Notebook context deliberately does not count:
   // it carries cell outputs, which this very cell changes when it runs, and
   // would make every re-run a miss.
