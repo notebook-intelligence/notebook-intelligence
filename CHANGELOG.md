@@ -16,6 +16,7 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 ### Changed
 
+- **Chat response streams now finalize when participant handlers return.** Participant implementations must complete streaming and UI-command work before their awaited `handle_chat_request` coroutine returns; detached post-return writes are logged and ignored so every request delivers exactly one terminal response.
 - **Provider SDKs load on first use instead of at module import** (#370). `import notebook_intelligence` no longer imports `litellm`, `openai`, `ollama`, or the `anthropic` SDK; `litellm`, `openai`, and `anthropic` load the first time their provider is actually used (for Claude mode that includes the client construction and model refresh NBI runs at startup), while `ollama` still loads during extension startup when the provider enumerates local models. This roughly halves the server-extension import time (a cost the Jupyter server pays on every start), with the biggest effect on Windows machines where antivirus scanning amplifies the many-small-file SDK imports (#368). When NBI does load litellm, it now defaults `LITELLM_LOCAL_MODEL_COST_MAP=true` so litellm reads its bundled model-cost map rather than fetching it over HTTP at import; set the env var to `false` to restore the fetch.
 
 ### Fixed

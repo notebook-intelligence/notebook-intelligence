@@ -1,5 +1,20 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
+import { MCPServerStatus } from '../tokens';
+
+export function mcpServerStatusTitle(status: MCPServerStatus): string {
+  if (status === MCPServerStatus.FailedToUpdateToolList) {
+    return 'Tool refresh failed. Reload MCP servers to retry.';
+  }
+  if (status === MCPServerStatus.FailedToUpdatePromptList) {
+    return 'Prompt refresh failed. Reload MCP servers to retry.';
+  }
+  if (status === MCPServerStatus.FailedToConnect) {
+    return 'Connection failed. Reload MCP servers to retry.';
+  }
+  return status;
+}
+
 export function mcpServerSettingsToEnabledState(
   mcpServers: any,
   mcpServerSettings: any

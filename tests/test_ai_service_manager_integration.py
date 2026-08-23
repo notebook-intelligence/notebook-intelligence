@@ -149,6 +149,13 @@ class TestAIServiceManagerIntegration:
         manager.nbi_config.claude_settings = claude_settings
         return manager
 
+    def test_real_initialization_resolves_public_default_participant(self):
+        manager = self._make_manager_for_update_test({"enabled": False})
+
+        participant = manager.get_chat_participant("@missing explain this")
+
+        assert participant is manager.default_chat_participant
+
     def test_claude_mode_triggers_model_fetch_when_cache_empty(self):
         """When Claude mode is enabled and the model cache is empty,
         update_models_from_config should fire a background fetch so the

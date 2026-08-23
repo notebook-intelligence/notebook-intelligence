@@ -12,6 +12,11 @@ concurrency:
 jobs:
   check_release:
     runs-on: ubuntu-latest
+    # jupyter-releaser's check-npm asserts package.json's repository.url matches
+    # the repo the workflow runs in. On a fork that URL still points at the
+    # upstream, so the check fails on every fork PR with no bearing on the
+    # change. Skip it on forks; it runs on the canonical (non-fork) repository.
+    if: ${{ !github.event.repository.fork }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
