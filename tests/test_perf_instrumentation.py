@@ -117,6 +117,10 @@ class TestWebsocketEmitterInstrumentation:
         stream_spans = _spans_named(turn, "stream")
         assert len(stream_spans) == 1
         assert stream_spans[0]["status"] == "ok"
+        # chunk_count/bytes are written once in finish(), not per chunk in
+        # stream(), so they must still land on the recorded span.
+        assert stream_spans[0]["attrs"]["chunk_count"] == 2
+        assert stream_spans[0]["attrs"]["bytes"] == emitter._perf_byte_count
 
         egress_events = [e for e in turn._events if e["name"] == "egress"]
         assert len(egress_events) == 1
@@ -138,6 +142,36 @@ class TestWebsocketEmitterInstrumentation:
         emitter.stream({"type": "markdown", "content": "a"})
         emitter.finish()
         assert emitter._perf_stream_cm is None
+
+    def test_progress_chunk_does_not_open_span_but_markdown_chunk_does(self):
+        # ProgressData ("Thinking...") is a local spinner emitted before the
+        # agent is even contacted; it must not open the stream span, fire
+        # first_token, or count toward chunk/byte totals. A following
+        # content-bearing chunk is the one that actually opens the window.
+        from notebook_intelligence.api import MarkdownData, ProgressData
+
+        _enable_perf()
+        turn = perf.begin_turn("m-prog", "claude", time.time(), time.monotonic())
+        emitter = _make_emitter("m-prog")
+
+        emitter.stream(ProgressData("Thinking..."))
+        assert emitter._perf_stream_cm is None
+        assert emitter._perf_chunk_count == 0
+        assert emitter._perf_byte_count == 0
+        assert [e for e in turn._events if e["name"] == "first_token"] == []
+
+        emitter.stream(MarkdownData("hello"))
+        assert emitter._perf_stream_cm is not None
+        assert emitter._perf_chunk_count == 1
+        assert emitter._perf_byte_count == len("hello")
+        first_token_events = [e for e in turn._events if e["name"] == "first_token"]
+        assert len(first_token_events) == 1
+
+        # A progress chunk arriving after the span is already open (e.g. an
+        # agent status update mid-turn) still must not pollute the counters.
+        emitter.stream(ProgressData("Still thinking..."))
+        assert emitter._perf_chunk_count == 1
+        assert emitter._perf_byte_count == len("hello")
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +209,31 @@ class TestRunRequestThreadTurnClose:
         assert "message_id=m-ok" in caplog.text
         assert "status=ok" in caplog.text
 
+    def test_cancelled_closes_turn_cancelled_not_ok(self, caplog):
+        # The coroutine unwinds normally on cancellation (no exception), so
+        # without this check a 2s cancelled stub of a 60s turn would record
+        # as a fast "ok" and pollute the success percentiles.
+        from notebook_intelligence.extension import WebsocketCopilotHandler
+
+        _enable_perf()
+        perf.begin_turn("m-cancel", "claude", time.time(), time.monotonic())
+        handler = self._make_handler()
+        handler._messageCallbackHandlers["m-cancel"] = SimpleNamespace(
+            response_emitter=SimpleNamespace(user_input_wait_seconds=0.0),
+            cancel_token=SimpleNamespace(is_cancel_requested=True),
+        )
+
+        async def _noop():
+            return None
+
+        caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
+        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-cancel")
+
+        assert perf.get_turn("m-cancel") is None
+        assert "status=cancelled" in caplog.text
+        snapshot = perf.report_snapshot()
+        assert snapshot["turns"][-1]["status"] == "cancelled"
+
     def test_exception_closes_turn_error_and_reraises(self, caplog):
         from notebook_intelligence.extension import WebsocketCopilotHandler
 
@@ -190,6 +249,29 @@ class TestRunRequestThreadTurnClose:
             WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err")
 
         assert perf.get_turn("m-err") is None
+        assert "status=error" in caplog.text
+
+    def test_error_wins_over_cancelled_when_coroutine_also_raised(self, caplog):
+        # A cancel token can be flagged on a turn that still ends up
+        # erroring for an unrelated reason; the real failure must not be
+        # downgraded to "cancelled".
+        from notebook_intelligence.extension import WebsocketCopilotHandler
+
+        _enable_perf()
+        perf.begin_turn("m-err-cancel", "claude", time.time(), time.monotonic())
+        handler = self._make_handler()
+        handler._messageCallbackHandlers["m-err-cancel"] = SimpleNamespace(
+            response_emitter=SimpleNamespace(user_input_wait_seconds=0.0),
+            cancel_token=SimpleNamespace(is_cancel_requested=True),
+        )
+
+        async def _raise():
+            raise RuntimeError("boom")
+
+        caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
+        with pytest.raises(RuntimeError):
+            WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err-cancel")
+
         assert "status=error" in caplog.text
 
     def test_disabled_perf_skips_turn_bookkeeping_without_error(self):
@@ -367,6 +449,31 @@ class TestClaudeToolWrapper:
         perf.begin_turn("m-a", "claude", time.time(), time.monotonic())
         perf.begin_turn("m-b", "claude", time.time(), time.monotonic())
         assert claude_mod._perf_single_open_turn() is None
+
+    def test_wrapped_tool_uses_current_response_turn_with_multiple_turns_open(self):
+        from notebook_intelligence import claude as claude_mod
+
+        _enable_perf()
+        turn_a = perf.begin_turn("m-a", "claude", time.time(), time.monotonic())
+        turn_b = perf.begin_turn("m-b", "claude", time.time(), time.monotonic())
+
+        # _perf_single_open_turn would return None here (two turns open);
+        # the current-response lookup must be tried first so the span still
+        # lands on the right turn instead of being dropped or misattributed.
+        claude_mod.set_current_response(SimpleNamespace(message_id="m-b"))
+        try:
+            wrapped = claude_mod._perf_wrap_tool(self._make_fake_tool())
+            result = _run(wrapped.handler({}))
+        finally:
+            claude_mod.set_current_response(None)
+
+        assert result == {"content": [{"type": "text", "text": "ok"}]}
+        turn_a.close("ok")
+        turn_b.close("ok")
+        assert _spans_named(turn_a, "tool:notebook_get_cells") == []
+        spans_b = _spans_named(turn_b, "tool:notebook_get_cells")
+        assert len(spans_b) == 1
+        assert spans_b[0]["attrs"].get("tool") == "notebook_get_cells"
 
 
 # ---------------------------------------------------------------------------
@@ -561,38 +668,3 @@ class TestMcpManagerToolSpan:
         spans = _spans_named(turn, "tool:search_docs")
         assert len(spans) == 1
         assert spans[0]["attrs"].get("ok") is False
-
-def test_cancel_requested_records_cancelled_status():
-    from notebook_intelligence.extension import WebsocketCopilotHandler
-
-    _enable_perf()
-    perf.begin_turn("m-cancel", "claude", time.time(), time.monotonic())
-    handler = MagicMock(spec=WebsocketCopilotHandler)
-    handler._messageCallbackHandlers = {}
-    handler._messageCallbackHandlers["m-cancel"] = SimpleNamespace(
-        response_emitter=SimpleNamespace(user_input_wait_seconds=0.0),
-        cancel_token=SimpleNamespace(is_cancel_requested=True),
-    )
-
-    async def _noop():
-        return None
-
-    WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-cancel")
-    snapshot = perf.report_snapshot()
-    assert snapshot["turns"][-1]["status"] == "cancelled"
-
-def test_progress_chunk_before_content_does_not_crash_or_open_stream():
-    from notebook_intelligence.api import ProgressData, MarkdownData
-
-    _enable_perf()
-    perf.begin_turn("m-prog", "claude", time.time(), time.monotonic())
-    emitter = _make_emitter("m-prog")
-
-    emitter.stream(ProgressData("Thinking"))
-    assert emitter._perf_stream_cm is None
-
-    emitter.stream(MarkdownData("hello"))
-    turn = perf.get_turn("m-prog")
-    doc = turn.close("ok")
-    assert any(ev["name"] == "first_token" for ev in doc["events"])
-    assert any(sp["name"] == "stream" for sp in doc["spans"]) or emitter._perf_stream_cm is not None

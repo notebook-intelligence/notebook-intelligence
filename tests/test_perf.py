@@ -140,6 +140,26 @@ class TestTurnLifecycle:
         assert docs[0]["status"] == "ok"
 
 
+class TestCurrentSpanAttr:
+    def test_set_current_span_attr_sets_attr_on_innermost_open_span(self):
+        perf.configure({"enabled": True, "attr_detail": "full"}, None)
+        handle = perf.begin_turn("m-cur", "claude", time.time(), time.monotonic())
+        with handle.span("tool:read_file", tool="read_file"):
+            perf.set_current_span_attr("server", "filesystem")
+        doc = handle.close("ok")
+        assert doc["spans"][0]["attrs"]["server"] == "filesystem"
+
+    def test_set_current_span_attr_is_noop_when_disabled(self):
+        perf.configure({"enabled": False}, None)
+        # No recorder active at all: must not raise even with no open span.
+        perf.set_current_span_attr("server", "filesystem")
+
+    def test_set_current_span_attr_is_noop_with_no_open_span(self):
+        perf.configure({"enabled": True}, None)
+        # Enabled, but nothing has opened a span in this thread's context.
+        perf.set_current_span_attr("server", "filesystem")
+
+
 class TestConcurrentTurns:
     def test_two_threads_do_not_cross_contaminate(self):
         perf.configure({"enabled": True}, None)
@@ -258,6 +278,10 @@ class TestAllowlistAndRedaction:
         attrs = doc["spans"][0]["attrs"]
         assert attrs["tool"] == "read_file"
         assert attrs["server"] == "filesystem"
+        # The span name itself must stay plain under full detail, matching
+        # the attrs on the same span (see TestToolNameRedaction for the
+        # redacted-detail counterpart).
+        assert doc["spans"][0]["name"] == "tool:read_file"
 
 
 class TestRingBufferAndSnapshot:
@@ -305,6 +329,10 @@ class TestRingBufferAndSnapshot:
         assert not errors
 
     def test_aggregates_report_slowest_tools_and_totals(self):
+        # builtin=True keeps these NBI-builtin tool names plain even under
+        # the default redacted config (see test_builtin_tool_span_names_stay_plain),
+        # so this test can assert on stable names while still exercising the
+        # real aggregation path; it is not exercising redaction itself.
         perf.configure({"enabled": True}, None)
         handle = perf.begin_turn("m-agg", "claude", time.time(), time.monotonic())
         with handle.span("tool:slow_tool", tool="slow_tool", builtin=True):
@@ -357,6 +385,43 @@ class TestJsonlSink:
 
         sink._write_batch([{"message_id": "x"}])
         assert sink._disabled is True
+
+    def test_configure_recreates_sink_after_it_self_disabled(self, tmp_path):
+        # A settings save (e.g. after the operator fixes the filesystem)
+        # must retry the sink instead of leaving a self-disabled instance
+        # in place forever when log_dir hasn't changed.
+        perf.configure(
+            {"enabled": True, "log_to_file": True, "log_dir": str(tmp_path)}, None
+        )
+        stale_sink = perf._sink
+        assert stale_sink is not None
+        stale_sink._disabled = True
+        stale_sink._consecutive_failures = perf._SINK_MAX_CONSECUTIVE_FAILURES
+
+        perf.configure(
+            {"enabled": True, "log_to_file": True, "log_dir": str(tmp_path)}, None
+        )
+
+        assert perf._sink is not None
+        assert perf._sink is not stale_sink
+        assert perf._sink._disabled is False
+
+        _close_simple_turn(message_id="m-sink-recover")
+
+        perf_dir = tmp_path / "perf"
+        deadline = time.monotonic() + 2.0
+        lines = []
+        while time.monotonic() < deadline:
+            files = list(perf_dir.glob("perf-*.jsonl")) if perf_dir.exists() else []
+            if files:
+                lines = files[0].read_text(encoding="utf-8").splitlines()
+                if len(lines) >= 2:  # meta line + the recovered turn doc
+                    break
+            time.sleep(0.05)
+
+        assert len(lines) >= 2
+        message_ids = {json.loads(line)["message_id"] for line in lines[1:]}
+        assert "m-sink-recover" in message_ids
 
     def test_enqueue_is_a_noop_once_disabled(self, monkeypatch):
         sink = perf._JsonlSink("/nonexistent-nbi-perf-dir-xyz")
@@ -460,3 +525,21 @@ class TestToolNameRedaction:
         doc = handle.close("ok")
         assert doc["spans"][0]["name"] == "tool:add-code-cell"
         assert "builtin" not in doc["spans"][0]["attrs"]
+
+    def test_redacted_hashes_span_name_suffix_full_preserves_it(self):
+        # Same non-builtin external tool span name under both attr_detail
+        # modes: redacted must hash the "tool:" suffix (matching the tool/
+        # server attr hashing on the same span), full must leave it as-is.
+        perf.configure({"enabled": True, "attr_detail": "redacted"}, None)
+        handle = perf.begin_turn("m-red3", "copilot", time.time(), time.monotonic())
+        with handle.span("tool:mcp__acme__search", tool="mcp__acme__search"):
+            pass
+        redacted_name = handle.close("ok")["spans"][0]["name"]
+        assert redacted_name == "tool:" + perf._hash8("mcp__acme__search")
+
+        perf.configure({"enabled": True, "attr_detail": "full"}, None)
+        handle = perf.begin_turn("m-red4", "copilot", time.time(), time.monotonic())
+        with handle.span("tool:mcp__acme__search", tool="mcp__acme__search"):
+            pass
+        full_name = handle.close("ok")["spans"][0]["name"]
+        assert full_name == "tool:mcp__acme__search"

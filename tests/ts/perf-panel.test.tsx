@@ -11,7 +11,8 @@ jest.mock('../../src/api', () => ({
   NBIAPI: {
     config: {
       capabilities: {},
-      settingLocks: {}
+      settingLocks: {},
+      featurePolicies: {}
     },
     configChanged: {
       connect: jest.fn(),
@@ -21,11 +22,17 @@ jest.mock('../../src/api', () => ({
   }
 }));
 
+jest.mock('../../src/utils', () => ({
+  writeTextToClipboard: jest.fn().mockResolvedValue(true)
+}));
+
 import { requestAPI } from '../../src/handler';
 import { NBIAPI } from '../../src/api';
+import { writeTextToClipboard } from '../../src/utils';
 import { SettingsPanelComponentPerf } from '../../src/components/perf-panel';
 
 const mockRequestAPI = requestAPI as jest.Mock;
+const mockWriteTextToClipboard = writeTextToClipboard as jest.Mock;
 
 const sampleTurn = {
   turn_id: 't1',
@@ -33,7 +40,7 @@ const sampleTurn = {
   mode: 'ask',
   model: 'claude-x',
   status: 'ok',
-  t_wall: '2026-08-23T00:00:00Z',
+  t_wall: 1755907200.123, // backend sends time.time(), not an ISO string
   total_ms: 1200,
   active_ms: 1100,
   spans: [
@@ -51,14 +58,17 @@ const sampleTurn = {
 const sampleReport = {
   schema_version: 1,
   turns: [sampleTurn],
-  aggregates: {}
+  aggregates: {},
+  probe_target: 'https://internal-gateway.example.corp:8443'
 };
 
 describe('SettingsPanelComponentPerf', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockWriteTextToClipboard.mockResolvedValue(true);
     (NBIAPI as any).config.capabilities = {};
     (NBIAPI as any).config.settingLocks = {};
+    (NBIAPI as any).config.featurePolicies = {};
   });
 
   it('renders the turns table from a fixture report matching the TurnDoc contract', async () => {
@@ -111,7 +121,7 @@ describe('SettingsPanelComponentPerf', () => {
     fireEvent.click(screen.getByLabelText('Include network check'));
 
     expect(
-      screen.getByText(/contact an external endpoint/)
+      screen.getByText(/send one unauthenticated request to/)
     ).toBeInTheDocument();
     // Checking the box alone must not have triggered the probe yet.
     expect(mockRequestAPI).toHaveBeenCalledTimes(1);
@@ -176,5 +186,66 @@ describe('SettingsPanelComponentPerf', () => {
 
     const enabledCheckbox = screen.getByLabelText('Enabled');
     expect(enabledCheckbox).not.toBeDisabled();
+  });
+
+  it('locks the checkbox when the perf_diagnostics feature policy is locked, even with no settingLocks entry', async () => {
+    (NBIAPI as any).config.settingLocks = {};
+    (NBIAPI as any).config.featurePolicies = {
+      perf_diagnostics: { enabled: true, locked: true }
+    };
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    const enabledCheckbox = screen.getByLabelText('Enabled');
+    expect(enabledCheckbox).toBeDisabled();
+  });
+
+  it('excludes probe_target from the copied turns report JSON', async () => {
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy as JSON' }));
+
+    await waitFor(() =>
+      expect(mockWriteTextToClipboard).toHaveBeenCalledTimes(1)
+    );
+    const copiedText = mockWriteTextToClipboard.mock.calls[0][0] as string;
+    expect(copiedText).not.toContain('probe_target');
+    expect(copiedText).not.toContain('internal-gateway');
+    const copied = JSON.parse(copiedText);
+    expect(copied.probe_target).toBeUndefined();
+    expect(copied.turns).toHaveLength(1);
+  });
+
+  it('disables the network check checkbox when perf_probe_network_allowed is false', async () => {
+    (NBIAPI as any).config.capabilities = {
+      perf_probe_network_allowed: false
+    };
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    const networkCheckbox = screen.getByLabelText('Include network check');
+    expect(networkCheckbox).toBeDisabled();
+
+    // Clicking a disabled checkbox must not flip it or open the confirm
+    // dialog; jsdom still delivers the event, so the component itself must
+    // guard against it.
+    fireEvent.click(networkCheckbox);
+    expect(
+      screen.queryByText(/contact an external endpoint/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('leaves the network check checkbox enabled when perf_probe_network_allowed is absent (fail-open default)', async () => {
+    (NBIAPI as any).config.capabilities = {};
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    const networkCheckbox = screen.getByLabelText('Include network check');
+    expect(networkCheckbox).not.toBeDisabled();
   });
 });

@@ -31,6 +31,12 @@ interface IPerfSpan {
   attrs?: Record<string, unknown>;
 }
 
+interface IPerfEvent {
+  name: string;
+  t_ms: number;
+  attrs?: Record<string, unknown>;
+}
+
 interface IPerfTokens {
   input: number;
   output: number;
@@ -48,11 +54,11 @@ interface IPerfTurn {
   mode: string;
   model: string;
   status: string;
-  t_wall: string;
+  t_wall: number;
   total_ms: number;
   active_ms: number;
   spans: IPerfSpan[];
-  events: { name: string; t_ms: number }[];
+  events: IPerfEvent[];
   tokens: IPerfTokens;
   sdk: IPerfSdkStats;
 }
@@ -67,7 +73,7 @@ interface IPerfReport {
 interface IPerfProbeCheck {
   id: string;
   group: string;
-  status: 'ok' | 'timed_out' | 'error';
+  status: 'ok' | 'timed_out' | 'error' | 'skipped';
   detail: Record<string, unknown>;
 }
 
@@ -247,11 +253,12 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
     // Only on mount; the refresh button drives subsequent loads.
   }, []);
 
-  const perfPolicy = (NBIAPI.config.featurePolicies as any)?.perf_diagnostics;
+  // The server serves perf_diagnostics as {enabled, locked} alongside every
+  // other named policy (see _build_feature_policies_response in
+  // extension.py); `locked` is what force-on/force-off both surface as.
+  const perfPolicy = NBIAPI.config.featurePolicies?.perf_diagnostics;
   const perfLocked =
-    !!locks?.perf_diagnostics_enabled?.locked ||
-    perfPolicy === 'force-on' ||
-    perfPolicy === 'force-off';
+    !!locks?.perf_diagnostics_enabled?.locked || perfPolicy?.locked === true;
 
   const updateConfig = (patch: Partial<IPerfDiagnosticsConfig>) => {
     const next = { ...config, ...patch };
@@ -281,6 +288,12 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
     setAwaitingConfirm(checked);
     setProbeError(null);
   };
+
+  // Defaults open (matches the backend's own default and the codebase's
+  // fail-open convention for missing capability fields); only an explicit
+  // `false` from NBI_PERF_PROBE_NETWORK=off disables the checkbox.
+  const networkProbeAllowed =
+    (NBIAPI.config.capabilities as any)?.perf_probe_network_allowed !== false;
 
   const onRunProbeClicked = () => {
     if (includeNetwork) {
@@ -337,7 +350,17 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
           <div className="nbi-perf-title">Recent turns</div>
           <div className="nbi-perf-header-actions">
             {report && (
-              <CopyButton label="Copy as JSON" getValue={() => report} />
+              <CopyButton
+                label="Copy as JSON"
+                getValue={() => {
+                  // probe_target carries the configured gateway host; docs
+                  // promise hostnames are never recorded in exported
+                  // reports, so it stays out of the copied JSON even though
+                  // it's used verbatim in the confirm dialog above.
+                  const { probe_target: _probeTarget, ...rest } = report;
+                  return rest;
+                }}
+              />
             )}
             <button
               className="jp-Dialog-button jp-mod-reject jp-mod-styled"
@@ -388,10 +411,18 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
               {probing ? 'Running…' : 'Run probe'}
             </div>
           </button>
-          <label className="nbi-perf-control">
+          <label
+            className="nbi-perf-control"
+            title={
+              networkProbeAllowed
+                ? ''
+                : 'Disabled by your administrator (NBI_PERF_PROBE_NETWORK)'
+            }
+          >
             <input
               type="checkbox"
               checked={includeNetwork}
+              disabled={!networkProbeAllowed}
               onChange={e => onIncludeNetworkChange(e.target.checked)}
             />
             Include network check

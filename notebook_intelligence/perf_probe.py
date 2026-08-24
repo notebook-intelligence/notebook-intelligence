@@ -31,7 +31,6 @@ import socket
 import ssl
 import statistics
 import subprocess
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -47,6 +46,11 @@ NETWORK_TIMEOUT_S = 5.0
 _POOL_SIZE = 4
 _MAX_LATENCY_ITERATIONS = 20
 _SUSTAINED_IO_SIZE_BYTES = 4 * 1024 * 1024
+# Margin between a check body's own internal early-stop bound and the outer
+# future timeout that awaits it. Without this slack, a check that legitimately
+# runs right up to its internal bound gets its future abandoned at the same
+# instant, discarding whatever samples it had already collected.
+_SLOW_CHECK_MARGIN_S = 1.0
 
 try:
     from notebook_intelligence._version import __version__ as _NBI_VERSION
@@ -65,36 +69,34 @@ class _CheckTimeout(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Shared pool
+# Pool submission
 # ---------------------------------------------------------------------------
-
-_pool_lock = threading.Lock()
-_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
-
-
-def _get_pool() -> concurrent.futures.ThreadPoolExecutor:
-    global _pool
-    if _pool is None:
-        with _pool_lock:
-            if _pool is None:
-                _pool = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=_POOL_SIZE, thread_name_prefix="nbi-perf-probe"
-                )
-    return _pool
+#
+# There is no module-global pool: run_probe builds a fresh ThreadPoolExecutor
+# for every call (see below) so one run's abandoned/hung checks can never
+# occupy the workers a later run needs. _submit_check and _collect_check are
+# split so a caller can submit every independent check up front and only
+# then start waiting on results, instead of paying each check's timeout one
+# at a time.
 
 
-def _run_check(
+def _submit_check(
     pool: concurrent.futures.ThreadPoolExecutor,
     check_id: str,
     group: str,
     timeout_s: float,
     fn: Callable[[], dict],
-) -> dict:
-    """Submit fn() to the pool and bound it with timeout_s. On timeout the
+) -> tuple:
+    """Submit fn() to the pool without waiting for it. Pairs with
+    _collect_check."""
+    return (check_id, group, timeout_s, pool.submit(fn))
+
+
+def _collect_check(check_id: str, group: str, timeout_s: float, future: concurrent.futures.Future) -> dict:
+    """Block on an already-submitted future with timeout_s. On timeout the
     future is abandoned (never awaited again, never cancelled) rather than
     joined -- cancelling a future whose thread is already running is a no-op
     in concurrent.futures anyway, so "abandon" is the honest description."""
-    future = pool.submit(fn)
     try:
         detail = future.result(timeout=timeout_s)
         return {"id": check_id, "group": group, "status": "ok", "detail": detail}
@@ -116,6 +118,22 @@ def _run_check(
             "status": "error",
             "detail": {"exception_class": type(e).__name__},
         }
+
+
+def _run_check(
+    pool: concurrent.futures.ThreadPoolExecutor,
+    check_id: str,
+    group: str,
+    timeout_s: float,
+    fn: Callable[[], dict],
+) -> dict:
+    """Submit fn() to the pool and immediately block on its result with
+    timeout_s. Kept for callers (including tests) that want the older
+    synchronous submit-then-wait behavior against their own pool; run_probe
+    itself uses _submit_check/_collect_check directly so independent checks
+    run concurrently instead of each one blocking the next submission."""
+    check_id, group, timeout_s, future = _submit_check(pool, check_id, group, timeout_s, fn)
+    return _collect_check(check_id, group, timeout_s, future)
 
 
 def _skipped_entry(check_id: str, group: str, reason: str) -> dict:
@@ -310,7 +328,9 @@ def _session_scan(claude_home: Path, bound_s: float) -> dict:
     return result
 
 
-def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, checks: list) -> None:
+def _fs_checks(
+    pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, checks: list, pending: list
+) -> None:
     from notebook_intelligence.util import get_jupyter_root_dir
 
     targets = []
@@ -332,8 +352,8 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
         checks.append(_skipped_entry("fs.claude_home", "filesystem", "not_present"))
 
     for label, dir_path in targets:
-        checks.append(
-            _run_check(
+        pending.append(
+            _submit_check(
                 pool,
                 f"fs.{label}.latency",
                 "filesystem",
@@ -341,8 +361,8 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
                 lambda d=dir_path: _latency_loop(d, DEFAULT_TIMEOUT_S * 0.7),
             )
         )
-        checks.append(
-            _run_check(
+        pending.append(
+            _submit_check(
                 pool,
                 f"fs.{label}.sustained_io",
                 "filesystem",
@@ -350,8 +370,8 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
                 lambda d=dir_path: _sustained_io(d),
             )
         )
-        checks.append(
-            _run_check(
+        pending.append(
+            _submit_check(
                 pool,
                 f"fs.{label}.mount",
                 "filesystem",
@@ -360,12 +380,16 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
             )
         )
         if label == "claude_home":
-            checks.append(
-                _run_check(
+            # Outer budget is the inner scan bound plus margin, not equal to
+            # it: an equal budget abandons the future (discarding every
+            # sample already collected) at the exact instant the scan would
+            # have returned on its own.
+            pending.append(
+                _submit_check(
                     pool,
                     "fs.claude_home.session_scan",
                     "filesystem",
-                    DEFAULT_TIMEOUT_S,
+                    DEFAULT_TIMEOUT_S + _SLOW_CHECK_MARGIN_S,
                     lambda d=dir_path: _session_scan(d, DEFAULT_TIMEOUT_S),
                 )
             )
@@ -413,12 +437,14 @@ def _npm_cache_path() -> dict:
     return {"wall_ms": round(wall_ms, 3), "path": proc.stdout.strip()}
 
 
-def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list) -> None:
-    checks.append(_run_check(pool, "subprocess.node_version", "subprocess", DEFAULT_TIMEOUT_S, _node_version))
-    checks.append(
-        _run_check(pool, "subprocess.claude_cli_version", "subprocess", DEFAULT_TIMEOUT_S, _claude_cli_version)
+def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, pending: list) -> None:
+    pending.append(_submit_check(pool, "subprocess.node_version", "subprocess", DEFAULT_TIMEOUT_S, _node_version))
+    pending.append(
+        _submit_check(pool, "subprocess.claude_cli_version", "subprocess", DEFAULT_TIMEOUT_S, _claude_cli_version)
     )
-    checks.append(_run_check(pool, "subprocess.npm_cache_path", "subprocess", DEFAULT_TIMEOUT_S, _npm_cache_path))
+    pending.append(
+        _submit_check(pool, "subprocess.npm_cache_path", "subprocess", DEFAULT_TIMEOUT_S, _npm_cache_path)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,11 +454,14 @@ def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list
 
 def _process_rss() -> dict:
     if resource is None:
-        raise RuntimeError("resource module unavailable on this platform")
+        raise _Skipped("resource module not available")
     usage = resource.getrusage(resource.RUSAGE_SELF)
-    # ru_maxrss is KB on Linux, bytes on macOS.
+    # ru_maxrss is KB on Linux, bytes on macOS. It is also the lifetime
+    # high-water mark (peak RSS since process start), not the current RSS:
+    # it only ever goes up, so a low reading here does not mean memory use
+    # has since dropped. Named max_rss_kb (not rss_kb) to keep that honest.
     rss_kb = usage.ru_maxrss / 1024 if platform.system() == "Darwin" else usage.ru_maxrss
-    return {"rss_kb": round(rss_kb, 1)}
+    return {"max_rss_kb": round(rss_kb, 1)}
 
 
 def _loadavg() -> dict:
@@ -457,11 +486,11 @@ def _interpreter_info() -> dict:
     return {"python_version": platform.python_version(), "platform": platform.platform()}
 
 
-def _runtime_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list) -> None:
-    checks.append(_run_check(pool, "runtime.process_rss", "runtime", DEFAULT_TIMEOUT_S, _process_rss))
-    checks.append(_run_check(pool, "runtime.loadavg", "runtime", DEFAULT_TIMEOUT_S, _loadavg))
-    checks.append(_run_check(pool, "runtime.cgroup_cpu", "runtime", DEFAULT_TIMEOUT_S, _cgroup_cpu))
-    checks.append(_run_check(pool, "runtime.interpreter", "runtime", DEFAULT_TIMEOUT_S, _interpreter_info))
+def _runtime_checks(pool: concurrent.futures.ThreadPoolExecutor, pending: list) -> None:
+    pending.append(_submit_check(pool, "runtime.process_rss", "runtime", DEFAULT_TIMEOUT_S, _process_rss))
+    pending.append(_submit_check(pool, "runtime.loadavg", "runtime", DEFAULT_TIMEOUT_S, _loadavg))
+    pending.append(_submit_check(pool, "runtime.cgroup_cpu", "runtime", DEFAULT_TIMEOUT_S, _cgroup_cpu))
+    pending.append(_submit_check(pool, "runtime.interpreter", "runtime", DEFAULT_TIMEOUT_S, _interpreter_info))
     # Event-loop lag is intentionally not measured here: the caller (the
     # handler that owns the event loop) is the only place that can sample
     # it meaningfully, so it is out of scope for this blocking, off-loop probe.
@@ -493,10 +522,13 @@ def _resolve_target_base_url(nbi_config: Any) -> str:
         chat_model = getattr(nbi_config, "chat_model", None) or {}
         if chat_model.get("provider") in ("openai-compatible", "litellm-compatible"):
             # base_url lives in the properties list ({'id','value'} dicts, the
-            # shape ai_service_manager consumes), not as a top-level key.
+            # shape ai_service_manager consumes and the settings panel POSTs),
+            # not as a top-level key. A top-level "base_url" is checked only
+            # as a secondary fallback, in case that shape ever changes.
             for prop in chat_model.get("properties") or []:
                 if isinstance(prop, dict) and prop.get("id") == "base_url":
                     return prop.get("value")
+            return chat_model.get("base_url")
         return None
 
     for getter in (_acp_base_url, _claude_base_url, _openai_compatible_base_url):
@@ -656,48 +688,86 @@ def _network_probe(base_url: str) -> dict:
         proxy_url = proxies.get(scheme) or proxies.get("https") or proxies.get("http")
 
     timings: dict = {}
+    raw_sock: Optional[socket.socket] = None
+    tls_sock: Optional[ssl.SSLSocket] = None
+    tls_error: Optional[str] = None
     try:
-        if proxy_url:
-            path = "via_proxy"
-            p = urllib.parse.urlsplit(proxy_url)
-            proxy_host, proxy_port = p.hostname, p.port or 80
+        try:
+            if proxy_url:
+                path = "via_proxy"
+                p = urllib.parse.urlsplit(proxy_url)
+                proxy_host, proxy_port = p.hostname, p.port or 80
 
-            t0 = time.perf_counter()
-            socket.getaddrinfo(proxy_host, proxy_port)
-            timings["proxy_dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+                t0 = time.perf_counter()
+                socket.getaddrinfo(proxy_host, proxy_port)
+                timings["proxy_dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
-            t0 = time.perf_counter()
-            raw_sock = socket.create_connection((proxy_host, proxy_port), timeout=NETWORK_TIMEOUT_S)
-            timings["proxy_tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+                t0 = time.perf_counter()
+                raw_sock = socket.create_connection((proxy_host, proxy_port), timeout=NETWORK_TIMEOUT_S)
+                timings["proxy_tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
-            connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
-            raw_sock.sendall(connect_req.encode("ascii"))
-            resp = raw_sock.recv(4096)
-            status_line = resp.split(b"\r\n", 1)[0]
-            if b" 200 " not in (b" " + status_line):
+                connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+                raw_sock.sendall(connect_req.encode("ascii"))
+                resp = raw_sock.recv(4096)
+                status_line = resp.split(b"\r\n", 1)[0]
+                if b" 200 " not in (b" " + status_line):
+                    raise ConnectionError("proxy CONNECT failed")
+
+                t0 = time.perf_counter()
+                ctx = ssl.create_default_context()
+                try:
+                    tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
+                except (socket.timeout, TimeoutError):
+                    raise
+                except Exception as e:
+                    tls_error = type(e).__name__
+                else:
+                    timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+            else:
+                path = "direct"
+                t0 = time.perf_counter()
+                socket.getaddrinfo(host, port)
+                timings["dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+                t0 = time.perf_counter()
+                raw_sock = socket.create_connection((host, port), timeout=NETWORK_TIMEOUT_S)
+                timings["tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+                t0 = time.perf_counter()
+                ctx = ssl.create_default_context()
+                try:
+                    tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
+                except (socket.timeout, TimeoutError):
+                    raise
+                except Exception as e:
+                    tls_error = type(e).__name__
+                else:
+                    timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+        except (socket.timeout, TimeoutError):
+            raise _CheckTimeout("connect")
+    finally:
+        # tls_sock (once it exists) owns the underlying fd; only close
+        # raw_sock directly when the handshake never got that far, or failed
+        # before/at wrap_socket. Without this, a non-timeout handshake
+        # failure (an intercepting proxy presenting an untrusted cert, a
+        # reset mid-handshake, ...) leaked the raw socket on every failure.
+        if raw_sock is not None and tls_sock is None:
+            with contextlib.suppress(OSError):
                 raw_sock.close()
-                raise ConnectionError("proxy CONNECT failed")
 
-            t0 = time.perf_counter()
-            ctx = ssl.create_default_context()
-            tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
-            timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-        else:
-            path = "direct"
-            t0 = time.perf_counter()
-            socket.getaddrinfo(host, port)
-            timings["dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-            t0 = time.perf_counter()
-            raw_sock = socket.create_connection((host, port), timeout=NETWORK_TIMEOUT_S)
-            timings["tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-            t0 = time.perf_counter()
-            ctx = ssl.create_default_context()
-            tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
-            timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-    except (socket.timeout, TimeoutError):
-        raise _CheckTimeout("connect")
+    if tls_error is not None:
+        # A TLS handshake failure below the timeout threshold is real,
+        # reportable data, not something to discard: return what was
+        # already measured (dns/tcp timing) plus the failure itself, instead
+        # of raising and losing it to _run_check's generic error path.
+        # Exception message intentionally dropped (privacy rule): only the
+        # class name is safe to keep.
+        return {
+            "target": {"scheme": scheme, "host": host, "port": port},
+            "path": path,
+            "timings_ms": timings,
+            "tls_error": tls_error,
+        }
 
     try:
         cert_info = _capture_tls_cert(tls_sock, host, port)
@@ -719,15 +789,26 @@ def _network_probe(base_url: str) -> dict:
     }
 
 
-def _network_checks(pool: concurrent.futures.ThreadPoolExecutor, include_network: bool, nbi_config: Any, checks: list) -> bool:
+def _network_checks(
+    pool: concurrent.futures.ThreadPoolExecutor,
+    include_network: bool,
+    nbi_config: Any,
+    checks: list,
+    pending: list,
+) -> bool:
     """Returns whether the network group ran (drives contains_internal_hostnames)."""
     if not include_network:
         checks.append(_skipped_entry("network.endpoint", "network", "include_network=False"))
         return False
 
     base_url = _resolve_target_base_url(nbi_config)
-    checks.append(
-        _run_check(pool, "network.endpoint", "network", NETWORK_TIMEOUT_S * 4, lambda: _network_probe(base_url))
+    # The check body is sequential DNS + up to two raw connections + HEAD +
+    # a possible GET retry, each already bounded by its own NETWORK_TIMEOUT_S
+    # -- so the body as a whole can take several times NETWORK_TIMEOUT_S even
+    # when every individual leg behaves. The outer budget has to cover that,
+    # not just one leg.
+    pending.append(
+        _submit_check(pool, "network.endpoint", "network", NETWORK_TIMEOUT_S * 4, lambda: _network_probe(base_url))
     )
     return True
 
@@ -796,17 +877,32 @@ def run_probe(include_network: bool, nbi_config: Any) -> dict:
     """
     # A fresh pool per run: a previous run's abandoned (hung) checks would
     # otherwise permanently occupy the workers and every later probe would
-    # report timed_out. The old pool is dropped without waiting; a leaked
-    # thread per truly-hung syscall is the documented cost.
+    # report timed_out.
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="nbi-perf-probe"
+        max_workers=_POOL_SIZE, thread_name_prefix="nbi-perf-probe"
     )
     checks: list = []
+    pending: list = []
+    try:
+        # Every independent check is submitted before anything blocks on a
+        # result. Doing it the other way -- submit one, block on it, submit
+        # the next -- makes the pool's extra workers pointless: wall time
+        # becomes the sum of every check's timeout instead of roughly the
+        # slowest one.
+        _fs_checks(pool, nbi_config, checks, pending)
+        _subprocess_checks(pool, pending)
+        _runtime_checks(pool, pending)
+        network_ran = _network_checks(pool, include_network, nbi_config, checks, pending)
 
-    _fs_checks(pool, nbi_config, checks)
-    _subprocess_checks(pool, checks)
-    _runtime_checks(pool, checks)
-    network_ran = _network_checks(pool, include_network, nbi_config, checks)
+        for check_id, group, timeout_s, future in pending:
+            checks.append(_collect_check(check_id, group, timeout_s, future))
+    finally:
+        # The pool is abandoned, not joined: a check hung on an
+        # uninterruptible syscall has already been reported as timed_out
+        # above, and waiting for its thread here would defeat the point of
+        # that timeout. A leaked thread per truly-hung syscall is the
+        # documented cost.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     doc = {
         "schema_version": 1,

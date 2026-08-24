@@ -427,6 +427,21 @@ def current_span():
     return _current_span.get()
 
 
+def set_current_span_attr(key: str, value) -> None:
+    """Set an attribute on the innermost open span in the calling context.
+
+    No-op when diagnostics are disabled or no span is open. A thin
+    convenience wrapper over ``current_span()`` for callees (e.g.
+    mcp_manager attaching the MCP server name) that only ever need to set
+    one attr and don't otherwise need the span object itself.
+    """
+    if not _enabled:
+        return
+    rec = _current_span.get()
+    if rec is not None:
+        rec.set_attr(key, value)
+
+
 def get_turn(message_id: str) -> Optional[TurnHandle]:
     if not _enabled:
         return None
@@ -636,23 +651,39 @@ def _detect_fs_type(path: str) -> Optional[str]:
         return None
 
 
-def _get_or_create_sink() -> Optional[_JsonlSink]:
+def _get_or_create_sink_locked() -> Optional[_JsonlSink]:
+    """Create/start the sink for the current ``_log_dir`` if needed.
+
+    Caller must already hold ``_sink_lock``. Split out from
+    ``_get_or_create_sink`` so ``configure()`` can run the whole
+    compare-dir/teardown/recreate decision as one atomic critical section
+    instead of re-acquiring ``_sink_lock`` for each step.
+    """
     global _sink
+    if _sink is None:
+        _sink = _JsonlSink(_log_dir)
+    if _sink._disabled:
+        return None
+    _sink.start()
+    return _sink
+
+
+def _teardown_sink_locked() -> None:
+    """Stop and drop the current sink. Caller must already hold ``_sink_lock``."""
+    global _sink
+    if _sink is not None:
+        _sink.stop()
+        _sink = None
+
+
+def _get_or_create_sink() -> Optional[_JsonlSink]:
     with _sink_lock:
-        if _sink is None:
-            _sink = _JsonlSink(_log_dir)
-        if _sink._disabled:
-            return None
-        _sink.start()
-        return _sink
+        return _get_or_create_sink_locked()
 
 
 def _teardown_sink() -> None:
-    global _sink
     with _sink_lock:
-        if _sink is not None:
-            _sink.stop()
-            _sink = None
+        _teardown_sink_locked()
 
 
 # --------------------------------------------------------------------------
@@ -708,17 +739,31 @@ def configure(settings: Optional[dict], policy_forced: Optional[str]) -> None:
     _attr_detail = new_attr_detail
     _enabled = new_enabled
 
-    if new_log_to_file:
-        # log_dir may change between calls (e.g. NBI_PERF_LOG_DIR flips, or
-        # the user edits it); a changed dir needs a fresh sink so the writer
-        # thread picks up the new target instead of continuing to append to
-        # the old one.
-        if _sink is not None and _log_dir != new_log_dir:
-            _teardown_sink()
-        _log_dir = new_log_dir
-        _log_to_file = True
-        _get_or_create_sink()
-    else:
-        _log_dir = new_log_dir
-        _log_to_file = False
-        _teardown_sink()
+    # The compare-dir/teardown/reassign-_log_dir/recreate sequence has to run
+    # as one atomic step under _sink_lock: doing it as separate
+    # _teardown_sink()/_get_or_create_sink() calls (each taking and
+    # releasing the lock on its own) leaves a window where a concurrent
+    # TurnHandle.close() can call _get_or_create_sink() between the teardown
+    # and the _log_dir reassignment and recreate a sink pinned to the OLD
+    # directory, which then survives. The locked internals
+    # (_teardown_sink_locked/_get_or_create_sink_locked) are shared with the
+    # public _teardown_sink()/_get_or_create_sink() wrappers so callers like
+    # TurnHandle.close still go through the lock.
+    with _sink_lock:
+        if new_log_to_file:
+            # Recreate the sink when the target dir changed (e.g.
+            # NBI_PERF_LOG_DIR flips, or the user edits it) so the writer
+            # thread picks up the new target instead of continuing to
+            # append to the old one, and also when the existing sink
+            # self-disabled after repeated write failures, so a settings
+            # save (e.g. after the operator fixes the filesystem) retries
+            # the sink instead of leaving it disabled forever.
+            if _sink is not None and (_log_dir != new_log_dir or _sink._disabled):
+                _teardown_sink_locked()
+            _log_dir = new_log_dir
+            _log_to_file = True
+            _get_or_create_sink_locked()
+        else:
+            _log_dir = new_log_dir
+            _log_to_file = False
+            _teardown_sink_locked()

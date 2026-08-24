@@ -113,6 +113,21 @@ def _perf_span(turn, name, **attrs):
         yield span
 
 
+def _stream_chunk_byte_estimate(data) -> int:
+    """Cheap best-effort size estimate for one stream() chunk, used only for
+    the perf "bytes" counter.
+
+    Deliberately avoids ``asdict`` + ``json.dumps``: that pair ran on every
+    chunk of the hot streaming path purely to count bytes, double-serializing
+    content the caller is about to serialize again for the websocket write.
+    Reads the ``content`` field directly instead (dataclass attribute or dict
+    key); anything else, or a non-string content, counts as 0 rather than
+    paying for a real serialization.
+    """
+    content = data.get("content") if isinstance(data, dict) else getattr(data, "content", None)
+    return len(content) if isinstance(content, str) else 0
+
+
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
@@ -874,6 +889,15 @@ class ConfigHandler(APIHandler):
                 value = apply_perf_policies(value, self.feature_policies)
                 value = apply_string_overrides(
                     value, self.string_overrides, PERF_DIAGNOSTICS_OVERRIDES
+                )
+                # Mirror the bool value-presence-lock config.py's
+                # perf_diagnostics property applies on read: without this, a
+                # scripted POST could persist enabled:true to config.json
+                # even while NBI_PERF_DIAGNOSTICS locks it off.
+                value = dict(value)
+                value['enabled'] = apply_bool_value_lock(
+                    bool(value.get('enabled', False)),
+                    self.string_overrides.get('perf_diagnostics_enabled', ''),
                 )
             ai_service_manager.nbi_config.set(key, value)
             if key == "store_github_access_token":
@@ -2253,31 +2277,25 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         turn = perf.get_turn(self.messageId)
         if turn is not None:
             # Locally generated ProgressData ("Thinking...") is streamed
-            # before the agent even connects; marking first_token on it made
-            # the headline TTFT metric read ~0 on every turn and pulled the
-            # connect phase inside the stream span. Only content-bearing
-            # chunks open the stream window.
+            # before the agent even connects, and can recur mid-turn as
+            # agent status updates; marking first_token on it made the
+            # headline TTFT metric read ~0 on every turn and pulled the
+            # connect phase inside the stream span. Progress chunks are
+            # excluded from every perf signal here (span open, first_token,
+            # chunk/byte counters): only substantive content opens the
+            # stream window or counts toward it.
             _is_progress = (
                 not isinstance(data, dict)
                 and getattr(data, "data_type", None) == ResponseStreamDataType.Progress
             )
-            if self._perf_stream_cm is None and not _is_progress:
-                self._perf_stream_cm = turn.span("stream")
-                self._perf_stream_span = self._perf_stream_cm.__enter__()
-                turn.event("first_token")
-            try:
-                payload = data if type(data) is dict else asdict(data)
-                chunk_bytes = len(json.dumps(payload, default=str))
-            except Exception:
-                chunk_bytes = 0
-            if self._perf_stream_span is not None:
-                # Progress chunks before the first content chunk are local
-                # spinners, not model output; they open no stream span and
-                # must not touch it.
-                self._perf_chunk_count += 1
-                self._perf_byte_count += chunk_bytes
-                self._perf_stream_span.set_attr("chunk_count", self._perf_chunk_count)
-                self._perf_stream_span.set_attr("bytes", self._perf_byte_count)
+            if not _is_progress:
+                if self._perf_stream_cm is None:
+                    self._perf_stream_cm = turn.span("stream")
+                    self._perf_stream_span = self._perf_stream_cm.__enter__()
+                    turn.event("first_token")
+                if self._perf_stream_span is not None:
+                    self._perf_chunk_count += 1
+                    self._perf_byte_count += _stream_chunk_byte_estimate(data)
 
         data_type = ResponseStreamDataType.LLMRaw if type(data) is dict else data.data_type
 
@@ -2514,6 +2532,11 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         turn = perf.get_turn(self.messageId)
         if turn is not None:
             if self._perf_stream_cm is not None:
+                # Only the final counts matter, so write them once here
+                # rather than on every stream() call.
+                if self._perf_stream_span is not None:
+                    self._perf_stream_span.set_attr("chunk_count", self._perf_chunk_count)
+                    self._perf_stream_span.set_attr("bytes", self._perf_byte_count)
                 self._perf_stream_cm.__exit__(None, None, None)
                 self._perf_stream_cm = None
                 self._perf_stream_span = None
@@ -2776,7 +2799,7 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
 
             except Exception:
                 # Diagnostics must never mask the request's real outcome.
-                log.debug("perf turn close failed", exc_info=True)
+                log.warning("perf turn close failed", exc_info=True)
     @ws_authenticated
     def open(self):
         # Audit log of accepted upgrades so a security incident can be

@@ -2,6 +2,7 @@
 
 import json
 import contextlib
+import dataclasses
 import difflib
 import os
 import sys
@@ -1376,20 +1377,35 @@ class ClaudeCodeClient():
                                         # records diagnostics.
                                         if perf_turn is not None:
                                             result_usage = getattr(message, "usage", None) or {}
+                                            _input_token_keys = (
+                                                "input_tokens",
+                                                "cache_read_input_tokens",
+                                                "cache_creation_input_tokens",
+                                            )
 
                                             def _tok(key: str) -> int:
                                                 value = result_usage.get(key, 0)
                                                 return value if isinstance(value, int) and value > 0 else 0
 
+                                            # Sum cache reads/writes the same way
+                                            # the usage footer does (see
+                                            # format_result_usage above), or the
+                                            # two surfaces disagree by orders of
+                                            # magnitude on cached turns. Only
+                                            # collapse to None -- leaving the
+                                            # field unset -- when none of the
+                                            # three keys are present at all;
+                                            # a usage payload that legitimately
+                                            # reports zero tokens still reports 0.
+                                            if any(key in result_usage for key in _input_token_keys):
+                                                perf_input_tokens = sum(
+                                                    _tok(key) for key in _input_token_keys
+                                                )
+                                            else:
+                                                perf_input_tokens = None
+
                                             perf_turn.set_result(
-                                                # Sum cache reads/writes the same
-                                                # way the usage footer does, or
-                                                # the two surfaces disagree by
-                                                # orders of magnitude on cached
-                                                # turns.
-                                                input_tokens=_tok("input_tokens")
-                                                + _tok("cache_read_input_tokens")
-                                                + _tok("cache_creation_input_tokens"),
+                                                input_tokens=perf_input_tokens,
                                                 output_tokens=result_usage.get("output_tokens"),
                                                 duration_ms=getattr(message, "duration_ms", None),
                                                 duration_api_ms=getattr(message, "duration_api_ms", None),
@@ -1950,10 +1966,12 @@ async def open_file_in_jupyter_ui(args) -> str:
 
 
 def _perf_single_open_turn():
-    """Best-effort turn lookup for in-process tool handlers, which are not
-    passed a message_id. Only returns a turn when exactly one is open --
+    """Fallback turn lookup for in-process tool handlers when no current
+    response is set. Only returns a turn when exactly one is open --
     guessing between concurrent turns would misattribute spans, so we skip
-    instrumentation rather than guess."""
+    instrumentation rather than guess. ``_perf_wrap_tool`` prefers the
+    current-response-based lookup below; this is only reached when that
+    comes back empty (e.g. a handler invoked outside a tracked response)."""
     with perf._registry_lock:
         open_turns = list(perf._turns.values())
     return open_turns[0] if len(open_turns) == 1 else None
@@ -1968,19 +1986,21 @@ def _perf_wrap_tool(sdk_tool):
     async def _instrumented_handler(args):
         if not perf.enabled():
             return await original_handler(args)
-        turn = _perf_single_open_turn()
+        # invoke_ui_tool runs against the live chat turn, and claude.py
+        # already tracks which response is "current" for that purpose
+        # (get_current_response/set_current_response). Use it here too, so
+        # concurrent sessions (two tabs, two open turns) attribute the span
+        # to the right one instead of falling back to a process-wide guess.
+        resp = get_current_response()
+        turn = perf.get_turn(resp.message_id) if resp is not None else None
+        if turn is None:
+            turn = _perf_single_open_turn()
         if turn is None:
             return await original_handler(args)
         with turn.span(f"tool:{sdk_tool.name}", tool=sdk_tool.name, builtin=True):
             return await original_handler(args)
 
-    return SdkMcpTool(
-        name=sdk_tool.name,
-        description=sdk_tool.description,
-        input_schema=sdk_tool.input_schema,
-        handler=_instrumented_handler,
-        annotations=sdk_tool.annotations,
-    )
+    return dataclasses.replace(sdk_tool, handler=_instrumented_handler)
 
 
 JUPYTER_UI_TOOLS = [

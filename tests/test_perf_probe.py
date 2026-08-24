@@ -3,6 +3,7 @@ import datetime
 import http.server
 import json
 import os
+import socket
 import threading
 import time
 
@@ -102,6 +103,33 @@ def test_claude_home_skipped_when_absent(tmp_path, monkeypatch):
     doc = pp.run_probe(False, _make_config(tmp_path))
     claude_check = next(c for c in doc["checks"] if c["id"] == "fs.claude_home")
     assert claude_check["status"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Runtime checks
+# ---------------------------------------------------------------------------
+
+
+def test_process_rss_reports_max_rss_kb():
+    result = pp._process_rss()
+    # ru_maxrss is a lifetime high-water mark, not the current RSS -- the key
+    # says so (max_rss_kb, not rss_kb) so callers don't read it as "now".
+    assert "max_rss_kb" in result
+    assert "rss_kb" not in result
+    assert result["max_rss_kb"] > 0
+
+
+def test_process_rss_skipped_when_resource_unavailable(monkeypatch):
+    # On Windows the stdlib has no `resource` module at all; perf_probe
+    # guards the import so the rest of the probe still works, and this check
+    # alone reports itself skipped rather than raising and taking the whole
+    # import down.
+    monkeypatch.setattr(pp, "resource", None)
+    try:
+        pp._process_rss()
+        assert False, "expected _Skipped"
+    except pp._Skipped:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +249,19 @@ def test_resolve_target_base_url_priority(tmp_path):
     assert pp._resolve_target_base_url(cfg) == "https://api.anthropic.com"
 
 
+def test_resolve_target_base_url_falls_back_to_top_level_key(tmp_path):
+    # The real persisted/POSTed shape always carries base_url inside
+    # properties (see ai_service_manager.py and the settings panel), but a
+    # top-level "base_url" key is still honored as a secondary fallback.
+    cfg = _make_config(tmp_path)
+    cfg.chat_model = {
+        "provider": "openai-compatible",
+        "properties": [],
+        "base_url": "https://fallback.example.com",
+    }
+    assert pp._resolve_target_base_url(cfg) == "https://fallback.example.com"
+
+
 # ---------------------------------------------------------------------------
 # No-redirect HTTP probe (local loopback server only, never a real network call)
 # ---------------------------------------------------------------------------
@@ -247,4 +288,39 @@ def test_http_probe_no_redirect_returns_3xx():
         assert result["caption"] == "unauthenticated; may not reflect authenticated latency"
     finally:
         server.shutdown()
+        thread.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Network probe error handling (local loopback only, never a real network call)
+# ---------------------------------------------------------------------------
+
+
+def test_network_probe_tls_failure_returns_partial_doc():
+    """A handshake failure (here: the peer isn't speaking TLS at all, the
+    same shape of failure an intercepting proxy with an untrusted cert would
+    produce) must not discard the dns/tcp timings already measured, and must
+    not raise -- it returns a partial document carrying a tls_error field
+    instead."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def _accept_and_close():
+        conn, _ = server.accept()
+        conn.close()  # never speaks TLS -- the client handshake fails
+
+    thread = threading.Thread(target=_accept_and_close, daemon=True)
+    thread.start()
+    try:
+        result = pp._network_probe(f"https://127.0.0.1:{port}")
+        assert isinstance(result.get("tls_error"), str) and result["tls_error"]
+        assert result["timings_ms"].get("dns_ms") is not None
+        assert result["timings_ms"].get("tcp_connect_ms") is not None
+        assert "tls_handshake_ms" not in result["timings_ms"]
+        assert "http" not in result
+        assert "tls" not in result
+    finally:
+        server.close()
         thread.join(timeout=2)

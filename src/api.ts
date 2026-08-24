@@ -280,7 +280,8 @@ export type FeaturePolicyName =
   | 'claude_plugins_management'
   | 'claude_bypass_permissions'
   | 'terminal_drag_drop'
-  | 'refresh_open_files_on_disk_change';
+  | 'refresh_open_files_on_disk_change'
+  | 'perf_diagnostics';
 
 export type IFeaturePolicies = Record<
   FeaturePolicyName,
@@ -541,7 +542,8 @@ export class NBIConfig {
       'claude_plugins_management',
       'claude_bypass_permissions',
       'terminal_drag_drop',
-      'refresh_open_files_on_disk_change'
+      'refresh_open_files_on_disk_change',
+      'perf_diagnostics'
     ];
     // Policies that default *open* when the capability field is missing,
     // covering two cases: admin-only management gates (no user toggle) where
