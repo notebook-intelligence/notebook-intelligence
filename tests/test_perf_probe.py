@@ -324,3 +324,48 @@ def test_network_probe_tls_failure_returns_partial_doc():
     finally:
         server.close()
         thread.join(timeout=2)
+
+
+def test_mount_info_darwin_resolves_macos_firmlinks(monkeypatch):
+    """/Users is a firmlink onto the Data volume, and Path.resolve() does not
+    follow it. A naive longest-prefix match lands on "/", the sealed
+    read-only system volume, and reports a writable home as read-only."""
+    mount_output = (
+        "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n"
+        "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, root data)\n"
+    )
+
+    class _Proc:
+        stdout = mount_output
+
+    monkeypatch.setattr(pp.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(pp.subprocess, "run", lambda *a, **k: _Proc())
+    # Only the Data-volume view of the home path exists on disk.
+    monkeypatch.setattr(
+        pp.os.path,
+        "exists",
+        lambda p: p == "/System/Volumes/Data/Users/someone/.claude",
+    )
+
+    info = pp._mount_info_darwin("/Users/someone/.claude")
+    assert info["fstype"] == "apfs"
+    assert "root data" in info["options"]
+    assert "read-only" not in info["options"]
+
+
+def test_mount_info_darwin_leaves_system_paths_on_the_system_volume(monkeypatch):
+    mount_output = (
+        "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n"
+        "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, root data)\n"
+    )
+
+    class _Proc:
+        stdout = mount_output
+
+    monkeypatch.setattr(pp.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(pp.subprocess, "run", lambda *a, **k: _Proc())
+    # No Data-volume counterpart for a genuine system path.
+    monkeypatch.setattr(pp.os.path, "exists", lambda p: False)
+
+    info = pp._mount_info_darwin("/usr/bin")
+    assert "read-only" in info["options"]

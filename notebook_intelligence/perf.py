@@ -258,7 +258,12 @@ class TurnHandle:
     def _maybe_capture_model(self, attrs: dict) -> None:
         model = attrs.get("model")
         if isinstance(model, str) and model and self.model is None:
-            self.model = model
+            # Redacted the same way the span attr is. The turn header is
+            # served in the report and written to the JSONL sink like any
+            # other field, so leaving it in the clear here would put the
+            # model name in exports that promise it is hashed, and would
+            # disagree with the hashed copy on the span itself.
+            self.model = _redact_value("model", model)
 
     @contextmanager
     def span(self, name: str, **attrs) -> Iterator[Any]:
@@ -558,10 +563,10 @@ class _JsonlSink:
             if is_new_file:
                 meta = {"meta": {"schema_version": 1, "log_fs_type": _detect_fs_type(perf_dir)}}
                 with os.fdopen(
-                os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600),
-                "a",
-                encoding="utf-8",
-            ) as fh:
+                    os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600),
+                    "a",
+                    encoding="utf-8",
+                ) as fh:
                     fh.write(json.dumps(meta) + "\n")
             self._current_date = today
             self._current_path = path

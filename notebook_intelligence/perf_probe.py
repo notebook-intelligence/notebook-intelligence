@@ -295,6 +295,16 @@ def _mount_info_darwin(target: str) -> dict:
         fstype = parts[0] if parts else None
         options = ",".join(parts[1:])
         entries.append((mountpoint.strip(), fstype, options))
+    # macOS firmlinks: /Users lives on the Data volume but is presented at
+    # /Users, and Path.resolve() does not follow firmlinks. A naive
+    # longest-prefix match therefore lands on "/", the sealed read-only
+    # system volume, and a home directory gets reported as read-only apfs.
+    # Re-match against the Data-volume path when that mount exists, since
+    # that is where the write actually lands.
+    data_root = "/System/Volumes/Data"
+    if any(mountpoint == data_root for mountpoint, _f, _o in entries):
+        if not target.startswith(data_root) and os.path.exists(data_root + target):
+            target = data_root + target
     best = _longest_matching_mount(target, entries)
     if not best:
         return {"fstype": None, "options": None}

@@ -490,6 +490,54 @@ class TestClaudeToolWrapper:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Claude mode: the connect span carries the model, which is the only place
+# the turn header can learn it.
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeConnectSpan:
+    def _client(self, model):
+        from notebook_intelligence.claude import ClaudeCodeClient
+
+        client = object.__new__(ClaudeCodeClient)
+        client._client_options = SimpleNamespace(model=model)
+        client._reconnect_required = False
+        client.is_connected = MagicMock(return_value=False)
+        client._ensure_connected = MagicMock(return_value=False)
+        return client
+
+    def test_connect_span_records_model_into_the_turn_header(self):
+        _enable_perf()
+        turn = perf.begin_turn("m-claude-model", "claude", time.time(), time.monotonic())
+        client = self._client("claude-sonnet-5")
+
+        client.query(SimpleNamespace(), SimpleNamespace(message_id="m-claude-model"))
+
+        turn.close("ok")
+        spans = _spans_named(turn, "connect")
+        assert len(spans) == 1
+        assert spans[0]["attrs"].get("cold") is True
+        # This suite runs with attr_detail "full", so the value is plain here.
+        # The header and the span attr must agree either way; test_perf.py
+        # covers the redacted case.
+        assert spans[0]["attrs"].get("model") == "claude-sonnet-5"
+        assert turn.model == spans[0]["attrs"]["model"]
+
+    def test_connect_span_omits_model_when_options_carry_none(self):
+        _enable_perf()
+        turn = perf.begin_turn("m-claude-nomodel", "claude", time.time(), time.monotonic())
+        client = self._client(None)
+
+        client.query(SimpleNamespace(), SimpleNamespace(message_id="m-claude-nomodel"))
+
+        turn.close("ok")
+        spans = _spans_named(turn, "connect")
+        assert len(spans) == 1
+        assert "model" not in spans[0]["attrs"]
+
+
+# ---------------------------------------------------------------------------
 # ACP mode: connect/cold span, tool:<kind> span
 # ---------------------------------------------------------------------------
 

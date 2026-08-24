@@ -115,6 +115,18 @@ class TestTurnLifecycle:
         assert handle.model is None
         with handle.span("connect", cold=False, model="claude-opus"):
             pass
+        # Redacted by default, and it has to match the hash recorded on the
+        # span: the turn header is served in the report and written to the
+        # JSONL sink, both of which promise model names are hashed.
+        connect_span = [s for s in handle._spans if s["name"] == "connect"][0]
+        assert handle.model == connect_span["attrs"]["model"]
+        assert handle.model != "claude-opus"
+
+    def test_model_attr_is_plaintext_in_full_attr_detail(self):
+        perf.configure({"enabled": True, "attr_detail": "full"}, None)
+        handle = perf.begin_turn("m-model-full", "acp", time.time(), time.monotonic())
+        with handle.span("connect", cold=False, model="claude-opus"):
+            pass
         assert handle.model == "claude-opus"
         handle.close("ok")
 

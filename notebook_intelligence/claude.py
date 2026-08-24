@@ -1659,7 +1659,16 @@ class ClaudeCodeClient():
     def query(self, request: ChatRequest, response: ChatResponse):
         turn = perf.get_turn(response.message_id)
         cold = self._reconnect_required or not self.is_connected()
-        span_cm = turn.span("connect", cold=cold) if turn is not None else contextlib.nullcontext()
+        # The model name is only known here, and perf's TurnHandle picks a
+        # "model" span attr up into the turn header automatically. Without it
+        # the report's Model column is empty for every Claude turn, since
+        # nothing else on this path records one. Redaction applies to it like
+        # any other name attr.
+        perf_model = getattr(self._client_options, "model", None)
+        span_attrs = {"cold": cold}
+        if perf_model:
+            span_attrs["model"] = perf_model
+        span_cm = turn.span("connect", **span_attrs) if turn is not None else contextlib.nullcontext()
         with span_cm:
             connected = self._ensure_connected()
         if not connected:
