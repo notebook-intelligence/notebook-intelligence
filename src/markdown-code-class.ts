@@ -36,7 +36,8 @@ export function resolveCodeClassName(
   children: unknown,
   className?: string
 ): string | undefined {
-  const content = children == null ? '' : String(children);
+  const content =
+    children === null || children === undefined ? '' : String(children);
   const isTrulyInline = content.length > 0 && !content.includes('\n');
   return isTrulyInline ? `inline-code ${className || ''}`.trim() : className;
 }
