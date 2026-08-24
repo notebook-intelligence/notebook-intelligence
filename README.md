@@ -29,6 +29,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 - [Claude MCP Servers](#claude-mcp-servers)
 - [Claude Plugins](#claude-plugins)
 - [Chat feedback](#chat-feedback)
+- [Performance diagnostics](#performance-diagnostics)
 - [Documentation](#documentation)
 - [Further reading](#further-reading)
 - [Roadmap](#roadmap)
@@ -421,6 +422,25 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 ```
 
 <img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
+
+## Performance diagnostics
+
+An opt-in diagnostics mode for understanding where a chat turn's time goes, aimed at deployments where NBI feels slower than it should (internal LLM gateways, network home directories, TLS-intercepting proxies). Off by default; when off, the instrumentation cost is a single boolean check per site.
+
+Enable it from the **Performance** tab in NBI Settings. With it on, every chat turn records a timeline of phases (rule/context preparation, agent connect/spawn, time to first token, streaming with stall events, tool calls, time spent waiting on you) plus token counts and the SDK-reported API duration. The tab shows the last turns in a table, and each turn is also summarized as a single `perf turn ...` INFO line in the Jupyter server log, so headless installs get the same signal with no UI.
+
+The tab's **Run probe** button measures the environment itself: filesystem latency and throughput for the config and `~/.claude` directories (with filesystem type and mount options), interpreter and CLI cold-start cost, and process/host contention signals. An optional network check sends one unauthenticated request to your configured endpoint and reports DNS/TCP/TLS timing, whether the connection went through a proxy, and the presented certificate chain, which makes TLS interception visible. The network check asks for confirmation first and shows the exact URL it will contact.
+
+What is recorded: durations, counts, byte sizes, status enums, token counts, and tool/server/model names. What is never recorded: prompt or response text, file contents, absolute paths, environment variable values, API keys, exception messages, or hostnames. By default identifying attributes (file basenames, model and tool names) are hashed; the `attr_detail` setting switches to full names for local debugging. Reports can be copied as JSON for support tickets.
+
+Optionally, turns can be appended as JSON Lines to `<nbi-dir>/perf/` with size- and age-capped retention. On network home directories, point the log at local scratch with `NBI_PERF_LOG_DIR` (see the [admin guide](docs/admin-guide.md)).
+
+| Environment variable          | Effect                                                                                                         |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `NBI_PERF_DIAGNOSTICS`        | Locks the enabled state on or off (value lock; the UI shows the toggle as locked).                             |
+| `NBI_PERF_DIAGNOSTICS_POLICY` | `user-choice` (default), `force-off`, or `force-on` (fleet-wide collection with redacted attributes enforced). |
+| `NBI_PERF_PROBE_NETWORK`      | `off` disables just the probe's network check while leaving the rest available.                                |
+| `NBI_PERF_LOG_DIR`            | Redirects the JSONL perf log directory.                                                                        |
 
 ## Documentation
 
