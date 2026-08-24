@@ -83,7 +83,7 @@ class NBIClient:
         }
 
     def _post(self, payload: dict, generate_url: str = "", timeout: float = 600.0) -> dict:
-        url = resolve_generate_url(generate_url)
+        url = (generate_url or "").strip() or resolve_generate_url()
         token = jupyter_api_token()
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -194,26 +194,12 @@ def jupyter_api_token() -> str:
     return ""
 
 
-def resolve_generate_url(generate_url: str = "") -> str:
-    candidate = (generate_url or "").strip()
-    if candidate.startswith("http://") or candidate.startswith("https://"):
-        return candidate
+def resolve_generate_url() -> str:
     runtime = _latest_jupyter_server_runtime()
-    base = ""
-    if runtime:
-        base = str(runtime.get("url") or "").rstrip("/")
-    if candidate.startswith("/"):
-        if not base:
-            raise NBIClientError(
-                "Cannot resolve Notebook Intelligence URL (no Jupyter server runtime)"
-            )
-        # base includes the Jupyter origin; candidate is a site-absolute path
-        # that already has any JupyterHub prefix.
-        parsed = urlparse(base + "/")
-        return f"{parsed.scheme}://{parsed.netloc}{candidate}"
+    base = str((runtime or {}).get("url") or "").rstrip("/")
     if not base:
         raise NBIClientError(
-            "Cannot reach Notebook Intelligence: pass generateUrl or run from JupyterLab"
+            "Cannot reach Notebook Intelligence: no Jupyter server runtime"
         )
     return base + "/notebook-intelligence/chatbook/generate"
 

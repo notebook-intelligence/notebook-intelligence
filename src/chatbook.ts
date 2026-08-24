@@ -4,7 +4,6 @@ import { CodeCell } from '@jupyterlab/cells';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
 import { EditorView } from '@codemirror/view';
 import { ISessionContext, Notification } from '@jupyterlab/apputils';
-import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 import { Contents, Kernel, KernelSpecManager } from '@jupyterlab/services';
 import { JSONObject } from '@lumino/coreutils';
@@ -150,15 +149,6 @@ export function registerChatbookLanguage(
   });
 }
 
-function chatbookGenerateUrl(): string {
-  return URLExt.join(
-    PageConfig.getBaseUrl(),
-    'notebook-intelligence',
-    'chatbook',
-    'generate'
-  );
-}
-
 export function patchCodeCellExecute(): void {
   if (codeCellExecutePatched) {
     return;
@@ -248,7 +238,6 @@ export function patchCodeCellExecute(): void {
       prompt,
       promptHash,
       cellMeta: getChatbookCellMeta(cell.model.metadata),
-      generateUrl: chatbookGenerateUrl(),
       notebookPath,
       notebookContext,
       contextHash,

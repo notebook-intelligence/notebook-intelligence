@@ -178,7 +178,6 @@ class ChatbookKernel(Kernel):
         context = chatbook_meta.get("notebookContext")
         rec = self._nbi.generate(
             prompt,
-            generate_url=str(chatbook_meta.get("generateUrl") or ""),
             notebook_context=context if isinstance(context, dict) else None,
             notebook_path=str(chatbook_meta.get("notebookPath") or ""),
             cell_id=str(chatbook_meta.get("cellId") or ""),
@@ -196,7 +195,6 @@ class ChatbookKernel(Kernel):
         try:
             return self._nbi.danger_scan(
                 code,
-                generate_url=str(chatbook_meta.get("generateUrl") or ""),
                 language=str(self._backend_info.get("language") or "python"),
             )
         except NBIClientError as exc:

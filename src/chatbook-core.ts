@@ -127,7 +127,6 @@ export interface IChatbookExecuteMeta {
   promptHash?: string;
   contextHash?: string;
   cachedCode?: string;
-  generateUrl?: string;
   workingDir?: string;
   notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
@@ -498,7 +497,6 @@ export function buildExecuteChatbookMeta(options: {
   prompt: string;
   promptHash: string;
   cellMeta: IChatbookCellMeta;
-  generateUrl?: string;
   workingDir?: string;
   notebookPath?: string;
   notebookContext?: IChatbookNotebookContext;
@@ -536,9 +534,6 @@ export function buildExecuteChatbookMeta(options: {
     options.allowCachedCode !== false
   ) {
     meta.cachedCode = options.cellMeta.generatedCode;
-  }
-  if (options.generateUrl) {
-    meta.generateUrl = options.generateUrl;
   }
   if (options.workingDir) {
     meta.workingDir = options.workingDir;

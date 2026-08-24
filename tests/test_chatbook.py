@@ -530,10 +530,34 @@ def test_manager_uses_dedicated_safe_acp_client_for_chatbook(monkeypatch):
     }
 
 
-def test_resolve_generate_url_keeps_absolute():
-    assert resolve_generate_url('http://127.0.0.1:8888/notebook-intelligence/chatbook/generate') == (
+def test_resolve_generate_url_uses_runtime(monkeypatch):
+    monkeypatch.setattr(
+        nbi_client_module,
+        '_latest_jupyter_server_runtime',
+        lambda: {'url': 'http://127.0.0.1:8888/'},
+    )
+    assert resolve_generate_url() == (
         'http://127.0.0.1:8888/notebook-intelligence/chatbook/generate'
     )
+
+
+def test_resolve_generate_url_keeps_hub_prefix(monkeypatch):
+    monkeypatch.setattr(
+        nbi_client_module,
+        '_latest_jupyter_server_runtime',
+        lambda: {'url': 'http://127.0.0.1:8888/user/alice/'},
+    )
+    assert resolve_generate_url() == (
+        'http://127.0.0.1:8888/user/alice/notebook-intelligence/chatbook/generate'
+    )
+
+
+def test_resolve_generate_url_requires_runtime(monkeypatch):
+    monkeypatch.setattr(
+        nbi_client_module, '_latest_jupyter_server_runtime', lambda: None
+    )
+    with pytest.raises(NBIClientError, match='no Jupyter server runtime'):
+        resolve_generate_url()
 
 
 class _FakeResponse:
