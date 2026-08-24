@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import json
 import os
@@ -9,6 +10,7 @@ import threading
 import time
 from typing import Any, Optional, Union
 import uuid
+from notebook_intelligence import perf
 from notebook_intelligence.mcp_client import (
     Client,
     StdioTransport,
@@ -96,6 +98,13 @@ class MCPTool(Tool):
             if key in tool_args:
                 call_args[key] = tool_args.get(key)
 
+        # The dispatch loop in api.py already opened a tool:<name> span for
+        # this call; a second span here double-counted every MCP call in the
+        # aggregates. Annotate the enclosing span with the server name (which
+        # only mcp_manager knows) instead of nesting a duplicate.
+        current = perf.current_span()
+        if current is not None:
+            current.set_attr("server", self._server.name)
         try:
             result = self._server.call_tool(self.name, call_args)
             if hasattr(result, "content") and isinstance(result.content, list):
@@ -116,6 +125,10 @@ class MCPTool(Tool):
             else:
                 return f"Error! Invalid tool result: {result}"
         except Exception as e:
+            # The error never propagates (callers get a string), so the
+            # enclosing tool span would record ok status; mark it here.
+            if current is not None:
+                current.set_attr("ok", False)
             return f"Error occurred while calling MCP tool: {str(e)}"
 
 class MCPPromptImpl(MCPPrompt):

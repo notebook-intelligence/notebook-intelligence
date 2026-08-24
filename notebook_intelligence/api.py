@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any, Callable, Dict, Union, Optional
@@ -11,6 +12,7 @@ from fuzzy_json import loads as fuzzy_json_loads
 import logging
 from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
+from notebook_intelligence import perf
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.util import ThreadSafeWebSocketConnector
@@ -381,21 +383,24 @@ class ChatResponse:
         self._run_ui_command_response_signal.emit(data)
 
     @staticmethod
-    async def wait_for_run_ui_command_response(response: 'ChatResponse', callback_id: str):
-        resp = {"result": None}
-        def _on_ui_command_response(data: dict):
-            if data['callback_id'] == callback_id:
-                resp["result"] = data['result']
+    async def wait_for_run_ui_command_response(response: 'ChatResponse', callback_id: str, command: Optional[str] = None):
+        turn = perf.get_turn(response.message_id)
+        span_cm = turn.span("ui_command", command=command) if turn is not None else contextlib.nullcontext()
+        with span_cm:
+            resp = {"result": None}
+            def _on_ui_command_response(data: dict):
+                if data['callback_id'] == callback_id:
+                    resp["result"] = data['result']
 
-        response.run_ui_command_response_signal.connect(_on_ui_command_response)
+            response.run_ui_command_response_signal.connect(_on_ui_command_response)
 
-        try:
-            while True:
-                if resp["result"] is not None:
-                    return resp["result"]
-                await asyncio.sleep(0.1)
-        finally:
-            response.run_ui_command_response_signal.disconnect(_on_ui_command_response)
+            try:
+                while True:
+                    if resp["result"] is not None:
+                        return resp["result"]
+                    await asyncio.sleep(0.1)
+            finally:
+                response.run_ui_command_response_signal.disconnect(_on_ui_command_response)
 
 @dataclass
 class ToolPreInvokeResponse:
@@ -746,7 +751,10 @@ class ChatParticipant:
                                 response.finish()
                                 return
 
-                    tool_call_response = await tool_to_call.handle_tool_call(request, response, tool_context, args)
+                    turn = perf.get_turn(response.message_id)
+                    span_cm = turn.span(f"tool:{tool_name}", tool=tool_name) if turn is not None else contextlib.nullcontext()
+                    with span_cm:
+                        tool_call_response = await tool_to_call.handle_tool_call(request, response, tool_context, args)
 
                     function_call_result_message = {
                         "role": "tool",

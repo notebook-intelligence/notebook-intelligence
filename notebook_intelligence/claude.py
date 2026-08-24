@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import json
+import contextlib
 import difflib
 import os
 import sys
@@ -15,6 +16,7 @@ from typing import Any, Optional, TYPE_CHECKING
 import uuid
 import re
 from anyio.abc import Process
+from notebook_intelligence import perf
 from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS
@@ -22,7 +24,7 @@ from notebook_intelligence.feature_flags import is_external_ui_tools_active
 from notebook_intelligence._version import __version__ as NBI_VERSION
 import base64
 import logging
-from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
+from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, ResultMessage, SdkMcpTool, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, _emit, get_jupyter_root_dir, import_litellm, resolve_claude_cli_path, safe_jupyter_path, terminate_process_tree
 
@@ -161,6 +163,9 @@ class ClaudeAgentClientStatus(str, Enum):
 
 CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_WAIT_TIME", "0.5"))
 CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_RESPONSE_TIMEOUT", "1800"))
+# Below this gap between successive SDK messages, a pause is just normal
+# generation cadence and not worth recording as a perf event.
+CLAUDE_PERF_STALL_GAP_MS = float(os.getenv("NBI_CLAUDE_PERF_STALL_GAP_MS", "3000"))
 CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME = float(os.getenv("NBI_CLAUDE_AGENT_CLIENT_UPDATE_WAIT_TIME", "0.5"))
 CLAUDE_AGENT_CONNECT_TIMEOUT = float(os.getenv("NBI_CLAUDE_AGENT_CONNECT_TIMEOUT", "15"))
 CLAUDE_AGENT_HEARTBEAT_INTERVAL = float(os.getenv("NBI_CLAUDE_AGENT_HEARTBEAT_INTERVAL", "20"))
@@ -1277,7 +1282,35 @@ class ClaudeCodeClient():
                                 # status. Lifetime is one query — pops entries
                                 # on completion so the dict stays bounded.
                                 in_flight_tools: dict[str, tuple[str, str, list]] = {}
+                                perf_turn = perf.get_turn(response.message_id)
+                                # None until the first SDK message: the gap
+                                # before it is time-to-first-message (prefill,
+                                # gateway queueing, CLI startup), not a stall,
+                                # and counting it stamped stalls>=1 on every
+                                # slow-gateway turn.
+                                perf_last_message_at = None
+                                perf_last_message_kind = "text"
                                 async for message in client.receive_response():
+                                    if perf_turn is not None:
+                                        perf_now = time.monotonic()
+                                        if perf_last_message_at is not None:
+                                            perf_gap_ms = (perf_now - perf_last_message_at) * 1000.0
+                                            if perf_gap_ms >= CLAUDE_PERF_STALL_GAP_MS:
+                                                perf_turn.event(
+                                                    "stall",
+                                                    gap_ms=perf_gap_ms,
+                                                    after=perf_last_message_kind,
+                                                )
+                                        perf_last_message_at = perf_now
+                                        perf_last_message_kind = (
+                                            "tool_use"
+                                            if isinstance(message, AssistantMessage)
+                                            and any(
+                                                isinstance(b, ToolUseBlock)
+                                                for b in getattr(message, "content", [])
+                                            )
+                                            else "text"
+                                        )
                                     if request.cancel_token.is_cancel_requested:
                                         # Stop iterating once the user cancels — we'd
                                         # otherwise keep recording ToolUseBlocks into
@@ -1336,6 +1369,32 @@ class ClaudeCodeClient():
                                                         diffs=diffs,
                                                     ))
                                     elif isinstance(message, ResultMessage):
+                                        # Feed the perf turn regardless of the
+                                        # user's footer-display preference
+                                        # below; the two are unrelated: one
+                                        # renders a chat line, the other
+                                        # records diagnostics.
+                                        if perf_turn is not None:
+                                            result_usage = getattr(message, "usage", None) or {}
+
+                                            def _tok(key: str) -> int:
+                                                value = result_usage.get(key, 0)
+                                                return value if isinstance(value, int) and value > 0 else 0
+
+                                            perf_turn.set_result(
+                                                # Sum cache reads/writes the same
+                                                # way the usage footer does, or
+                                                # the two surfaces disagree by
+                                                # orders of magnitude on cached
+                                                # turns.
+                                                input_tokens=_tok("input_tokens")
+                                                + _tok("cache_read_input_tokens")
+                                                + _tok("cache_creation_input_tokens"),
+                                                output_tokens=result_usage.get("output_tokens"),
+                                                duration_ms=getattr(message, "duration_ms", None),
+                                                duration_api_ms=getattr(message, "duration_api_ms", None),
+                                                num_turns=getattr(message, "num_turns", None),
+                                            )
                                         # End-of-turn accounting from the SDK.
                                         # Opt-in (off by default): the footer
                                         # is persistent per-turn noise, and its
@@ -1582,7 +1641,12 @@ class ClaudeCodeClient():
         return self._server_info
 
     def query(self, request: ChatRequest, response: ChatResponse):
-        if not self._ensure_connected():
+        turn = perf.get_turn(response.message_id)
+        cold = self._reconnect_required or not self.is_connected()
+        span_cm = turn.span("connect", cold=cold) if turn is not None else contextlib.nullcontext()
+        with span_cm:
+            connected = self._ensure_connected()
+        if not connected:
             return "Claude agent is not connected. Check the server log for the underlying startup error."
 
         response = self._send_claude_agent_request(ClaudeAgentEventType.Query, {
@@ -1883,12 +1947,49 @@ async def open_file_in_jupyter_ui(args) -> str:
 # so they survive a managed/enterprise MCP config that forbids dynamically
 # configured servers. The proxy fetches this manifest over HTTP and forwards each
 # call to invoke_ui_tool, which runs the same handlers against the live chat turn.
+
+
+def _perf_single_open_turn():
+    """Best-effort turn lookup for in-process tool handlers, which are not
+    passed a message_id. Only returns a turn when exactly one is open --
+    guessing between concurrent turns would misattribute spans, so we skip
+    instrumentation rather than guess."""
+    with perf._registry_lock:
+        open_turns = list(perf._turns.values())
+    return open_turns[0] if len(open_turns) == 1 else None
+
+
+def _perf_wrap_tool(sdk_tool):
+    """Wrap an SdkMcpTool's handler with a `tool:<name>` perf span, leaving
+    name/description/input_schema/annotations untouched so the MCP manifest
+    seen by the model is unaffected."""
+    original_handler = sdk_tool.handler
+
+    async def _instrumented_handler(args):
+        if not perf.enabled():
+            return await original_handler(args)
+        turn = _perf_single_open_turn()
+        if turn is None:
+            return await original_handler(args)
+        with turn.span(f"tool:{sdk_tool.name}", tool=sdk_tool.name, builtin=True):
+            return await original_handler(args)
+
+    return SdkMcpTool(
+        name=sdk_tool.name,
+        description=sdk_tool.description,
+        input_schema=sdk_tool.input_schema,
+        handler=_instrumented_handler,
+        annotations=sdk_tool.annotations,
+    )
+
+
 JUPYTER_UI_TOOLS = [
     list_available_notebook_kernels, create_new_notebook, add_markdown_cell,
     add_code_cell, get_number_of_cells, get_cell_type_and_source, get_cell_output,
     set_cell_type_and_source, delete_cell, insert_cell, run_cell, save_notebook,
     rename_notebook, run_command_in_jupyter_terminal, open_file_in_jupyter_ui,
 ]
+JUPYTER_UI_TOOLS = [_perf_wrap_tool(t) for t in JUPYTER_UI_TOOLS]
 
 _PY_TYPE_TO_JSON = {str: "string", int: "integer", float: "number", bool: "boolean"}
 

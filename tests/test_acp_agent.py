@@ -455,7 +455,9 @@ class TestSingleFlight:
         # not just the early-return path.
         client._ensure_started = lambda: True
         client._loop = object()  # only used as an opaque handle below
-        client._client = SimpleNamespace(_tool_state={"stale": {}})
+        client._client = SimpleNamespace(
+            _tool_state={"stale": {}}, _tool_perf_spans={}
+        )
 
         done = concurrent.futures.Future()
         done.set_result(None)

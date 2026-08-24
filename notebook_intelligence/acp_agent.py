@@ -24,6 +24,7 @@ Design notes (validated by the Phase 0 spike under ``spikes/acp-codex/``):
 
 import asyncio
 import concurrent.futures
+import contextlib
 import difflib
 import logging
 import os
@@ -48,6 +49,7 @@ from notebook_intelligence.api import (
     ToolCallData,
     ConfirmationData,
 )
+from notebook_intelligence import perf
 from notebook_intelligence.acp_registry import (
     AcpAgentSpec,
     codex_approval_args,
@@ -115,6 +117,11 @@ class _NbiAcpClient(acp.Client):
     def __init__(self, owner: "AcpAgentClient"):
         self._owner = owner
         self._tool_state: dict[str, dict] = {}
+        # Open perf "tool:" spans keyed by tool_call_id, entered/exited
+        # manually since a single tool call arrives as several separate
+        # session/update notifications (create, then updates, then a
+        # terminal status) rather than one call we can wrap in a `with`.
+        self._tool_perf_spans: dict[str, Any] = {}
 
     @property
     def _response(self) -> Optional[ChatResponse]:
@@ -145,6 +152,7 @@ class _NbiAcpClient(acp.Client):
 
     def _emit_tool_call(self, resp: ChatResponse, update):
         tid = update.tool_call_id
+        is_new_call = tid not in self._tool_state
         state = self._tool_state.setdefault(
             tid, {"kind": "other", "title": "", "status": "in_progress", "diffs": []}
         )
@@ -157,6 +165,19 @@ class _NbiAcpClient(acp.Client):
         diffs = _diffs_from_content(getattr(update, "content", None))
         if diffs:
             state["diffs"] = diffs
+        # ACP has no stable tool-name field on a call (see schema), so the
+        # NBI-mapped kind (read/edit/execute/...) is the closest thing to
+        # an identity for the span.
+        turn = perf.get_turn(resp.message_id)
+        if turn is not None:
+            if is_new_call:
+                span_cm = turn.span(f"tool:{state['kind']}", tool=state["kind"], builtin=True)
+                self._tool_perf_spans[tid] = span_cm
+                span_cm.__enter__()
+            if state["status"] in ("completed", "failed"):
+                span_cm = self._tool_perf_spans.pop(tid, None)
+                if span_cm is not None:
+                    span_cm.__exit__(None, None, None)
         resp.stream(ToolCallData(
             id=tid,
             title=state["title"] or "Tool call",
@@ -560,6 +581,7 @@ class AcpAgentClient:
         self._session_id = sess.session_id
         if self._client is not None:
             self._client._tool_state.clear()
+            self._client._tool_perf_spans.clear()
         log.info("ACP agent session ready: %s", self._session_id)
 
     def list_sessions(self) -> tuple[list[dict], Optional[str]]:
@@ -632,6 +654,7 @@ class AcpAgentClient:
         self._session_id = session_id
         if self._client is not None:
             self._client._tool_state.clear()
+            self._client._tool_perf_spans.clear()
         log.info("ACP agent session resumed: %s", session_id)
 
     @staticmethod
@@ -676,7 +699,20 @@ class AcpAgentClient:
         if not self._turn_lock.acquire(blocking=False):
             return f"{self.agent_spec.label} is busy with another request"
         try:
-            if not self._ensure_started():
+            turn = perf.get_turn(response.message_id)
+            # Mirrors the "already running" branch of _ensure_started below --
+            # computed up front since that call's own return value collapses
+            # both the warm (already running) and freshly-spawned cases to
+            # the same bool.
+            cold = not (
+                self._thread is not None
+                and self._thread.is_alive()
+                and not self._shutting_down
+            )
+            span_cm = turn.span("connect", cold=cold) if turn is not None else contextlib.nullcontext()
+            with span_cm:
+                started = self._ensure_started()
+            if not started:
                 return self._start_error or f"{self.agent_spec.label} agent is not available"
             loop = self._loop
             if loop is None:
@@ -685,6 +721,7 @@ class AcpAgentClient:
             # the per-id merge cache does not grow without bound.
             if self._client is not None:
                 self._client._tool_state.clear()
+                self._client._tool_perf_spans.clear()
             self.current_response = response
             try:
                 fut = asyncio.run_coroutine_threadsafe(

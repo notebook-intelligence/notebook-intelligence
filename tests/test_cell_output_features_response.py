@@ -30,6 +30,7 @@ def _config(
     refresh_open_files=True,
     claude_settings=None,
     acp_settings=None,
+    perf_diagnostics=None,
 ):
     return SimpleNamespace(
         enable_explain_error=explain,
@@ -39,6 +40,7 @@ def _config(
         refresh_open_files_on_disk_change=refresh_open_files,
         claude_settings=claude_settings if claude_settings is not None else {},
         acp_settings=acp_settings if acp_settings is not None else {},
+        perf_diagnostics=perf_diagnostics if perf_diagnostics is not None else {},
     )
 
 
@@ -249,6 +251,8 @@ class TestBuildSettingLocksResponse:
             "acp_chat_model",
             "acp_api_key",
             "acp_base_url",
+            "perf_diagnostics_enabled",
+            "perf_log_dir",
         }
 
 
