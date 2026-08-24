@@ -7,8 +7,10 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 from typing import Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from jupyter_core.paths import jupyter_runtime_dir
@@ -83,27 +85,35 @@ class NBIClient:
     def _post(self, payload: dict, generate_url: str = "", timeout: float = 600.0) -> dict:
         url = resolve_generate_url(generate_url)
         token = jupyter_api_token()
+        body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if token:
+            # Token-authenticated requests skip Jupyter's XSRF check.
             headers["Authorization"] = f"token {token}"
-        req = Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            method="POST",
-            headers=headers,
-        )
-        try:
-            with urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise NBIClientError(
-                f"Notebook Intelligence generate failed: {exc.code} {detail.strip()}"
-            ) from exc
-        except URLError as exc:
-            raise NBIClientError(
-                f"Notebook Intelligence is not reachable at {url}: {exc.reason}"
-            ) from exc
+        else:
+            _apply_xsrf_headers(headers, url)
+        raw = b""
+        for attempt in (0, 1):
+            try:
+                raw = _send(url, body, headers, timeout)
+                break
+            except HTTPError as exc:
+                stale_xsrf = (
+                    attempt == 0
+                    and exc.code == 403
+                    and _apply_xsrf_headers(headers, url, refresh=True)
+                )
+                if stale_xsrf:
+                    continue
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise NBIClientError(
+                    f"Notebook Intelligence generate failed at {url}: "
+                    f"{exc.code} {detail.strip()}"
+                ) from exc
+            except URLError as exc:
+                raise NBIClientError(
+                    f"Notebook Intelligence is not reachable at {url}: {exc.reason}"
+                ) from exc
         if not raw:
             raise NBIClientError("Notebook Intelligence returned an empty response")
         data = json.loads(raw.decode("utf-8"))
@@ -112,6 +122,63 @@ class NBIClient:
         if data.get("error"):
             raise NBIClientError(str(data["error"]))
         return data
+
+
+def _send(url: str, body: bytes, headers: dict, timeout: float) -> bytes:
+    req = Request(url, data=body, method="POST", headers=headers)
+    with urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+_xsrf_cache: dict[str, str] = {}
+
+
+def _apply_xsrf_headers(headers: dict, url: str, refresh: bool = False) -> bool:
+    """Attach an ``_xsrf`` cookie and matching header. True when they changed.
+
+    A server started without a token (``--ServerApp.token=''``) authenticates
+    the kernel as an anonymous user but still enforces XSRF on POST, and the
+    kernel has no browser cookie jar to draw on. Returning False means no
+    token could be minted, so there is nothing new to retry with.
+    """
+    token = _fetch_xsrf_token(url, refresh=refresh)
+    if not token or token == headers.get("X-XSRFToken"):
+        return False
+    headers["X-XSRFToken"] = token
+    headers["Cookie"] = f"_xsrf={token}"
+    return True
+
+
+def _fetch_xsrf_token(url: str, refresh: bool = False) -> str:
+    base = _server_base_url(url)
+    if not refresh and base in _xsrf_cache:
+        return _xsrf_cache[base]
+    # Any page handler mints the cookie; /login is the cheapest, and it still
+    # sets the cookie on the 404 it returns when logins are disabled.
+    request = Request(base + "login", method="GET")
+    try:
+        with urlopen(request, timeout=10.0) as resp:
+            cookies = resp.headers.get_all("Set-Cookie") or []
+    except HTTPError as exc:
+        cookies = exc.headers.get_all("Set-Cookie") or []
+    except URLError:
+        return ""
+    for cookie in cookies:
+        match = re.match(r"\s*_xsrf=([^;]+)", cookie)
+        if match:
+            token = match.group(1).strip()
+            _xsrf_cache[base] = token
+            return token
+    return ""
+
+
+def _server_base_url(generate_url: str) -> str:
+    """Jupyter root of a generate URL, keeping any JupyterHub prefix."""
+    parsed = urlparse(generate_url)
+    suffix = "/notebook-intelligence/chatbook/generate"
+    path = parsed.path
+    prefix = path[: -len(suffix)] if path.endswith(suffix) else ""
+    return f"{parsed.scheme}://{parsed.netloc}{prefix}/"
 
 
 def jupyter_api_token() -> str:
@@ -142,8 +209,6 @@ def resolve_generate_url(generate_url: str = "") -> str:
             )
         # base includes the Jupyter origin; candidate is a site-absolute path
         # that already has any JupyterHub prefix.
-        from urllib.parse import urlparse
-
         parsed = urlparse(base + "/")
         return f"{parsed.scheme}://{parsed.netloc}{candidate}"
     if not base:

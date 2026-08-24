@@ -1,7 +1,9 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
+import io
 import json
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -40,8 +42,10 @@ from notebook_intelligence.chatbook_kernel.codegen import (
     resolve_executable_source,
     stub_code,
 )
+from notebook_intelligence.chatbook_kernel import nbi_client as nbi_client_module
 from notebook_intelligence.chatbook_kernel.nbi_client import (
     NBIClient,
+    NBIClientError,
     resolve_generate_url,
 )
 from notebook_intelligence.chatbook_kernel.kernel import is_code_execute
@@ -532,24 +536,44 @@ def test_resolve_generate_url_keeps_absolute():
     )
 
 
+class _FakeResponse:
+    def __init__(self, body=b'{}', cookies=None):
+        self._body = body
+        self.headers = _FakeHeaders(cookies or [])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class _FakeHeaders:
+    def __init__(self, cookies):
+        self._cookies = cookies
+
+    def get_all(self, name):
+        return self._cookies if name == 'Set-Cookie' else []
+
+
+def _forbidden(body=b'{"message": "\'_xsrf\' argument missing from POST"}'):
+    return HTTPError('http://localhost/x', 403, 'Forbidden', {}, io.BytesIO(body))
+
+
 def test_nbi_client_sends_notebook_identity(monkeypatch):
     captured = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return b'{"generatedCode": "value = 1"}'
 
     def fake_urlopen(request, timeout):
         captured['payload'] = json.loads(request.data)
         captured['timeout'] = timeout
-        return Response()
+        return _FakeResponse(b'{"generatedCode": "value = 1"}')
 
+    monkeypatch.setattr(
+        nbi_client_module, 'jupyter_api_token', lambda: 'test-token'
+    )
     monkeypatch.setattr(
         'notebook_intelligence.chatbook_kernel.nbi_client.urlopen',
         fake_urlopen,
@@ -567,6 +591,126 @@ def test_nbi_client_sends_notebook_identity(monkeypatch):
     assert captured['payload']['cellId'] == 'cell-1'
     assert captured['payload']['promptHash'] == 'prompt-hash'
     assert captured['payload']['contextHash'] == 'context-hash'
+
+
+@pytest.fixture
+def tokenless_server(monkeypatch):
+    """A Jupyter server started without a token: anonymous but XSRF-guarded."""
+    nbi_client_module._xsrf_cache.clear()
+    monkeypatch.setattr(nbi_client_module, 'jupyter_api_token', lambda: '')
+    yield
+    nbi_client_module._xsrf_cache.clear()
+
+
+def test_nbi_client_sends_xsrf_token_when_server_has_no_token(
+    monkeypatch, tokenless_server
+):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if request.get_method() == 'GET':
+            return _FakeResponse(cookies=['_xsrf=xsrf-value; Path=/'])
+        return _FakeResponse(b'{"generatedCode": "value = 1"}')
+
+    monkeypatch.setattr(nbi_client_module, 'urlopen', fake_urlopen)
+    result = NBIClient().generate(
+        'create a value',
+        generate_url='http://127.0.0.1:8888/notebook-intelligence/chatbook/generate',
+    )
+
+    assert result['generatedCode'] == 'value = 1'
+    assert requests[0].full_url == 'http://127.0.0.1:8888/login'
+    post = requests[1]
+    assert post.get_header('X-xsrftoken') == 'xsrf-value'
+    assert post.get_header('Cookie') == '_xsrf=xsrf-value'
+
+
+def test_nbi_client_keeps_hub_prefix_when_minting_xsrf_token(
+    monkeypatch, tokenless_server
+):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if request.get_method() == 'GET':
+            return _FakeResponse(cookies=['_xsrf=hub-value; Path=/user/alice/'])
+        return _FakeResponse(b'{"generatedCode": "1"}')
+
+    monkeypatch.setattr(nbi_client_module, 'urlopen', fake_urlopen)
+    NBIClient().generate(
+        'create a value',
+        generate_url=(
+            'https://hub.example.com/user/alice/'
+            'notebook-intelligence/chatbook/generate'
+        ),
+    )
+
+    assert requests[0].full_url == 'https://hub.example.com/user/alice/login'
+
+
+def test_nbi_client_retries_once_with_fresh_xsrf_token(
+    monkeypatch, tokenless_server
+):
+    minted = iter(['stale-value', 'fresh-value'])
+    posts = []
+
+    def fake_urlopen(request, timeout):
+        if request.get_method() == 'GET':
+            return _FakeResponse(cookies=[f'_xsrf={next(minted)}; Path=/'])
+        posts.append(request.get_header('X-xsrftoken'))
+        if len(posts) == 1:
+            raise _forbidden()
+        return _FakeResponse(b'{"generatedCode": "value = 1"}')
+
+    monkeypatch.setattr(nbi_client_module, 'urlopen', fake_urlopen)
+    result = NBIClient().generate(
+        'create a value',
+        generate_url='http://127.0.0.1:8888/notebook-intelligence/chatbook/generate',
+    )
+
+    assert result['generatedCode'] == 'value = 1'
+    assert posts == ['stale-value', 'fresh-value']
+
+
+def test_nbi_client_reports_url_when_forbidden_persists(
+    monkeypatch, tokenless_server
+):
+    def fake_urlopen(request, timeout):
+        if request.get_method() == 'GET':
+            return _FakeResponse(cookies=['_xsrf=same-value; Path=/'])
+        raise _forbidden(b'{"error": "Chatbook is disabled by your administrator"}')
+
+    monkeypatch.setattr(nbi_client_module, 'urlopen', fake_urlopen)
+    with pytest.raises(NBIClientError) as excinfo:
+        NBIClient().generate(
+            'create a value',
+            generate_url=(
+                'http://127.0.0.1:8888/notebook-intelligence/chatbook/generate'
+            ),
+        )
+
+    message = str(excinfo.value)
+    assert 'http://127.0.0.1:8888/notebook-intelligence/chatbook/generate' in message
+    assert '403' in message
+    assert 'Chatbook is disabled by your administrator' in message
+
+
+def test_nbi_client_survives_server_without_xsrf_cookie(
+    monkeypatch, tokenless_server
+):
+    def fake_urlopen(request, timeout):
+        if request.get_method() == 'GET':
+            return _FakeResponse(cookies=[])
+        assert request.get_header('X-xsrftoken') is None
+        return _FakeResponse(b'{"generatedCode": "value = 1"}')
+
+    monkeypatch.setattr(nbi_client_module, 'urlopen', fake_urlopen)
+    result = NBIClient().generate(
+        'create a value',
+        generate_url='http://127.0.0.1:8888/notebook-intelligence/chatbook/generate',
+    )
+    assert result['generatedCode'] == 'value = 1'
 
 
 def test_chatbook_inline_completion_uses_natural_language_prompt():
