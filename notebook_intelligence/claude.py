@@ -1986,11 +1986,16 @@ def _perf_wrap_tool(sdk_tool):
     async def _instrumented_handler(args):
         if not perf.enabled():
             return await original_handler(args)
-        # invoke_ui_tool runs against the live chat turn, and claude.py
-        # already tracks which response is "current" for that purpose
-        # (get_current_response/set_current_response). Use it here too, so
-        # concurrent sessions (two tabs, two open turns) attribute the span
-        # to the right one instead of falling back to a process-wide guess.
+        # The client thread processes queue events one at a time and holds
+        # _current_response for the duration of a single query, so during a
+        # tool handler it names the query actually running. That is stronger
+        # than _perf_single_open_turn, which gives up whenever a second turn
+        # merely sits open in the registry (a turn awaiting user input in
+        # another tab, say) even though the running query is unambiguous.
+        # _current_response is a module global, not a contextvar, so it does
+        # not disambiguate two client threads; there is one client per
+        # participant today, and the single-open-turn fallback below still
+        # refuses to guess when the lookup comes back empty.
         resp = get_current_response()
         turn = perf.get_turn(resp.message_id) if resp is not None else None
         if turn is None:

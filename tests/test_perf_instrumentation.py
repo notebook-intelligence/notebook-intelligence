@@ -65,6 +65,16 @@ def _spans_named(turn, name):
 # ---------------------------------------------------------------------------
 
 
+def _raw_chunk(text):
+    """A raw LLM chunk exactly as the providers emit it.
+
+    github_copilot.py and claude.py both stream OpenAI-shaped dicts
+    (``choices[0].delta.content``); there is no flat ``content`` key, so the
+    byte estimator has to read through that shape.
+    """
+    return {"choices": [{"delta": {"content": text}}]}
+
+
 def _make_emitter(message_id="m-emit"):
     from notebook_intelligence.extension import WebsocketCopilotResponseEmitter
 
@@ -90,12 +100,15 @@ class TestWebsocketEmitterInstrumentation:
         turn = perf.begin_turn("m-emit", "claude", time.time(), time.monotonic())
         emitter = _make_emitter("m-emit")
 
-        chunk = {"type": "markdown", "content": "hello"}
+        chunk = _raw_chunk("hello")
         emitter.stream(chunk)
         emitter.stream(chunk)
 
         assert emitter._perf_chunk_count == 2
-        assert emitter._perf_byte_count > 0
+        # Raw LLM chunks are OpenAI-shaped dicts; the byte estimator has to
+        # reach choices[0].delta.content or the counter silently reads 0 for
+        # the whole of Copilot chat mode.
+        assert emitter._perf_byte_count == 2 * len("hello")
         # The "stream" span is opened once and left open across chunks; it
         # is only recorded into turn._spans once it is closed by finish().
         assert emitter._perf_stream_cm is not None
@@ -108,8 +121,8 @@ class TestWebsocketEmitterInstrumentation:
         _enable_perf()
         turn = perf.begin_turn("m-emit", "claude", time.time(), time.monotonic())
         emitter = _make_emitter("m-emit")
-        emitter.stream({"type": "markdown", "content": "a"})
-        emitter.stream({"type": "markdown", "content": "b"})
+        emitter.stream(_raw_chunk("a"))
+        emitter.stream(_raw_chunk("b"))
 
         emitter.finish()
 
@@ -131,7 +144,7 @@ class TestWebsocketEmitterInstrumentation:
         # perf stays disabled (autouse fixture default) -- must not raise
         # even though perf.get_turn() returns None for every message_id.
         emitter = _make_emitter("m-off")
-        emitter.stream({"type": "markdown", "content": "a"})
+        emitter.stream(_raw_chunk("a"))
         emitter.finish()
         assert emitter._perf_stream_cm is None
         assert emitter._perf_chunk_count == 0
@@ -139,7 +152,7 @@ class TestWebsocketEmitterInstrumentation:
     def test_no_open_turn_stream_and_finish_are_noop(self):
         _enable_perf()  # enabled, but no turn begun for this message_id
         emitter = _make_emitter("m-no-turn")
-        emitter.stream({"type": "markdown", "content": "a"})
+        emitter.stream(_raw_chunk("a"))
         emitter.finish()
         assert emitter._perf_stream_cm is None
 

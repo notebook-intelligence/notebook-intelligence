@@ -660,6 +660,13 @@ def _get_or_create_sink_locked() -> Optional[_JsonlSink]:
     instead of re-acquiring ``_sink_lock`` for each step.
     """
     global _sink
+    # _log_to_file is re-read here, not trusted from the caller: TurnHandle
+    # .close() checks it outside the lock, so configure() can turn file
+    # logging off in the window between that check and this call. Without
+    # this guard the close would then construct a fresh sink and leave a
+    # live writer thread behind after the user disabled the sink.
+    if not _log_to_file:
+        return None
     if _sink is None:
         _sink = _JsonlSink(_log_dir)
     if _sink._disabled:

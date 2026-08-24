@@ -120,11 +120,22 @@ def _stream_chunk_byte_estimate(data) -> int:
     Deliberately avoids ``asdict`` + ``json.dumps``: that pair ran on every
     chunk of the hot streaming path purely to count bytes, double-serializing
     content the caller is about to serialize again for the websocket write.
-    Reads the ``content`` field directly instead (dataclass attribute or dict
-    key); anything else, or a non-string content, counts as 0 rather than
-    paying for a real serialization.
+    Reads the content out directly instead. Dicts are raw LLM chunks and are
+    OpenAI-shaped (``choices[0].delta.content``, the same accessor
+    ``_collect_streamed_content`` below uses), never a flat ``content`` key;
+    everything else is a ResponseStreamData dataclass. Anything that does not
+    match, or a non-string content, counts as 0 rather than paying for a real
+    serialization.
     """
-    content = data.get("content") if isinstance(data, dict) else getattr(data, "content", None)
+    if isinstance(data, dict):
+        choices = data.get("choices") or []
+        if not choices:
+            return 0
+        first = choices[0]
+        delta = first.get("delta") or {} if isinstance(first, dict) else {}
+        content = delta.get("content")
+    else:
+        content = getattr(data, "content", None)
     return len(content) if isinstance(content, str) else 0
 
 

@@ -328,9 +328,18 @@ def _session_scan(claude_home: Path, bound_s: float) -> dict:
     return result
 
 
-def _fs_checks(
-    pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, checks: list, pending: list
-) -> None:
+def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, checks: list) -> None:
+    """Run the filesystem group strictly one check at a time.
+
+    These checks measure the thing they run on: _latency_loop times
+    individual stat/read/write+fsync ops in a directory that _sustained_io
+    is writing and fsyncing a 4 MB file into. Overlapping them makes the
+    probe measure its own contention, and on exactly the EFS/NFS homes this
+    exists to diagnose the inflation is largest. Sequential submission still
+    leaves a hung check abandonable: the pool has spare workers, so the next
+    check gets one even when a previous thread is stuck on an
+    uninterruptible syscall.
+    """
     from notebook_intelligence.util import get_jupyter_root_dir
 
     targets = []
@@ -352,8 +361,8 @@ def _fs_checks(
         checks.append(_skipped_entry("fs.claude_home", "filesystem", "not_present"))
 
     for label, dir_path in targets:
-        pending.append(
-            _submit_check(
+        checks.append(
+            _run_check(
                 pool,
                 f"fs.{label}.latency",
                 "filesystem",
@@ -361,8 +370,8 @@ def _fs_checks(
                 lambda d=dir_path: _latency_loop(d, DEFAULT_TIMEOUT_S * 0.7),
             )
         )
-        pending.append(
-            _submit_check(
+        checks.append(
+            _run_check(
                 pool,
                 f"fs.{label}.sustained_io",
                 "filesystem",
@@ -370,8 +379,8 @@ def _fs_checks(
                 lambda d=dir_path: _sustained_io(d),
             )
         )
-        pending.append(
-            _submit_check(
+        checks.append(
+            _run_check(
                 pool,
                 f"fs.{label}.mount",
                 "filesystem",
@@ -384,8 +393,8 @@ def _fs_checks(
             # it: an equal budget abandons the future (discarding every
             # sample already collected) at the exact instant the scan would
             # have returned on its own.
-            pending.append(
-                _submit_check(
+            checks.append(
+                _run_check(
                     pool,
                     "fs.claude_home.session_scan",
                     "filesystem",
@@ -437,14 +446,16 @@ def _npm_cache_path() -> dict:
     return {"wall_ms": round(wall_ms, 3), "path": proc.stdout.strip()}
 
 
-def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, pending: list) -> None:
-    pending.append(_submit_check(pool, "subprocess.node_version", "subprocess", DEFAULT_TIMEOUT_S, _node_version))
-    pending.append(
-        _submit_check(pool, "subprocess.claude_cli_version", "subprocess", DEFAULT_TIMEOUT_S, _claude_cli_version)
+def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list) -> None:
+    # Sequential for the same reason as the filesystem group: these spawn
+    # node and the Claude CLI, whose cost is dominated by reading their own
+    # (often network-mounted) install trees, so running them against each
+    # other measures contention rather than cold-start.
+    checks.append(_run_check(pool, "subprocess.node_version", "subprocess", DEFAULT_TIMEOUT_S, _node_version))
+    checks.append(
+        _run_check(pool, "subprocess.claude_cli_version", "subprocess", DEFAULT_TIMEOUT_S, _claude_cli_version)
     )
-    pending.append(
-        _submit_check(pool, "subprocess.npm_cache_path", "subprocess", DEFAULT_TIMEOUT_S, _npm_cache_path)
-    )
+    checks.append(_run_check(pool, "subprocess.npm_cache_path", "subprocess", DEFAULT_TIMEOUT_S, _npm_cache_path))
 
 
 # ---------------------------------------------------------------------------
@@ -486,11 +497,13 @@ def _interpreter_info() -> dict:
     return {"python_version": platform.python_version(), "platform": platform.platform()}
 
 
-def _runtime_checks(pool: concurrent.futures.ThreadPoolExecutor, pending: list) -> None:
-    pending.append(_submit_check(pool, "runtime.process_rss", "runtime", DEFAULT_TIMEOUT_S, _process_rss))
-    pending.append(_submit_check(pool, "runtime.loadavg", "runtime", DEFAULT_TIMEOUT_S, _loadavg))
-    pending.append(_submit_check(pool, "runtime.cgroup_cpu", "runtime", DEFAULT_TIMEOUT_S, _cgroup_cpu))
-    pending.append(_submit_check(pool, "runtime.interpreter", "runtime", DEFAULT_TIMEOUT_S, _interpreter_info))
+def _runtime_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list) -> None:
+    # loadavg is a contention reading, so it is taken while the probe is
+    # doing as little as possible rather than alongside its own 4 MB writes.
+    checks.append(_run_check(pool, "runtime.process_rss", "runtime", DEFAULT_TIMEOUT_S, _process_rss))
+    checks.append(_run_check(pool, "runtime.loadavg", "runtime", DEFAULT_TIMEOUT_S, _loadavg))
+    checks.append(_run_check(pool, "runtime.cgroup_cpu", "runtime", DEFAULT_TIMEOUT_S, _cgroup_cpu))
+    checks.append(_run_check(pool, "runtime.interpreter", "runtime", DEFAULT_TIMEOUT_S, _interpreter_info))
     # Event-loop lag is intentionally not measured here: the caller (the
     # handler that owns the event loop) is the only place that can sample
     # it meaningfully, so it is out of scope for this blocking, off-loop probe.
@@ -884,15 +897,17 @@ def run_probe(include_network: bool, nbi_config: Any) -> dict:
     checks: list = []
     pending: list = []
     try:
-        # Every independent check is submitted before anything blocks on a
-        # result. Doing it the other way -- submit one, block on it, submit
-        # the next -- makes the pool's extra workers pointless: wall time
-        # becomes the sum of every check's timeout instead of roughly the
-        # slowest one.
-        _fs_checks(pool, nbi_config, checks, pending)
-        _subprocess_checks(pool, pending)
-        _runtime_checks(pool, pending)
+        # The network check is the long pole (up to NETWORK_TIMEOUT_S * 4)
+        # and is the one check that touches neither the local disk nor the
+        # CPU, so it is submitted first and collected last: it overlaps
+        # everything else for free. Everything else runs strictly one at a
+        # time, because the filesystem, subprocess, and contention checks
+        # all measure resources they would otherwise be competing with each
+        # other for.
         network_ran = _network_checks(pool, include_network, nbi_config, checks, pending)
+        _fs_checks(pool, nbi_config, checks)
+        _subprocess_checks(pool, checks)
+        _runtime_checks(pool, checks)
 
         for check_id, group, timeout_s, future in pending:
             checks.append(_collect_check(check_id, group, timeout_s, future))

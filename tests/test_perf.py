@@ -386,6 +386,26 @@ class TestJsonlSink:
         sink._write_batch([{"message_id": "x"}])
         assert sink._disabled is True
 
+    def test_get_or_create_sink_refuses_once_file_logging_is_off(self, tmp_path):
+        # TurnHandle.close() reads _log_to_file outside _sink_lock, so a
+        # configure() that turns file logging off can land between that read
+        # and the _get_or_create_sink() call. The sink factory has to
+        # re-check under the lock, or that close resurrects a writer thread
+        # the user just disabled.
+        perf.configure(
+            {"enabled": True, "log_to_file": True, "log_dir": str(tmp_path)}, None
+        )
+        assert perf._sink is not None
+
+        perf.configure(
+            {"enabled": True, "log_to_file": False, "log_dir": str(tmp_path)}, None
+        )
+        assert perf._sink is None
+
+        # Simulate the racing close: it already passed its _log_to_file check.
+        assert perf._get_or_create_sink() is None
+        assert perf._sink is None
+
     def test_configure_recreates_sink_after_it_self_disabled(self, tmp_path):
         # A settings save (e.g. after the operator fixes the filesystem)
         # must retry the sink instead of leaving a self-disabled instance
