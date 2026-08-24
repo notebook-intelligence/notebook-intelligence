@@ -27,11 +27,11 @@
 // is the literal 9-character string `"undefined"`, so a naive length
 // check on the stringified value still misclassifies it; `children` has
 // to be null-checked before stringifying. A literal ` ```\n``` ` fence
-// hits this, but the common path is streaming: MarkdownPart re-renders
-// on every partial chunk, so a fence passes through a transient
-// zero-content state before its language token arrives, which would
-// otherwise flash `.inline-code` pill styling on virtually every
-// streamed code block.
+// hits this directly. It's also reachable mid-stream, but only for the
+// single-character window right after the opening ` ``` ` and before any
+// language character arrives — from the first language character onward,
+// `className` is already set and the `code` component's SyntaxHighlighter
+// branch takes over, so this function isn't called at all for that input.
 export function resolveCodeClassName(
   children: unknown,
   className?: string

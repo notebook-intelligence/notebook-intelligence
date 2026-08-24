@@ -68,7 +68,10 @@ export function MarkdownRenderer({
         ),
         code({ node, inline, className, children, getApp, ...props }: any) {
           const match = /language-(\w+)/.exec(className || '');
-          const codeString = String(children).replace(/\n$/, '');
+          const codeString =
+            children === null || children === undefined
+              ? ''
+              : String(children).replace(/\n$/, '');
           const language = match ? match[1] : 'text';
 
           const handleCopyClick = () => {
