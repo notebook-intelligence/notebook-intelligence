@@ -22,7 +22,11 @@
 // Empty content is the one case that trailing-newline shape can't
 // distinguish: mdast-util-to-hast's code handler only appends the
 // trailing `\n` when there's a value to append it to, so an empty code
-// node comes through as `''`, not `'\n'`. A literal ` ```\n``` ` fence
+// node comes through with no text child at all — react-markdown then
+// passes `children` as `undefined`, not `''` or `'\n'`. `String(undefined)`
+// is the literal 9-character string `"undefined"`, so a naive length
+// check on the stringified value still misclassifies it; `children` has
+// to be null-checked before stringifying. A literal ` ```\n``` ` fence
 // hits this, but the common path is streaming: MarkdownPart re-renders
 // on every partial chunk, so a fence passes through a transient
 // zero-content state before its language token arrives, which would
@@ -32,7 +36,7 @@ export function resolveCodeClassName(
   children: unknown,
   className?: string
 ): string | undefined {
-  const content = String(children);
+  const content = children == null ? '' : String(children);
   const isTrulyInline = content.length > 0 && !content.includes('\n');
   return isTrulyInline ? `inline-code ${className || ''}`.trim() : className;
 }

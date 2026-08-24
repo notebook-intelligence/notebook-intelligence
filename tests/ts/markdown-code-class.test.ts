@@ -32,6 +32,13 @@ describe('resolveCodeClassName', () => {
     expect(resolveCodeClassName('', 'language-python')).toBe('language-python');
   });
 
+  it('does not mark undefined/null children, which is what react-markdown actually passes for an empty code node', () => {
+    expect(resolveCodeClassName(undefined)).toBeUndefined();
+    expect(resolveCodeClassName(null, 'language-python')).toBe(
+      'language-python'
+    );
+  });
+
   it('marks inline code that spans a source newline, since remark normalizes it to a space first', () => {
     expect(resolveCodeClassName('multi word')).toBe('inline-code');
   });
