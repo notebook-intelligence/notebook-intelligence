@@ -18,10 +18,21 @@
 // target it directly instead of via `:not(pre) > code`, which broke once
 // `PreTag="div"` put a wrapper div between a highlighted block's `<code>`
 // and the outer `<pre>`.
+//
+// Empty content is the one case that trailing-newline shape can't
+// distinguish: mdast-util-to-hast's code handler only appends the
+// trailing `\n` when there's a value to append it to, so an empty code
+// node comes through as `''`, not `'\n'`. A literal ` ```\n``` ` fence
+// hits this, but the common path is streaming: MarkdownPart re-renders
+// on every partial chunk, so a fence passes through a transient
+// zero-content state before its language token arrives, which would
+// otherwise flash `.inline-code` pill styling on virtually every
+// streamed code block.
 export function resolveCodeClassName(
   children: unknown,
   className?: string
 ): string | undefined {
-  const isTrulyInline = !String(children).includes('\n');
+  const content = String(children);
+  const isTrulyInline = content.length > 0 && !content.includes('\n');
   return isTrulyInline ? `inline-code ${className || ''}`.trim() : className;
 }

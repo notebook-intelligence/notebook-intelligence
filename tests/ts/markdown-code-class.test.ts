@@ -26,4 +26,13 @@ describe('resolveCodeClassName', () => {
   it('does not mark a single-line fenced block that still carries a trailing newline', () => {
     expect(resolveCodeClassName('x\n', 'language-text')).toBe('language-text');
   });
+
+  it('does not mark empty content (a fence mid-stream before its language token arrives)', () => {
+    expect(resolveCodeClassName('')).toBeUndefined();
+    expect(resolveCodeClassName('', 'language-python')).toBe('language-python');
+  });
+
+  it('marks inline code that spans a source newline, since remark normalizes it to a space first', () => {
+    expect(resolveCodeClassName('multi word')).toBe('inline-code');
+  });
 });
