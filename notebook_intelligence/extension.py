@@ -136,7 +136,14 @@ def _stream_chunk_byte_estimate(data) -> int:
         content = delta.get("content")
     else:
         content = getattr(data, "content", None)
-    return len(content) if isinstance(content, str) else 0
+    if not isinstance(content, str):
+        return 0
+    # Encoded length, not len(): the attribute is called "bytes" and is
+    # documented as a byte size, and a character count undercounts CJK and
+    # emoji by three to four times. The encode is on the hot path but only
+    # when diagnostics are on, and it is still far cheaper than the
+    # asdict + json.dumps this replaced.
+    return len(content.encode("utf-8", errors="ignore"))
 
 
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
@@ -755,6 +762,7 @@ class GetCapabilitiesHandler(APIHandler):
             ),
             "setting_locks": _build_setting_locks_response(self.string_overrides),
             "perf_probe_network_allowed": self.perf_probe_network_allowed,
+            "perf_probe_target": _perf_probe_target(),
             # Starting mode for the permission-mode selector: managed
             # settings' permissions.defaultMode when present and valid,
             # else "default". Bypass never starts armed regardless of
@@ -2270,6 +2278,15 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         self._perf_stream_span = None
         self._perf_chunk_count = 0
         self._perf_byte_count = 0
+        # Resolved once here rather than per chunk. perf.get_turn takes the
+        # global registry lock, and stream() is the hottest path in the
+        # product: one contended mutex per streamed token, against every
+        # concurrent turn's opens and closes, is not a price this feature
+        # should charge. The emitter is constructed after begin_turn and the
+        # handle stays valid for the whole turn, so holding it is also what
+        # keeps finish() able to close the stream span if diagnostics are
+        # switched off mid-turn.
+        self._perf_turn = perf.get_turn(self.messageId)
 
     def _send_async(self, message: dict) -> None:
         self._io_loop.asyncio_loop.call_soon_threadsafe(
@@ -2285,7 +2302,7 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         return self.messageId
 
     def stream(self, data: Union[ResponseStreamData, dict]):
-        turn = perf.get_turn(self.messageId)
+        turn = self._perf_turn
         if turn is not None:
             # Locally generated ProgressData ("Thinking...") is streamed
             # before the agent even connects, and can recur mid-turn as
@@ -2540,7 +2557,7 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
             "data": {}
         })
 
-        turn = perf.get_turn(self.messageId)
+        turn = self._perf_turn
         if turn is not None:
             if self._perf_stream_cm is not None:
                 # Only the final counts matter, so write them once here
@@ -2652,6 +2669,24 @@ class UIToolsHandler(APIHandler):
         super().on_connection_close()
 
 
+def _perf_probe_target() -> str:
+    """The endpoint the probe's network check would contact, as
+    ``scheme://host[:port]``, for the confirm dialog to name.
+
+    Scheme and host only. The raw configured URL can carry a path, a query,
+    or embedded credentials, and hostname+port is used rather than netloc
+    because netloc preserves userinfo and would re-leak a credential
+    embedded in a gateway URL.
+    """
+    try:
+        target = perf_probe._resolve_target_base_url(ai_service_manager.nbi_config)
+        parsed = urlsplit(target)
+        hostport = (parsed.hostname or "") + (f":{parsed.port}" if parsed.port else "")
+        return f"{parsed.scheme}://{hostport}" if parsed.scheme and hostport else ""
+    except Exception:
+        return ""
+
+
 class PerfReportHandler(APIHandler):
     """Serves the in-memory perf diagnostics ring buffer. 404s whenever
     perf diagnostics is off, so the endpoint's mere presence doesn't leak
@@ -2661,16 +2696,13 @@ class PerfReportHandler(APIHandler):
     async def get(self):
         if not perf.enabled():
             raise tornado.web.HTTPError(404)
-        report = perf.report_snapshot()
-        # Scheme+host only: the raw configured URL can carry a path, query,
-        # or embedded credentials, and this string rides copy-as-JSON exports.
-        _target = perf_probe._resolve_target_base_url(ai_service_manager.nbi_config)
-        _sp = urlsplit(_target)
-        # hostname+port, never netloc: netloc preserves userinfo and would
-        # re-leak credentials embedded in a gateway URL.
-        _hostport = (_sp.hostname or "") + (f":{_sp.port}" if _sp.port else "")
-        report["probe_target"] = f"{_sp.scheme}://{_hostport}" if _sp.scheme and _hostport else ""
-        self.finish(json.dumps(report))
+        # No probe_target here. The report document is the thing users copy
+        # into support tickets, and both the README and the diagnostics guide
+        # promise it contains no hostname. The probe target the confirm
+        # dialog needs is served on the capabilities response instead, which
+        # already carries the configured base URL because the settings UI has
+        # to render it.
+        self.finish(json.dumps(perf.report_snapshot()))
 
 
 class PerfProbeHandler(APIHandler):
@@ -2759,7 +2791,10 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
         finally:
             handlers = self._messageCallbackHandlers.pop(message_id, None)
             try:
-                turn = perf.get_turn(message_id)
+                # take_turn, not get_turn: diagnostics may have been switched
+                # off while this turn was running, and a close that came back
+                # empty would strand the handle in the registry forever.
+                turn = perf.take_turn(message_id)
                 if turn is not None:
                     if handlers is not None:
                         turn.add_user_wait(handlers.response_emitter.user_input_wait_seconds)

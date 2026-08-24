@@ -240,14 +240,14 @@ class TestAllowlistAndRedaction:
     def test_unknown_attrs_are_dropped_and_counted(self):
         perf.configure({"enabled": True, "attr_detail": "full"}, None)
         handle = perf.begin_turn("m-allow", "claude", time.time(), time.monotonic())
-        with handle.span("context_prep", rule_count=3, secret_token="do-not-keep") as span:
+        with handle.span("context_prep", file_count=3, secret_token="do-not-keep") as span:
             span.set_attr("another_secret", "nope")
         handle.close("ok")
 
         snapshot = perf.report_snapshot()
         doc = next(t for t in snapshot["turns"] if t["message_id"] == "m-allow")
         span_doc = doc["spans"][0]
-        assert span_doc["attrs"] == {"rule_count": 3}
+        assert span_doc["attrs"] == {"file_count": 3}
         assert doc["dropped_attrs"] == 2
 
     def test_basename_attrs_are_redacted_keeping_extension(self):
@@ -575,3 +575,98 @@ class TestToolNameRedaction:
             pass
         full_name = handle.close("ok")["spans"][0]["name"]
         assert full_name == "tool:mcp__acme__search"
+
+
+class TestDisableMidTurn:
+    def test_take_turn_closes_a_turn_after_diagnostics_were_disabled(self):
+        perf.configure({"enabled": True}, None)
+        handle = perf.begin_turn("m-mid", "claude", time.time(), time.monotonic())
+        assert handle is not None
+
+        # The user unticks Enabled (or a policy flips to force-off) while the
+        # turn is still running.
+        perf.configure({"enabled": False}, None)
+
+        assert perf.get_turn("m-mid") is None
+        recovered = perf.take_turn("m-mid")
+        assert recovered is handle
+
+        recovered.close("ok")
+        # The registry has to be empty afterwards: a stale entry would also
+        # poison the single-open-turn lookup used for in-process tool spans.
+        assert perf._turns == {}
+
+    def test_a_turn_closed_after_disabling_is_not_recorded(self):
+        perf.configure({"enabled": True}, None)
+        handle = perf.begin_turn("m-mid2", "claude", time.time(), time.monotonic())
+        perf.configure({"enabled": False}, None)
+
+        doc = handle.close("ok")
+
+        assert doc is not None
+        assert not any(t["message_id"] == "m-mid2" for t in perf._ring)
+
+
+class TestSinkRobustness:
+    def test_writer_survives_an_unserializable_document(self, tmp_path):
+        # The allowlist constrains attr keys, not value types, so a doc that
+        # json.dumps cannot render is reachable. If that killed the writer
+        # thread, enqueue() would keep filling an unbounded queue with no
+        # consumer and file logging would be silently dead.
+        perf.configure(
+            {"enabled": True, "log_to_file": True, "log_dir": str(tmp_path)}, None
+        )
+        sink = perf._sink
+        assert sink is not None
+
+        sink.enqueue({"bad": object()})
+        sink.enqueue({"message_id": "m-good", "ok": True})
+
+        deadline = time.monotonic() + 2.0
+        perf_dir = tmp_path / "perf"
+        found = False
+        while time.monotonic() < deadline:
+            files = list(perf_dir.glob("perf-*.jsonl"))
+            if files and "m-good" in files[0].read_text():
+                found = True
+                break
+            time.sleep(0.02)
+
+        assert found, "the good document never landed; the writer thread died"
+        assert sink._thread is not None and sink._thread.is_alive()
+        assert sink._disabled is False
+
+
+class TestSpanNesting:
+    def test_spans_carry_ids_that_reconstruct_the_tree(self):
+        perf.configure({"enabled": True}, None)
+        handle = perf.begin_turn("m-nest", "claude", time.time(), time.monotonic())
+
+        with handle.span("dispatch", provider="p"):
+            with handle.span("connect", cold=True):
+                pass
+
+        doc = handle.close("ok")
+        by_name = {s["name"]: s for s in doc["spans"]}
+        assert by_name["dispatch"]["parent_id"] is None
+        assert by_name["connect"]["parent_id"] == by_name["dispatch"]["span_id"]
+        assert by_name["connect"]["span_id"] != by_name["dispatch"]["span_id"]
+
+
+class TestBuiltinFlagCanBeRevoked:
+    def test_a_callee_can_clear_builtin_so_its_name_is_hashed(self):
+        """The generic tool-dispatch loop in api.py marks every tool builtin
+        so NBI's own names stay readable. MCPTool.call revokes that for
+        itself, because a third-party tool name is an external identifier."""
+        perf.configure({"enabled": True}, None)
+        handle = perf.begin_turn("m-revoke", "claude", time.time(), time.monotonic())
+
+        with handle.span("tool:third-party-thing", tool="third-party-thing", builtin=True):
+            perf.set_current_span_attr("builtin", False)
+
+        doc = handle.close("ok")
+        span = doc["spans"][0]
+        assert span["name"] != "tool:third-party-thing"
+        assert span["name"].startswith("tool:")
+        # The flag itself is bookkeeping and never reaches the document.
+        assert "builtin" not in span["attrs"]

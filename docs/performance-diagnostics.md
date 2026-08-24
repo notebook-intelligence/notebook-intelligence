@@ -86,14 +86,19 @@ attributes, followed by the events with their offsets from turn start.
 
 ### Span reference
 
-| Span           | Measures                                                                                                                            | Attributes                                        |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `context_prep` | Rule and skill discovery, plus context assembly, before the request is dispatched. Filesystem-bound on the server's home directory. | `rule_count`, `skill_count`, `file_count`, `file` |
-| `dispatch`     | Handing the request to the resolved participant.                                                                                    | `provider`                                        |
-| `connect`      | Agent subprocess and CLI startup. `cold=true` on the first connect of a session.                                                    | `cold`, `gateway_host`                            |
-| `stream`       | First content-bearing chunk to the end of the response.                                                                             | `chunk_count`, `bytes`                            |
-| `tool:<name>`  | One tool call. In `redacted` mode the name after `tool:` is hashed for third-party tools and left readable for NBI's own.           | `tool`, `server`, `ok`                            |
-| `ui_command`   | A round trip to the browser to run a UI command.                                                                                    | `command`                                         |
+| Span           | Measures                                                                                                                            | Attributes             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `context_prep` | Rule and skill discovery, plus context assembly, before the request is dispatched. Filesystem-bound on the server's home directory. | `file_count`           |
+| `dispatch`     | Handing the request to the resolved participant.                                                                                    | `provider`             |
+| `connect`      | Agent subprocess and CLI startup. `cold=true` on the first connect of a session.                                                    | `cold`, `model`        |
+| `stream`       | First content-bearing chunk to the end of the response. `bytes` is the UTF-8 encoded size of the streamed content.                  | `chunk_count`, `bytes` |
+| `tool:<name>`  | One tool call. In `redacted` mode the name after `tool:` is hashed for third-party tools and left readable for NBI's own.           | `tool`, `server`, `ok` |
+| `ui_command`   | A round trip to the browser to run a UI command.                                                                                    | `command`              |
+
+Spans arrive as a flat list in completion order. Each carries `span_id` and
+`parent_id`, which is what reconstructs the tree: `dispatch` wraps the whole
+turn, so reading its duration as a phase alongside the phases it contains
+will mislead you. The panel indents accordingly.
 
 ### Event reference
 
@@ -125,12 +130,17 @@ network filesystem is itself the finding.
 
 ### Filesystem
 
-| Check                | Reads                                                                          | Bands                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| small-file latency   | Median `stat`, small read, and write+fsync+unlink over up to 20 iterations     | `stat` warns at 1 ms and is bad at 5 ms; write+fsync warns at 10 ms and is bad at 50 ms                             |
-| sustained throughput | One 4 MB write-fsync-read-back pass                                            | Warns below 50 MB/s, bad below 10 MB/s                                                                              |
-| mount                | Filesystem type and mount options for that directory                           | Warns on any network filesystem type (`nfs`, `nfs4`, `efs`, `cifs`, `smbfs`, `fuse`, `lustre`, `gpfs`, `glusterfs`) |
-| session tree size    | File count and total bytes under `~/.claude/projects` and `~/.claude/sessions` | Warns over 5,000 files, bad over 20,000                                                                             |
+| Check                | Reads                                                                                                                                                                                                                                                    | Bands                                                                                                               |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| small-file latency   | Median `stat`, small read, and write+fsync+unlink over up to 20 iterations                                                                                                                                                                               | `stat` warns at 1 ms and is bad at 5 ms; write+fsync warns at 10 ms and is bad at 50 ms                             |
+| sustained throughput | One 4 MB write-fsync-read-back pass                                                                                                                                                                                                                      | Warns below 50 MB/s, bad below 10 MB/s                                                                              |
+| mount                | Filesystem type and mount options for that directory, with any `key=value` option not on a fixed safe list withheld (CIFS/SMB options otherwise carry the server address and the mount credential; the count of withheld options shows as `+N redacted`) | Warns on any network filesystem type (`nfs`, `nfs4`, `efs`, `cifs`, `smbfs`, `fuse`, `lustre`, `gpfs`, `glusterfs`) |
+| session tree size    | File count and total bytes under `~/.claude/projects` and `~/.claude/sessions`                                                                                                                                                                           | Warns over 5,000 files, bad over 20,000                                                                             |
+
+The directory-level `~/.claude` row appears only when something is wrong with
+it: `SKIPPED` when there is no such directory, `TIMED OUT` when even deciding
+whether it exists did not return, which on a hung network mount is the whole
+answer.
 
 The latency loop reports `first_iteration_ms` separately from the median in the
 raw output, which separates cold cache from warm.
@@ -155,10 +165,19 @@ The network check is off unless you tick **Include network check**, and it asks
 for confirmation showing the host it will contact. It makes several connections
 to the single configured base URL's host:
 
-1. a raw connection to time DNS, TCP, and the TLS handshake
-2. a second raw connection to verify the presented certificate against the
-   default trust store
-3. one unauthenticated HTTP HEAD, retried as GET if the endpoint answers 405
+1. a raw connection to time DNS, TCP, and the TLS handshake, and to read the
+   certificate the endpoint presents. This leg deliberately does not verify:
+   against an interception certificate a verifying handshake simply fails,
+   and the certificate you most need to see is the one you would then never
+   get. Nothing is sent over it; it is opened, read, and closed.
+2. a second connection that does verify, against the default trust store,
+   which is where `verified_against_default_bundle` comes from
+3. one unauthenticated HTTP HEAD, retried as GET if the endpoint answers 405,
+   over urllib's normal verifying path
+
+All three take the same route: when a proxy is configured, all three go
+through it with `CONNECT`, so none is measuring a path the product does not
+use.
 
 Only the HTTP request carries the probe's `nbi-perf-probe/<version>`
 User-Agent; the two raw TLS connections send no HTTP at all, so an allowlist
@@ -255,6 +274,8 @@ misplaced log visible in the log. Every subsequent line is one turn:
   "spans": [
     {
       "name": "connect",
+      "span_id": 2,
+      "parent_id": 1,
       "dur_ms": 4102.6,
       "status": "ok",
       "attrs": { "cold": true }
@@ -270,7 +291,12 @@ misplaced log visible in the log. Every subsequent line is one turn:
 
 `status` is one of `ok`, `error`, or `cancelled`; a cancelled turn is recorded
 as cancelled rather than as a fast success, so it will not skew your
-percentiles downward. `t_wall` is epoch seconds as a float.
+percentiles downward. `t_wall` is epoch seconds as a float. `parent_id` is
+`null` for a root span and otherwise names the enclosing span's `span_id`.
+
+A turn still running when diagnostics are switched off is not written: off
+means nothing further is recorded. A document the writer cannot serialize is
+skipped rather than taking the rest of its batch with it.
 
 Writes are batched off the request path on a dedicated thread. If the
 filesystem misbehaves the sink tolerates the failures and then disables itself

@@ -1,4 +1,5 @@
 import concurrent.futures
+import contextlib
 import datetime
 import http.server
 import json
@@ -369,3 +370,175 @@ def test_mount_info_darwin_leaves_system_paths_on_the_system_volume(monkeypatch)
 
     info = pp._mount_info_darwin("/usr/bin")
     assert "read-only" in info["options"]
+
+
+def test_safe_mount_options_drops_addresses_and_credentials():
+    """CIFS/SMB mount options carry the server address and the mount
+    credential. The probe document promises no hostnames and no
+    credentials, and _scrub only knows the home path and the login name."""
+    raw = "rw,relatime,vers=3.1.1,sec=ntlmssp,username=svc,domain=CORP,uid=501,addr=10.20.30.40,soft"
+    out = pp._safe_mount_options(raw)
+
+    assert "addr=" not in out
+    assert "10.20.30.40" not in out
+    assert "username=" not in out
+    assert "domain=" not in out
+    assert "uid=" not in out
+    # Operationally useful options survive.
+    assert "rw" in out and "relatime" in out and "soft" in out
+    assert "vers=3.1.1" in out and "sec=ntlmssp" in out
+    # And the result says something was withheld rather than passing itself
+    # off as the whole mount line.
+    assert "redacted" in out
+
+
+def test_safe_mount_options_passthrough_and_none():
+    assert pp._safe_mount_options("rw,relatime,noatime") == "rw,relatime,noatime"
+    assert pp._safe_mount_options(None) is None
+    assert pp._safe_mount_options("") == ""
+
+
+def test_capture_context_does_not_verify():
+    """The capture leg has to complete its handshake against an interception
+    certificate, or the certificate we most need to show the operator is the
+    one we never see."""
+    ctx = pp._capture_context()
+    assert ctx.check_hostname is False
+    assert ctx.verify_mode == pp.ssl.CERT_NONE
+
+
+def test_verifies_against_default_bundle_distinguishes_all_three_outcomes(monkeypatch):
+    calls = []
+
+    def fake_open(host, port, proxy_url, ctx, timings=None):
+        calls.append((host, port, proxy_url))
+        raise outcome
+
+    monkeypatch.setattr(pp, "_open_tls", fake_open)
+
+    outcome = pp.ssl.SSLCertVerificationError("bad chain")
+    assert pp._verifies_against_default_bundle("h", 443, None) is False
+
+    outcome = ConnectionResetError("reset")
+    # Not False: a reset is "could not determine". Reporting it as verified
+    # would invert the interception signal, and reporting it as unverified
+    # would cry wolf on a flaky network.
+    assert pp._verifies_against_default_bundle("h", 443, None) is None
+
+    # The verification leg goes through the same proxy as the capture leg,
+    # or in a proxy-only egress environment it is simply refused.
+    pp._verifies_against_default_bundle("h", 443, "http://proxy:8080")
+    assert calls[-1] == ("h", 443, "http://proxy:8080")
+
+
+def test_verifies_against_default_bundle_returns_true_and_closes(monkeypatch):
+    closed = []
+
+    class _Sock:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(pp, "_open_tls", lambda *a, **k: _Sock())
+    assert pp._verifies_against_default_bundle("h", 443, None) is True
+    assert closed == [True]
+
+
+def _self_signed(dirpath, cn="localhost", issuer_cn="Acme Interception CA"):
+    """A certificate that will not verify against any real trust store, which
+    is what an intercepting proxy presents."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer_cn)]))
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(cn)]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = os.path.join(dirpath, "cert.pem")
+    key_path = os.path.join(dirpath, "key.pem")
+    with open(cert_path, "wb") as fh:
+        fh.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(key_path, "wb") as fh:
+        fh.write(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            )
+        )
+    return cert_path, key_path
+
+
+def test_network_probe_reports_an_untrusted_certificate_as_interception(tmp_path):
+    """The headline capability: an endpoint presenting a certificate that does
+    not chain to the default trust store has to come back with the issuer
+    named and verified_against_default_bundle False.
+
+    The regression this pins: when the timing leg used a *verifying* context,
+    an interception certificate failed that handshake, the function returned
+    early with only tls_error, and no issuer was ever captured. False was
+    unreachable for any input, so the panel branch and the documented
+    diagnosis were both dead.
+    """
+    import ssl as _ssl
+
+    cert_path, key_path = _self_signed(str(tmp_path))
+    server_ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(cert_path, key_path)
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    port = listener.getsockname()[1]
+
+    def _handle(conn):
+        try:
+            with server_ctx.wrap_socket(conn, server_side=True) as tls:
+                tls.recv(4096)
+                tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        except Exception:
+            pass
+        finally:
+            with contextlib.suppress(OSError):
+                conn.close()
+
+    def _serve():
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=_handle, args=(conn,), daemon=True).start()
+
+    threading.Thread(target=_serve, daemon=True).start()
+    try:
+        doc = pp._network_probe(f"https://localhost:{port}/")
+    finally:
+        listener.close()
+
+    assert doc.get("tls_error") is None, "the capture leg must not verify"
+    tls = doc["tls"]
+    assert tls["issuer_cn"] == "Acme Interception CA"
+    assert tls["subject_cn"] == "localhost"
+    assert tls["verified_against_default_bundle"] is False
+    assert len(tls["fingerprint_sha256"]) >= 1
+    # The timings survive too.
+    assert doc["timings_ms"]["tls_handshake_ms"] >= 0
+
+    # The HTTP leg does verify, so it fails here. That must be reported as a
+    # field rather than thrown, or it takes every finding above with it.
+    assert doc["http"]["error"]
+    assert "localhost" not in str(doc["http"]["error"])

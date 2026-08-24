@@ -31,14 +31,13 @@ import json
 import logging
 import os
 import queue
-import subprocess
-import sys
 import threading
 import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from notebook_intelligence.feature_flags import POLICY_FORCE_OFF, POLICY_FORCE_ON
@@ -53,32 +52,37 @@ log = logging.getLogger(__name__)
 # sink) can't erode by a later PR just starting to pass a new kwarg. Adding
 # a legitimately useful attr means editing this dict, on purpose, here.
 # --------------------------------------------------------------------------
+# Every span name a producer actually opens. Entries with no producer were
+# removed rather than left aspirational: a "fixed vocabulary" that lists
+# names nothing emits tells a reader to look for phases that will never
+# appear. first_token in particular is an event mark, not a span, and time
+# spent waiting on the user is subtracted into active_ms rather than being
+# recorded as a span of its own.
 SPAN_NAMES = (
-    "ingress",
     "context_prep",
     "dispatch",
     "connect",
-    "first_token",
     "stream",
-    "waiting_on_user",
     "ui_command",
-    "finish",
 )
 
 # Attrs allowed on every span regardless of name.
 _COMMON_SPAN_ATTRS = {"model", "status", "count", "bytes"}
 
+# Trimmed to what producers actually set, for the same reason as
+# SPAN_NAMES: an allowlist entry is a promise the field can appear, and the
+# docs published it as one. rule_count and skill_count were never set by
+# anything, and gateway_host would have put a hostname into a document that
+# promises none. "file" stays: it is the slot basename redaction is defined
+# and tested against, for a per-file span, and unlike the others it cannot
+# leak anything the redaction does not already handle.
 _SPAN_ATTR_ALLOWLIST: dict[str, set] = {
-    "ingress": set(),
-    "context_prep": {"rule_count", "skill_count", "file_count", "file"},
+    "context_prep": {"file_count", "file"},
     "dispatch": {"provider"},
-    "connect": {"cold", "gateway_host"},
-    "first_token": set(),
+    "connect": {"cold"},
     "stream": {"chunk_count"},
-    "waiting_on_user": set(),
     "tool": {"tool", "server", "ok"},
     "ui_command": {"command"},
-    "finish": {"reason"},
 }
 
 # Event names aren't a fixed vocabulary (stalls/retries/etc.), so they share
@@ -317,6 +321,13 @@ class TurnHandle:
             self._spans.append(
                 {
                     "name": rec.name,
+                    # span_id/parent_id are what make the flat list a tree.
+                    # The ids and the ContextVar chain that produces them
+                    # were already being computed on every span; emitting
+                    # them is what stops that being wasted work, and lets a
+                    # reader tell a phase from the wrapper that contains it.
+                    "span_id": rec.span_id,
+                    "parent_id": rec.parent_id,
                     "dur_ms": round(dur_ms, 3),
                     "status": rec.status,
                     "attrs": kept_attrs,
@@ -402,6 +413,13 @@ class TurnHandle:
             if _turns.get(self.message_id) is self:
                 _turns.pop(self.message_id, None)
 
+        # The registry entry above is released either way, but a turn that
+        # was still running when diagnostics were switched off is not
+        # recorded: "off" has to mean nothing further is written, and the
+        # report endpoint 404s at that point anyway.
+        if not _enabled:
+            return doc
+
         with _ring_lock:
             _ring.append(doc)
 
@@ -450,6 +468,20 @@ def set_current_span_attr(key: str, value) -> None:
 def get_turn(message_id: str) -> Optional[TurnHandle]:
     if not _enabled:
         return None
+    with _registry_lock:
+        return _turns.get(message_id)
+
+
+def take_turn(message_id: str) -> Optional[TurnHandle]:
+    """Registry lookup for the close path only.
+
+    Deliberately not gated on ``_enabled``: diagnostics can be turned off
+    (by the user, or by a policy flip) while a turn is in flight, and a
+    close that came back empty would leave that TurnHandle in ``_turns``
+    for the life of the process. That leak is not just wasted memory: the
+    best-effort single-open-turn lookup for in-process tools reads the same
+    registry, so one stale entry silently disables tool spans from then on.
+    """
     with _registry_lock:
         return _turns.get(message_id)
 
@@ -536,6 +568,15 @@ class _JsonlSink:
         self._queue.put(doc)
 
     def _run(self) -> None:
+        # Belt and braces: _write_batch swallows everything already, but this
+        # thread dying would leave enqueue() feeding an unbounded queue with
+        # no consumer, which is a memory leak rather than a lost log line.
+        try:
+            self._drain()
+        except Exception:
+            log.debug("perf JSONL writer thread stopped", exc_info=True)
+
+    def _drain(self) -> None:
         while True:
             item = self._queue.get()
             if item is _SENTINEL:
@@ -598,6 +639,19 @@ class _JsonlSink:
             pass
 
     def _write_batch(self, batch: list) -> None:
+        # Serialize per document, not per batch. The attr allowlist
+        # constrains keys, not value types, so a document json.dumps refuses
+        # is reachable; rendering the batch inside the file handle would let
+        # that one document take every other turn in the batch down with it,
+        # and (before the broadened except below) kill the writer thread.
+        lines = []
+        for doc in batch:
+            try:
+                lines.append(json.dumps(doc))
+            except Exception as exc:
+                log.debug("perf JSONL sink skipped an unserializable document: %s", exc)
+        if not lines:
+            return
         try:
             path = self._resolve_path()
             with os.fdopen(
@@ -605,10 +659,17 @@ class _JsonlSink:
                 "a",
                 encoding="utf-8",
             ) as fh:
-                for doc in batch:
-                    fh.write(json.dumps(doc) + "\n")
+                for line in lines:
+                    fh.write(line + "\n")
             self._consecutive_failures = 0
-        except OSError as exc:
+        except Exception as exc:
+            # Deliberately broader than OSError. An unserializable attr value
+            # raises TypeError out of json.dumps, which would propagate out
+            # of _run and kill the writer thread while enqueue() kept filling
+            # an unbounded queue with no consumer: file logging silently
+            # dead, and every turn document retained in memory for the life
+            # of the process. Any write failure now counts toward the same
+            # self-disable the docs promise.
             self._consecutive_failures += 1
             log.debug("perf JSONL sink write failed: %s", exc)
             if self._consecutive_failures >= _SINK_MAX_CONSECUTIVE_FAILURES:
@@ -622,36 +683,23 @@ class _JsonlSink:
 def _detect_fs_type(path: str) -> Optional[str]:
     """Best-effort filesystem-type lookup for the perf log directory.
 
-    Purely informational (goes in the JSONL meta line so a DLP reviewer can
+    Purely informational (it goes in the JSONL meta line so a reviewer can
     tell EFS/NFS from local disk at a glance); any failure just yields None.
+
+    Delegates to perf_probe's mount resolution rather than re-implementing
+    it. The local copy this replaced matched mount points by bare string
+    prefix, so a log directory at ``/home2/svc`` matched a ``/home`` mount,
+    and it had no macOS firmlink handling, so a log under $HOME resolved to
+    "/" and reported the sealed system volume. Both defeat the only purpose
+    of the field, which is noticing that the log landed on the slow
+    filesystem being diagnosed. Imported lazily: perf_probe pulls in ssl and
+    subprocess, and perf.py is imported on every server start whether or not
+    diagnostics are ever enabled.
     """
     try:
-        target = os.path.realpath(path)
-        if sys.platform.startswith("linux"):
-            best_match = None
-            best_len = -1
-            with open("/proc/mounts", "r", encoding="utf-8") as fh:
-                for line in fh:
-                    parts = line.split()
-                    if len(parts) < 3:
-                        continue
-                    mount_point, fs_type = parts[1], parts[2]
-                    if target.startswith(mount_point) and len(mount_point) > best_len:
-                        best_match, best_len = fs_type, len(mount_point)
-            return best_match
-        result = subprocess.run(
-            ["mount"], capture_output=True, text=True, timeout=1, check=False
-        )
-        best_match = None
-        best_len = -1
-        for line in result.stdout.splitlines():
-            if " on " not in line or "(" not in line:
-                continue
-            mount_point = line.split(" on ", 1)[1].split(" (", 1)[0]
-            if target.startswith(mount_point) and len(mount_point) > best_len:
-                fs_type = line.split("(", 1)[1].split(",", 1)[0].strip()
-                best_match, best_len = fs_type, len(mount_point)
-        return best_match
+        from notebook_intelligence.perf_probe import _mount_info
+
+        return _mount_info(Path(path)).get("fstype")
     except Exception:
         return None
 

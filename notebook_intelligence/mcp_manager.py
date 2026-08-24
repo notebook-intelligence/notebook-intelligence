@@ -103,6 +103,11 @@ class MCPTool(Tool):
         # aggregates. Annotate the enclosing span with the server name (which
         # only mcp_manager knows) instead of nesting a duplicate.
         perf.set_current_span_attr("server", self._server.name)
+        # The enclosing span was opened by the generic tool-dispatch loop,
+        # which marks tools builtin so NBI's own names stay readable in
+        # redacted mode. This is a third-party tool, so take that back: its
+        # name must be hashed like any other external identifier.
+        perf.set_current_span_attr("builtin", False)
         try:
             result = self._server.call_tool(self.name, call_args)
             if hasattr(result, "content") and isinstance(result.content, list):

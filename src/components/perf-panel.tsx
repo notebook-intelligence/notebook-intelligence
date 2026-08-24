@@ -36,6 +36,10 @@ interface IPerfSpan {
   dur_ms: number;
   status: string;
   attrs?: Record<string, unknown>;
+  // Present from schema_version 1 onward; absent on a report served by an
+  // older backend, in which case every span renders at depth 0.
+  span_id?: number;
+  parent_id?: number | null;
 }
 
 interface IPerfEvent {
@@ -76,7 +80,6 @@ interface IPerfReport {
   schema_version: number;
   turns: IPerfTurn[];
   aggregates: Record<string, unknown>;
-  probe_target?: string;
 }
 
 type ProbeStatus = 'ok' | 'timed_out' | 'error' | 'skipped';
@@ -148,35 +151,44 @@ function stallCount(turn: IPerfTurn): number {
   return (turn.events ?? []).filter(e => e.name === 'stall').length;
 }
 
-function fmtMs(value: number | undefined): string {
-  return value === undefined ? 'n/a' : `${Math.round(value)} ms`;
+// `num` first, not a bare undefined check: the backend leaves
+// sdk.duration_api_ms (and its siblings) as null on every turn that is not a
+// Claude turn, and `Math.round(null)` is 0. A hard "0 ms" in the column the
+// docs call the most useful comparison reads as "the model contributed
+// nothing" and sends the reader looking for local causes.
+function fmtMs(value: unknown): string {
+  const v = num(value);
+  return v === undefined ? 'n/a' : `${Math.round(v)} ms`;
 }
 
 // Probe latency medians on a local disk are routinely well under 1 ms, and
 // rounding those to "0 ms" reads as "not measured" rather than "fast".
-function fmtLatency(value: number | undefined): string {
-  if (value === undefined) {
+function fmtLatency(value: unknown): string {
+  const v = num(value);
+  if (v === undefined) {
     return 'n/a';
   }
-  if (value < 10) {
-    return `${value.toFixed(2)} ms`;
+  if (v < 10) {
+    return `${v.toFixed(2)} ms`;
   }
-  return `${Math.round(value)} ms`;
+  return `${Math.round(v)} ms`;
 }
 
-function fmtSeconds(value: number | undefined): string {
-  return value === undefined ? 'n/a' : `${(value / 1000).toFixed(1)}s`;
+function fmtSeconds(value: unknown): string {
+  const v = num(value);
+  return v === undefined ? 'n/a' : `${(v / 1000).toFixed(1)}s`;
 }
 
-function fmtClock(tWall: number | undefined): string {
-  if (typeof tWall !== 'number' || !isFinite(tWall)) {
+function fmtClock(tWall: unknown): string {
+  if (num(tWall) === undefined) {
     return 'n/a';
   }
   // The backend sends time.time(), i.e. epoch seconds as a float.
-  return new Date(tWall * 1000).toLocaleTimeString();
+  return new Date((tWall as number) * 1000).toLocaleTimeString();
 }
 
-function fmtBytes(value: number | undefined): string {
+function fmtBytes(input: unknown): string {
+  const value = num(input);
   if (value === undefined) {
     return 'n/a';
   }
@@ -239,6 +251,42 @@ function worseBand(a?: Band, b?: Band): Band | undefined {
     return a;
   }
   return rank[a] >= rank[b] ? a : b;
+}
+
+// Spans arrive as a flat list in completion order, with parent_id linking
+// each to the span that contained it. Without the depth this produces, the
+// wrapper spans (dispatch covers the whole turn) sit alongside the phases
+// they contain and their bars swamp everything, which is the opposite of
+// what the reader is trying to see.
+function spanDepths(spans: IPerfSpan[]): Map<IPerfSpan, number> {
+  const byId = new Map<number, IPerfSpan>();
+  for (const span of spans) {
+    if (typeof span.span_id === 'number') {
+      byId.set(span.span_id, span);
+    }
+  }
+  const depths = new Map<IPerfSpan, number>();
+  const depthOf = (span: IPerfSpan, seen: Set<IPerfSpan>): number => {
+    const cached = depths.get(span);
+    if (cached !== undefined) {
+      return cached;
+    }
+    // A cycle cannot happen with ids minted by the recorder, but this
+    // renders whatever the endpoint actually returned, so bound it anyway.
+    if (seen.has(span)) {
+      return 0;
+    }
+    seen.add(span);
+    const parent =
+      typeof span.parent_id === 'number' ? byId.get(span.parent_id) : undefined;
+    const depth = parent ? Math.min(depthOf(parent, seen) + 1, 6) : 0;
+    depths.set(span, depth);
+    return depth;
+  };
+  for (const span of spans) {
+    depthOf(span, new Set());
+  }
+  return depths;
 }
 
 function attrsText(attrs: Record<string, unknown> | undefined): string {
@@ -398,6 +446,7 @@ function PerfTurnDetail(props: { turn: IPerfTurn }): JSX.Element {
   const spans = turn.spans ?? [];
   const events = [...(turn.events ?? [])].sort((a, b) => a.t_ms - b.t_ms);
   const maxDur = spans.reduce((m, s) => Math.max(m, s.dur_ms), 0);
+  const depths = spanDepths(spans);
   const verdict = turnVerdict(turn);
   const droppedSpans = turn.dropped_spans ?? 0;
   const droppedAttrs = turn.dropped_attrs ?? 0;
@@ -414,7 +463,11 @@ function PerfTurnDetail(props: { turn: IPerfTurn }): JSX.Element {
         <div className="nbi-perf-spans">
           {spans.map((span, i) => (
             <div className="nbi-perf-span-row" key={`${span.name}-${i}`}>
-              <div className="nbi-perf-span-name" title={span.name}>
+              <div
+                className="nbi-perf-span-name"
+                title={span.name}
+                style={{ paddingLeft: `${(depths.get(span) ?? 0) * 12}px` }}
+              >
                 {span.name}
               </div>
               <div className="nbi-perf-span-bar-track">
@@ -602,7 +655,13 @@ function checkLabel(check: IPerfProbeCheck): string {
     const parts = check.id.split('.');
     const target = parts[1];
     const kind = parts.slice(2).join('.');
-    return `${FS_TARGET_LABELS[target] ?? target}: ${FS_KIND_LABELS[kind] ?? kind}`;
+    const targetLabel = FS_TARGET_LABELS[target] ?? target;
+    // "fs.claude_home" with no kind is the directory-level entry (skipped
+    // when absent, timed out when the mount is hung), so it has no ": kind"
+    // suffix to add.
+    return kind
+      ? `${targetLabel}: ${FS_KIND_LABELS[kind] ?? kind}`
+      : targetLabel;
   }
   return CHECK_LABELS[check.id] ?? check.id;
 }
@@ -1018,17 +1077,30 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
     }
   };
 
-  const onIncludeNetworkChange = (checked: boolean) => {
-    setIncludeNetwork(checked);
-    setAwaitingConfirm(checked);
-    setProbeError(null);
-  };
-
   // Defaults open (matches the backend's own default and the codebase's
   // fail-open convention for missing capability fields); only an explicit
   // `false` from NBI_PERF_PROBE_NETWORK=off disables the checkbox.
   const networkProbeAllowed =
     (NBIAPI.config.capabilities as any)?.perf_probe_network_allowed !== false;
+
+  const onIncludeNetworkChange = (checked: boolean) => {
+    // A disabled input does not fire change in a browser, but nothing else
+    // enforces the policy on this path, and the guard is what makes the
+    // disabled state a real gate rather than a visual one.
+    if (checked && !networkProbeAllowed) {
+      return;
+    }
+    setIncludeNetwork(checked);
+    setAwaitingConfirm(checked);
+    setProbeError(null);
+  };
+
+  // Named on the capabilities response rather than inside the turns report:
+  // the report is the document users paste into tickets, and it is
+  // documented as carrying no hostname. Capabilities already has to carry
+  // the configured base URL for the settings UI to render it.
+  const probeTarget: string | undefined = (NBIAPI.config.capabilities as any)
+    ?.perf_probe_target;
 
   const onRunProbeClicked = () => {
     if (includeNetwork) {
@@ -1047,8 +1119,8 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
         <div className="nbi-perf-lede">
           Records where each chat turn spends its time, so a slow deployment can
           be told apart from a slow model. Off by default, and when off it costs
-          one boolean check per turn. Prompts, responses, file contents, and
-          hostnames are never recorded.
+          one boolean check per instrumentation site. Prompts, responses, file
+          contents, and hostnames are never recorded.
         </div>
         <div className="nbi-perf-controls">
           <label className="nbi-perf-control" title={lockedTip(perfLocked)}>
@@ -1103,17 +1175,7 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
           <div className="nbi-perf-title">Recent turns</div>
           <div className="nbi-perf-header-actions">
             {report && (
-              <CopyButton
-                label="Copy as JSON"
-                getValue={() => {
-                  // probe_target carries the configured gateway host; docs
-                  // promise hostnames are never recorded in exported
-                  // reports, so it stays out of the copied JSON even though
-                  // it's used verbatim in the confirm dialog above.
-                  const { probe_target: _probeTarget, ...rest } = report;
-                  return rest;
-                }}
-              />
+              <CopyButton label="Copy as JSON" getValue={() => report} />
             )}
             <button
               className="jp-Dialog-button jp-mod-reject jp-mod-styled"
@@ -1209,8 +1271,8 @@ export function SettingsPanelComponentPerf(_props: any): JSX.Element {
           <div className="nbi-perf-confirm">
             <VscWarning />
             <span>
-              {report?.probe_target
-                ? `This opens connections to ${report.probe_target} from this machine: two unauthenticated TLS connections to time the handshake and check the certificate, and one unauthenticated HTTP request.`
+              {probeTarget
+                ? `This opens connections to ${probeTarget} from this machine: two unauthenticated TLS connections to time the handshake and check the certificate, and one unauthenticated HTTP request.`
                 : 'This opens unauthenticated connections to your configured endpoint from this machine.'}
             </span>
             <button

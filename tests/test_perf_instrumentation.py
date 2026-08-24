@@ -91,6 +91,9 @@ def _make_emitter(message_id="m-emit"):
     emitter._perf_stream_span = None
     emitter._perf_chunk_count = 0
     emitter._perf_byte_count = 0
+    # The real constructor resolves the turn once and holds it, so stream()
+    # does not take the global registry lock per chunk.
+    emitter._perf_turn = perf.get_turn(message_id)
     return emitter
 
 
@@ -320,24 +323,24 @@ class TestPerfReportHandler:
             _run(PerfReportHandler.get(handler))
         assert excinfo.value.status_code == 404
 
-    def test_200_returns_ring_report_with_probe_target(self):
-        from notebook_intelligence import extension as ext
+    def test_200_returns_ring_report_without_any_hostname(self):
         from notebook_intelligence.extension import PerfReportHandler
 
         _enable_perf()
         perf.begin_turn("m1", "claude", time.time(), time.monotonic()).close("ok")
 
         handler = self._make_handler()
-        fake_manager = SimpleNamespace(nbi_config=SimpleNamespace())
+        _run(PerfReportHandler.get(handler))
 
-        with patch.object(ext, "ai_service_manager", fake_manager), patch.object(
-            ext.perf_probe, "_resolve_target_base_url", return_value="http://localhost:1234"
-        ):
-            _run(PerfReportHandler.get(handler))
-
-        body = json.loads(handler.finish.call_args[0][0])
-        assert body["probe_target"] == "http://localhost:1234"
+        raw = handler.finish.call_args[0][0]
+        body = json.loads(raw)
         assert "aggregates" in body
+        assert len(body["turns"]) == 1
+        # The report is what users paste into support tickets, and both the
+        # README and the diagnostics guide promise it carries no hostname.
+        # The probe target the confirm dialog needs lives on capabilities.
+        assert "probe_target" not in body
+        assert "gateway" not in raw and "://" not in raw
 
 
 class TestPerfProbeHandler:

@@ -255,6 +255,60 @@ def _mount_info(dir_path: Path) -> dict:
     return {"fstype": None, "options": None, "note": f"unsupported platform {system}"}
 
 
+# Mount options are copied out of /proc/mounts and macOS `mount` verbatim,
+# and on CIFS/SMB those carry the server address and the mount credential
+# ("addr=10.20.30.40", "username=svc", "unc=\\\\server\\share"). The probe
+# document promises no hostnames and no credentials, and _scrub only knows
+# about the home path and the login name, so filter here instead: bare flags
+# are never identifying and are kept as-is, while a "key=value" option is
+# kept only when the key is on this list.
+_SAFE_MOUNT_OPTION_KEYS = {
+    "vers",
+    "minorversion",
+    "proto",
+    "mountproto",
+    "sec",
+    "rsize",
+    "wsize",
+    "bsize",
+    "timeo",
+    "retrans",
+    "actimeo",
+    "acregmin",
+    "acregmax",
+    "acdirmin",
+    "acdirmax",
+    "lookupcache",
+    "local_lock",
+    "namlen",
+    "cachetype",
+}
+
+
+def _safe_mount_options(options: Optional[str]) -> Optional[str]:
+    if not options:
+        return options
+    kept = []
+    dropped = 0
+    for token in options.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            kept.append(token)
+            continue
+        key = token.split("=", 1)[0].strip().lower()
+        if key in _SAFE_MOUNT_OPTION_KEYS:
+            kept.append(token)
+        else:
+            dropped += 1
+    if dropped:
+        # Say that something was withheld rather than silently shortening
+        # the list, so nobody reads the result as the full mount line.
+        kept.append(f"+{dropped} redacted")
+    return ",".join(kept)
+
+
 def _longest_matching_mount(target: str, entries: list) -> Optional[tuple]:
     """entries: list of (mountpoint, fstype, options). Returns the entry whose
     mountpoint is the longest prefix of target (standard mount-resolution
@@ -279,7 +333,7 @@ def _mount_info_linux(target: str) -> dict:
     if not best:
         return {"fstype": None, "options": None}
     _, fstype, options = best
-    return {"fstype": fstype, "options": options}
+    return {"fstype": fstype, "options": _safe_mount_options(options)}
 
 
 def _mount_info_darwin(target: str) -> dict:
@@ -309,7 +363,7 @@ def _mount_info_darwin(target: str) -> dict:
     if not best:
         return {"fstype": None, "options": None}
     _, fstype, options = best
-    return {"fstype": fstype, "options": options}
+    return {"fstype": fstype, "options": _safe_mount_options(options)}
 
 
 def _session_scan(claude_home: Path, bound_s: float) -> dict:
@@ -364,8 +418,23 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
         jupyter_root = Path(os.getcwd())
     targets.append(("jupyter_root", jupyter_root))
 
+    # Bounded, like every other filesystem touch in this module. A stat on a
+    # hung NFS/EFS mount is uninterruptible, and this one used to run inline
+    # on the caller's thread -- which is the Jupyter server's default
+    # executor thread -- so exactly the condition the probe exists to
+    # diagnose would hang run_probe forever and burn a thread the server
+    # also needs. A timeout here is the finding, not an error.
     claude_home = Path.home() / ".claude"
-    if claude_home.is_dir():
+    presence = _run_check(
+        pool,
+        "fs.claude_home",
+        "filesystem",
+        DEFAULT_TIMEOUT_S,
+        lambda d=claude_home: {"present": d.is_dir()},
+    )
+    if presence["status"] != "ok":
+        checks.append(presence)
+    elif presence["detail"].get("present"):
         targets.append(("claude_home", claude_home))
     else:
         checks.append(_skipped_entry("fs.claude_home", "filesystem", "not_present"))
@@ -394,7 +463,10 @@ def _fs_checks(pool: concurrent.futures.ThreadPoolExecutor, nbi_config: Any, che
                 pool,
                 f"fs.{label}.mount",
                 "filesystem",
-                DEFAULT_TIMEOUT_S,
+                # macOS shells out to `mount` with its own DEFAULT_TIMEOUT_S,
+                # so the outer budget needs the same margin the subprocess
+                # group uses.
+                DEFAULT_TIMEOUT_S + _SLOW_CHECK_MARGIN_S,
                 lambda d=dir_path: _mount_info(d),
             )
         )
@@ -461,11 +533,17 @@ def _subprocess_checks(pool: concurrent.futures.ThreadPoolExecutor, checks: list
     # node and the Claude CLI, whose cost is dominated by reading their own
     # (often network-mounted) install trees, so running them against each
     # other measures contention rather than cold-start.
-    checks.append(_run_check(pool, "subprocess.node_version", "subprocess", DEFAULT_TIMEOUT_S, _node_version))
+    # Outer budget sits above the inner subprocess timeout, not equal to it.
+    # Equal budgets mean the outer timer (which starts before the worker even
+    # picks the job up) always fires first, so a genuinely slow command is
+    # reported "timed_out" instead of "ok" with a large wall_ms, and the
+    # slow-but-completing band can never be produced.
+    budget = DEFAULT_TIMEOUT_S + _SLOW_CHECK_MARGIN_S
+    checks.append(_run_check(pool, "subprocess.node_version", "subprocess", budget, _node_version))
     checks.append(
-        _run_check(pool, "subprocess.claude_cli_version", "subprocess", DEFAULT_TIMEOUT_S, _claude_cli_version)
+        _run_check(pool, "subprocess.claude_cli_version", "subprocess", budget, _claude_cli_version)
     )
-    checks.append(_run_check(pool, "subprocess.npm_cache_path", "subprocess", DEFAULT_TIMEOUT_S, _npm_cache_path))
+    checks.append(_run_check(pool, "subprocess.npm_cache_path", "subprocess", budget, _npm_cache_path))
 
 
 # ---------------------------------------------------------------------------
@@ -579,49 +657,71 @@ def _dn_component(dn_tuple, key: str = "commonName") -> Optional[str]:
     return None
 
 
-def _capture_tls_cert(tls_sock: ssl.SSLSocket, host: str, port: int) -> dict:
+def _leaf_cert_names(cert_der: bytes, fallback_dict: Optional[dict]) -> tuple:
+    """(issuer_cn, subject_cn) for a DER certificate.
+
+    ``SSLSocket.getpeercert()`` returns an empty dict when the peer was not
+    validated, and the capture leg below deliberately does not validate, so
+    the parsed-dict route yields nothing exactly when an intercepted
+    connection makes the issuer most interesting. Parse the DER instead;
+    ``cryptography`` is already a hard dependency. The dict is kept as a
+    fallback for the verified case.
+    """
+    if cert_der:
+        try:
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+
+            cert = x509.load_der_x509_certificate(cert_der)
+
+            def _cn(name):
+                attrs = name.get_attributes_for_oid(NameOID.COMMON_NAME)
+                return attrs[0].value if attrs else None
+
+            return _cn(cert.issuer), _cn(cert.subject)
+        except Exception:
+            pass
+    if fallback_dict:
+        return (
+            _dn_component(fallback_dict.get("issuer")),
+            _dn_component(fallback_dict.get("subject")),
+        )
+    return None, None
+
+
+def _capture_tls_cert(tls_sock: ssl.SSLSocket) -> dict:
+    """Read what the endpoint presented on an already-open TLS socket.
+
+    Pure inspection: opens nothing, sends nothing.
+    """
     cert_bin = tls_sock.getpeercert(binary_form=True)
-    cert_dict = tls_sock.getpeercert()
+    issuer_cn, subject_cn = _leaf_cert_names(cert_bin, tls_sock.getpeercert())
+
     fingerprints = []
     if cert_bin:
         fingerprints.append(hashlib.sha256(cert_bin).hexdigest())
-    # Full chain (first 3) requires SSLSocket.get_verified_chain(), added in
-    # Python 3.13; on older runtimes only the leaf certificate is available
-    # via the stdlib, so this best-effort attempt leaves the leaf-only
-    # fingerprint captured above untouched on any failure.
-    get_chain = getattr(tls_sock, "get_verified_chain", None)
-    if get_chain is not None:
+    # Full chain (first 3) needs SSLSocket.get_unverified_chain(), added in
+    # Python 3.13. get_verified_chain() is useless on the capture leg, which
+    # does not verify. On older runtimes only the leaf is reachable through
+    # the stdlib, so this leaves the leaf-only fingerprint above untouched.
+    for attr in ("get_unverified_chain", "get_verified_chain"):
+        get_chain = getattr(tls_sock, attr, None)
+        if get_chain is None:
+            continue
         try:
             chain_fps = [
                 hashlib.sha256(cert.public_bytes(ssl.Encoding.DER)).hexdigest() for cert in get_chain()[:3]
             ]
-            if chain_fps:
-                fingerprints = chain_fps
         except Exception:
-            pass
-
-    # None = could not determine (connection-level failure); True only after
-    # a successful verifying handshake. Anything else must not report True:
-    # a MITM that resets this second connection would otherwise be described
-    # as a verified chain, inverting the interception signal.
-    verified_default: Optional[bool] = None
-    with contextlib.suppress(Exception):
-        default_ctx = ssl.create_default_context()
-        probe_sock = socket.create_connection((host, port), timeout=NETWORK_TIMEOUT_S)
-        try:
-            with default_ctx.wrap_socket(probe_sock, server_hostname=host):
-                verified_default = True
-        except ssl.SSLCertVerificationError:
-            verified_default = False
-        finally:
-            with contextlib.suppress(OSError):
-                probe_sock.close()
+            continue
+        if chain_fps:
+            fingerprints = chain_fps
+            break
 
     return {
-        "issuer_cn": _dn_component(cert_dict.get("issuer")) if cert_dict else None,
-        "subject_cn": _dn_component(cert_dict.get("subject")) if cert_dict else None,
+        "issuer_cn": issuer_cn,
+        "subject_cn": subject_cn,
         "fingerprint_sha256": fingerprints[:3],
-        "verified_against_default_bundle": verified_default,
     }
 
 
@@ -697,6 +797,113 @@ def _proxy_env_flags(host: str) -> dict:
     }
 
 
+def _open_tls(
+    host: str,
+    port: int,
+    proxy_url: Optional[str],
+    ctx: ssl.SSLContext,
+    timings: Optional[dict] = None,
+) -> ssl.SSLSocket:
+    """Open one TLS connection to (host, port), through the proxy when one is
+    configured, and record DNS/TCP/handshake timings into ``timings``.
+
+    Both legs of the network check go through here so they take the same
+    route: a verification leg that bypassed the proxy would be measuring a
+    path the product never uses, and in a proxy-only egress environment it
+    would simply be refused.
+
+    Raises ``_CheckTimeout`` on a timeout and lets TLS errors propagate.
+    """
+    raw_sock: Optional[socket.socket] = None
+    tls_sock: Optional[ssl.SSLSocket] = None
+
+    def _record(key: str, t0: float) -> None:
+        if timings is not None:
+            timings[key] = round((time.perf_counter() - t0) * 1000, 3)
+
+    try:
+        try:
+            if proxy_url:
+                p = urllib.parse.urlsplit(proxy_url)
+                proxy_host, proxy_port = p.hostname, p.port or 80
+
+                t0 = time.perf_counter()
+                socket.getaddrinfo(proxy_host, proxy_port)
+                _record("proxy_dns_ms", t0)
+
+                t0 = time.perf_counter()
+                raw_sock = socket.create_connection((proxy_host, proxy_port), timeout=NETWORK_TIMEOUT_S)
+                _record("proxy_tcp_connect_ms", t0)
+
+                connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+                raw_sock.sendall(connect_req.encode("ascii"))
+                resp = raw_sock.recv(4096)
+                status_line = resp.split(b"\r\n", 1)[0]
+                if b" 200 " not in (b" " + status_line):
+                    raise ConnectionError("proxy CONNECT failed")
+            else:
+                t0 = time.perf_counter()
+                socket.getaddrinfo(host, port)
+                _record("dns_ms", t0)
+
+                t0 = time.perf_counter()
+                raw_sock = socket.create_connection((host, port), timeout=NETWORK_TIMEOUT_S)
+                _record("tcp_connect_ms", t0)
+
+            t0 = time.perf_counter()
+            tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
+            _record("tls_handshake_ms", t0)
+            return tls_sock
+        except (socket.timeout, TimeoutError):
+            raise _CheckTimeout("connect")
+    finally:
+        # wrap_socket detaches raw_sock on success and on most failures, so
+        # closing it here would be a double close; only close it when no
+        # SSLSocket was ever produced.
+        if raw_sock is not None and tls_sock is None:
+            with contextlib.suppress(OSError):
+                raw_sock.close()
+
+
+def _capture_context() -> ssl.SSLContext:
+    """A deliberately non-verifying context for the certificate-capture leg.
+
+    Verifying here would defeat the purpose: against an interception
+    certificate the handshake fails, and the certificate we most need to
+    show the operator is exactly the one we would then never see. Nothing is
+    sent over this socket; it is opened, read, and closed. The verification
+    verdict comes from a separate leg that does verify, and the HTTP leg
+    below uses urllib's normal verifying path.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _verifies_against_default_bundle(
+    host: str, port: int, proxy_url: Optional[str]
+) -> Optional[bool]:
+    """True/False from a real verifying handshake, None if undeterminable.
+
+    None means the connection failed for a reason other than verification
+    (reset, refused, timeout), which must not be reported as either verdict:
+    calling that "verified" would invert the interception signal.
+    """
+    tls_sock = None
+    try:
+        tls_sock = _open_tls(host, port, proxy_url, ssl.create_default_context())
+        return True
+    except ssl.SSLCertVerificationError:
+        return False
+    except Exception:
+        return None
+    finally:
+        if tls_sock is not None:
+            with contextlib.suppress(OSError):
+                tls_sock.close()
+
+
 def _network_probe(base_url: str) -> dict:
     parsed = urllib.parse.urlsplit(base_url)
     host = parsed.hostname
@@ -709,107 +916,61 @@ def _network_probe(base_url: str) -> dict:
     proxy_url = None
     if not urllib.request.proxy_bypass(host):
         proxy_url = proxies.get(scheme) or proxies.get("https") or proxies.get("http")
+    path = "via_proxy" if proxy_url else "direct"
 
     timings: dict = {}
-    raw_sock: Optional[socket.socket] = None
-    tls_sock: Optional[ssl.SSLSocket] = None
-    tls_error: Optional[str] = None
+    base_doc = {
+        "target": {"scheme": scheme, "host": host, "port": port},
+        "path": path,
+        "timings_ms": timings,
+    }
+
+    # Leg 1: time the connection and read what the endpoint presents.
     try:
-        try:
-            if proxy_url:
-                path = "via_proxy"
-                p = urllib.parse.urlsplit(proxy_url)
-                proxy_host, proxy_port = p.hostname, p.port or 80
-
-                t0 = time.perf_counter()
-                socket.getaddrinfo(proxy_host, proxy_port)
-                timings["proxy_dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-                t0 = time.perf_counter()
-                raw_sock = socket.create_connection((proxy_host, proxy_port), timeout=NETWORK_TIMEOUT_S)
-                timings["proxy_tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-                connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
-                raw_sock.sendall(connect_req.encode("ascii"))
-                resp = raw_sock.recv(4096)
-                status_line = resp.split(b"\r\n", 1)[0]
-                if b" 200 " not in (b" " + status_line):
-                    raise ConnectionError("proxy CONNECT failed")
-
-                t0 = time.perf_counter()
-                ctx = ssl.create_default_context()
-                try:
-                    tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
-                except (socket.timeout, TimeoutError):
-                    raise
-                except Exception as e:
-                    tls_error = type(e).__name__
-                else:
-                    timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-            else:
-                path = "direct"
-                t0 = time.perf_counter()
-                socket.getaddrinfo(host, port)
-                timings["dns_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-                t0 = time.perf_counter()
-                raw_sock = socket.create_connection((host, port), timeout=NETWORK_TIMEOUT_S)
-                timings["tcp_connect_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-                t0 = time.perf_counter()
-                ctx = ssl.create_default_context()
-                try:
-                    tls_sock = ctx.wrap_socket(raw_sock, server_hostname=host)
-                except (socket.timeout, TimeoutError):
-                    raise
-                except Exception as e:
-                    tls_error = type(e).__name__
-                else:
-                    timings["tls_handshake_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-        except (socket.timeout, TimeoutError):
-            raise _CheckTimeout("connect")
-    finally:
-        # tls_sock (once it exists) owns the underlying fd; only close
-        # raw_sock directly when the handshake never got that far, or failed
-        # before/at wrap_socket. Without this, a non-timeout handshake
-        # failure (an intercepting proxy presenting an untrusted cert, a
-        # reset mid-handshake, ...) leaked the raw socket on every failure.
-        if raw_sock is not None and tls_sock is None:
-            with contextlib.suppress(OSError):
-                raw_sock.close()
-
-    if tls_error is not None:
-        # A TLS handshake failure below the timeout threshold is real,
-        # reportable data, not something to discard: return what was
-        # already measured (dns/tcp timing) plus the failure itself, instead
-        # of raising and losing it to _run_check's generic error path.
-        # Exception message intentionally dropped (privacy rule): only the
+        tls_sock = _open_tls(host, port, proxy_url, _capture_context(), timings)
+    except _CheckTimeout:
+        raise
+    except Exception as e:
+        # A handshake failure below the timeout threshold is reportable data,
+        # not something to discard: keep the dns/tcp timings already measured
+        # rather than losing them to _run_check's generic error path. The
+        # exception message is dropped on purpose (privacy rule); only the
         # class name is safe to keep.
-        return {
-            "target": {"scheme": scheme, "host": host, "port": port},
-            "path": path,
-            "timings_ms": timings,
-            "tls_error": tls_error,
-        }
+        return {**base_doc, "tls_error": type(e).__name__}
 
     try:
-        cert_info = _capture_tls_cert(tls_sock, host, port)
+        cert_info = _capture_tls_cert(tls_sock)
     finally:
         with contextlib.suppress(OSError):
             tls_sock.close()
 
+    # Leg 2: does that certificate actually verify?
+    cert_info["verified_against_default_bundle"] = _verifies_against_default_bundle(
+        host, port, proxy_url
+    )
+
     target_url = base_url if base_url.endswith("/") else base_url + "/"
-    http_result = _http_probe(target_url, proxy_url)
+    # The HTTP leg verifies (it is a normal urllib request), so against an
+    # interception certificate it fails. Letting that propagate would throw
+    # away the DNS/TCP/TLS timings and the captured certificate chain, which
+    # is the entire finding in exactly the deployment this check exists for.
+    # Report the failure as a field and keep the rest.
+    try:
+        http_result = _http_probe(target_url, proxy_url)
+    except _CheckTimeout:
+        http_result = {"error": "timeout"}
+    except Exception as e:
+        # Class name only: the message can carry the URL and the host.
+        http_result = {"error": type(e).__name__}
     env_flags = _proxy_env_flags(host)
 
     return {
-        "target": {"scheme": scheme, "host": host, "port": port},
-        "path": path,
-        "timings_ms": timings,
+        **base_doc,
         "http": http_result,
         "tls": cert_info,
         "env": env_flags,
     }
+
 
 
 def _network_checks(

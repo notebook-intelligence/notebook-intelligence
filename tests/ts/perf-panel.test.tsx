@@ -58,15 +58,21 @@ const sampleTurn = {
 const sampleReport = {
   schema_version: 1,
   turns: [sampleTurn],
-  aggregates: {},
-  probe_target: 'https://internal-gateway.example.corp:8443'
+  aggregates: {}
 };
+
+// The probe target rides the capabilities response, not the report: the
+// report is what users paste into tickets and is documented as carrying no
+// hostname.
+const PROBE_TARGET = 'https://internal-gateway.example.corp:8443';
 
 describe('SettingsPanelComponentPerf', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockWriteTextToClipboard.mockResolvedValue(true);
-    (NBIAPI as any).config.capabilities = {};
+    (NBIAPI as any).config.capabilities = {
+      perf_probe_target: PROBE_TARGET
+    };
     (NBIAPI as any).config.settingLocks = {};
     (NBIAPI as any).config.featurePolicies = {};
   });
@@ -201,7 +207,7 @@ describe('SettingsPanelComponentPerf', () => {
     expect(enabledCheckbox).toBeDisabled();
   });
 
-  it('excludes probe_target from the copied turns report JSON', async () => {
+  it('copies a turns report that carries no hostname', async () => {
     mockRequestAPI.mockResolvedValueOnce(sampleReport);
     render(<SettingsPanelComponentPerf />);
     await screen.findByText('claude-x');
@@ -215,13 +221,38 @@ describe('SettingsPanelComponentPerf', () => {
     expect(copiedText).not.toContain('probe_target');
     expect(copiedText).not.toContain('internal-gateway');
     const copied = JSON.parse(copiedText);
-    expect(copied.probe_target).toBeUndefined();
     expect(copied.turns).toHaveLength(1);
+  });
+
+  it('names the probe target from capabilities in the confirm prompt', async () => {
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    fireEvent.click(screen.getByLabelText('Include network check'));
+
+    expect(screen.getByText(new RegExp(PROBE_TARGET))).toBeInTheDocument();
+  });
+
+  it('falls back to a generic confirm prompt when capabilities name no target', async () => {
+    (NBIAPI as any).config.capabilities = {};
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    fireEvent.click(screen.getByLabelText('Include network check'));
+
+    expect(
+      screen.getByText(
+        /unauthenticated connections to your configured endpoint/
+      )
+    ).toBeInTheDocument();
   });
 
   it('disables the network check checkbox when perf_probe_network_allowed is false', async () => {
     (NBIAPI as any).config.capabilities = {
-      perf_probe_network_allowed: false
+      perf_probe_network_allowed: false,
+      perf_probe_target: PROBE_TARGET
     };
     mockRequestAPI.mockResolvedValueOnce(sampleReport);
     render(<SettingsPanelComponentPerf />);
@@ -398,6 +429,142 @@ describe('SettingsPanelComponentPerf', () => {
     expect(screen.queryByText(/"schema_version"/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show raw output' }));
     expect(screen.getByText(/"schema_version"/)).toBeInTheDocument();
+  });
+
+  it('renders a null API duration as n/a rather than 0 ms', async () => {
+    // TurnHandle._sdk starts as all-None and only the Claude ResultMessage
+    // branch fills it, so every copilot-mode and ACP-mode turn serializes
+    // duration_api_ms as null. Rendering that as "0 ms" in the column the
+    // docs call the most useful comparison reads as "the model contributed
+    // nothing".
+    const copilotTurn = {
+      ...sampleTurn,
+      turn_id: 't-copilot',
+      mode: 'copilot',
+      sdk: { duration_ms: null, duration_api_ms: null, num_turns: null }
+    };
+    mockRequestAPI.mockResolvedValueOnce({
+      ...sampleReport,
+      turns: [copilotTurn]
+    });
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    const cells = screen.getAllByRole('cell').map(c => c.textContent);
+    expect(cells).toContain('n/a');
+    expect(cells).not.toContain('0 ms');
+  });
+
+  it('indents nested spans using parent_id', async () => {
+    const nestedTurn = {
+      ...sampleTurn,
+      turn_id: 't-nested',
+      spans: [
+        {
+          name: 'dispatch',
+          span_id: 1,
+          parent_id: null,
+          dur_ms: 1000,
+          status: 'ok',
+          attrs: {}
+        },
+        {
+          name: 'connect',
+          span_id: 2,
+          parent_id: 1,
+          dur_ms: 50,
+          status: 'ok',
+          attrs: {}
+        }
+      ]
+    };
+    mockRequestAPI.mockResolvedValueOnce({
+      ...sampleReport,
+      turns: [nestedTurn]
+    });
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+    fireEvent.click(screen.getByRole('button', { name: /Show timeline/ }));
+
+    // Without the depth, a wrapper span sits alongside the phases it
+    // contains and its bar swamps them.
+    expect(screen.getByText('dispatch')).toHaveStyle({ paddingLeft: '0px' });
+    expect(screen.getByText('connect')).toHaveStyle({ paddingLeft: '12px' });
+  });
+
+  it('labels the directory-level claude_home check without a dangling colon', async () => {
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    mockRequestAPI.mockResolvedValueOnce({
+      schema_version: 1,
+      generated_at: '2026-08-23T00:00:00Z',
+      checks: [
+        {
+          id: 'fs.claude_home',
+          group: 'filesystem',
+          status: 'timed_out',
+          detail: { timeout_s: 2.0 }
+        }
+      ]
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run probe' }));
+
+    await screen.findByText('Filesystem');
+    // The probe lede also mentions ~/.claude in a <code>, so scope to the
+    // check label. The point is that it is not "~/.claude: ".
+    const label = document.querySelector('.nbi-perf-check-label');
+    expect(label?.textContent).toBe('~/.claude');
+    // A hung mount is the finding, not an error to bury.
+    expect(screen.getByText(/timed out after 2/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/hung stat on a network filesystem/)
+    ).toBeInTheDocument();
+  });
+
+  it('calls out TLS interception and names the issuer', async () => {
+    mockRequestAPI.mockResolvedValueOnce(sampleReport);
+    render(<SettingsPanelComponentPerf />);
+    await screen.findByText('claude-x');
+
+    mockRequestAPI.mockResolvedValueOnce({
+      schema_version: 1,
+      generated_at: '2026-08-23T00:00:00Z',
+      checks: [
+        {
+          id: 'network.endpoint',
+          group: 'network',
+          status: 'ok',
+          detail: {
+            target: { scheme: 'https', host: 'gw.corp', port: 443 },
+            path: 'via_proxy',
+            timings_ms: {
+              proxy_dns_ms: 3.1,
+              proxy_tcp_connect_ms: 8.4,
+              tls_handshake_ms: 41.2
+            },
+            tls: {
+              issuer_cn: 'Acme Interception CA',
+              subject_cn: 'gw.corp',
+              fingerprint_sha256: ['abc'],
+              verified_against_default_bundle: false
+            },
+            // The HTTP leg verifies, so it fails against an interception
+            // certificate; that must not hide the finding above it.
+            http: { error: 'URLError' }
+          }
+        }
+      ]
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run probe' }));
+
+    await screen.findByText('Network');
+    expect(screen.getByText(/Acme Interception CA/)).toBeInTheDocument();
+    expect(screen.getByText(/via proxy/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not verify against the default trust store/)
+    ).toBeInTheDocument();
   });
 
   it('does not warn about a local filesystem that is performing normally', async () => {

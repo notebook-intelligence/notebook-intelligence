@@ -752,7 +752,16 @@ class ChatParticipant:
                                 return
 
                     turn = perf.get_turn(response.message_id)
-                    span_cm = turn.span(f"tool:{tool_name}", tool=tool_name) if turn is not None else contextlib.nullcontext()
+                    # builtin=True keeps the name readable in redacted mode,
+                    # which is what the docs promise for NBI's own tools.
+                    # This loop dispatches both NBI toolsets and MCP tools;
+                    # MCPTool.call clears the flag for itself, so a
+                    # third-party tool name still gets hashed.
+                    span_cm = (
+                        turn.span(f"tool:{tool_name}", tool=tool_name, builtin=True)
+                        if turn is not None
+                        else contextlib.nullcontext()
+                    )
                     with span_cm:
                         tool_call_response = await tool_to_call.handle_tool_call(request, response, tool_context, args)
 
