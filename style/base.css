@@ -2132,6 +2132,152 @@ svg.access-token-warning {
   font-size: var(--jp-ui-font-size1);
 }
 
+.nbi-perf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px;
+}
+
+.nbi-perf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nbi-perf-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nbi-perf-title {
+  font-size: var(--jp-ui-font-size2);
+  font-weight: 600;
+}
+
+.nbi-perf-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.nbi-perf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.nbi-perf-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--jp-ui-font-size1);
+  color: var(--jp-ui-font-color1);
+}
+
+.nbi-perf-empty {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-perf-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  border-left: 3px solid var(--jp-error-color1, #d32f2f);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-perf-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 4px;
+}
+
+.nbi-perf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--jp-ui-font-size1);
+  color: var(--jp-ui-font-color1);
+}
+
+.nbi-perf-table thead th,
+.nbi-perf-table td {
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--jp-border-color1);
+}
+
+.nbi-perf-table thead th {
+  background-color: var(--jp-layout-color2);
+  font-weight: 600;
+}
+
+.nbi-perf-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.nbi-perf-status-error {
+  color: var(--jp-error-color1, #d32f2f);
+}
+
+.nbi-perf-status-cancelled {
+  color: var(--jp-warn-color1, #f57c00);
+}
+
+.nbi-perf-probe-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nbi-perf-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  border-left: 3px solid var(--jp-warn-color1, #f57c00);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-perf-probe-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nbi-perf-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-ui-font-size1);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.nbi-perf-copy-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .nbi-skills-sync-message,
 .nbi-skills-info-banner,
 .nbi-info-banner {

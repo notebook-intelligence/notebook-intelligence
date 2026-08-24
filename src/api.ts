@@ -301,7 +301,9 @@ export type SettingLockName =
   | 'claude_base_url'
   | 'acp_chat_model'
   | 'acp_api_key'
-  | 'acp_base_url';
+  | 'acp_base_url'
+  | 'perf_diagnostics_enabled'
+  | 'perf_log_dir';
 
 export type ISettingLocks = Record<SettingLockName, { locked: boolean }>;
 
@@ -589,7 +591,9 @@ export class NBIConfig {
       'claude_base_url',
       'acp_chat_model',
       'acp_api_key',
-      'acp_base_url'
+      'acp_base_url',
+      'perf_diagnostics_enabled',
+      'perf_log_dir'
     ];
     const result = {} as ISettingLocks;
     for (const name of names) {

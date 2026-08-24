@@ -21,6 +21,7 @@ import { mcpServerSettingsToEnabledState } from './mcp-util';
 import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
+import { SettingsPanelComponentPerf } from './perf-panel';
 import { writeTextToClipboard } from '../utils';
 
 const lockedTip = (locked: boolean): string =>
@@ -219,6 +220,12 @@ const TABS: TabSpec[] = [
     label: 'Skills',
     visible: ctx => ctx.featurePolicies.skills_management.enabled,
     render: () => <SettingsPanelComponentSkills />
+  },
+  {
+    id: 'perf',
+    label: 'Performance',
+    visible: () => true,
+    render: () => <SettingsPanelComponentPerf />
   }
 ];
 
