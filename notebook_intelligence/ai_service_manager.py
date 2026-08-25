@@ -552,6 +552,16 @@ class AIServiceManager(Host):
             prompt_parts = AIServiceManager.parse_prompt(request.prompt)
 
         participant = self._resolve_chat_participant(prompt_parts.participant)
+        if participant is None and is_claude_code_mode:
+            response.participant_id = CLAUDE_CODE_CHAT_PARTICIPANT_ID
+            log.warning(
+                "Claude Code mode is enabled but its chat participant is not available"
+            )
+            response.stream(MarkdownData(
+                "Claude Code mode is still starting. Please try again in a moment."
+            ))
+            response.finish()
+            return
         if participant is None:
             participant = self._resolve_chat_participant(
                 DEFAULT_CHAT_PARTICIPANT_ID

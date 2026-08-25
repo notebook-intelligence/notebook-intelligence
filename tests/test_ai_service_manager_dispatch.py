@@ -91,7 +91,7 @@ def test_claude_mode_resolves_active_default_outside_participant_map():
     assert response.finish_count == 0
 
 
-def test_claude_mode_fallback_does_not_duplicate_first_prompt_token():
+def test_claude_mode_does_not_fall_back_while_participant_is_starting():
     manager, default_participant = _make_manager()
     manager._nbi_config.claude_settings = {"enabled": True}
     request = ChatRequest(prompt="hello world", chat_history=[])
@@ -99,8 +99,13 @@ def test_claude_mode_fallback_does_not_duplicate_first_prompt_token():
 
     asyncio.run(manager.handle_chat_request(request, response))
 
-    default_participant.handle_chat_request.assert_awaited_once()
+    default_participant.handle_chat_request.assert_not_awaited()
     assert request.prompt == "hello world"
+    assert response.participant_id == CLAUDE_CODE_CHAT_PARTICIPANT_ID
+    assert response.finish_count == 1
+    assert [item.content for item in response.streamed] == [
+        "Claude Code mode is still starting. Please try again in a moment."
+    ]
 
 
 def test_completion_context_is_empty_when_no_participant_is_available():
