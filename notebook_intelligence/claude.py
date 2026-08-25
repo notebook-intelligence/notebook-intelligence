@@ -2220,9 +2220,14 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
             messages = request.chat_history.copy()
             completion_options = options.copy()
             base_system_prompt = completion_options.get("system_prompt", "")
+            system_prompt_token_budget = completion_options.pop(
+                "system_prompt_token_budget",
+                None,
+            )
             system_prompt = self._inject_rules_into_system_prompt(
                 base_system_prompt,
                 request,
+                max_tokens=system_prompt_token_budget,
             )
             if system_prompt:
                 completion_options["system_prompt"] = system_prompt

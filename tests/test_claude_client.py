@@ -959,6 +959,42 @@ class TestHandleChatRequestErrorHandling:
             "other": "value",
         }
 
+    def test_inline_chat_applies_system_prompt_token_budget(self, monkeypatch):
+        participant = _make_participant()
+        participant._rule_injector.inject_rules.return_value = "bounded prompt"
+        request = _make_chat_request("inline-chat")
+        request.host.nbi_config.claude_settings = {
+            "chat_model": "claude-sonnet-test",
+        }
+        request.chat_history = [{"role": "user", "content": "change this"}]
+        request.cancel_token = MagicMock()
+        response = Mock(spec=ChatResponse)
+        chat_model = MagicMock()
+        monkeypatch.setattr(
+            claude_module,
+            "ClaudeChatModel",
+            MagicMock(return_value=chat_model),
+        )
+
+        asyncio.run(
+            participant.handle_inline_chat_request(
+                request,
+                response,
+                {
+                    "system_prompt": "inline edit prompt",
+                    "system_prompt_token_budget": 500,
+                },
+            )
+        )
+
+        participant._rule_injector.inject_rules.assert_called_once_with(
+            "inline edit prompt",
+            request,
+            max_tokens=500,
+        )
+        completion_options = chat_model.completions.call_args.kwargs["options"]
+        assert completion_options == {"system_prompt": "bounded prompt"}
+
 
 class _FakeMessageStream:
     """Stand-in for the Anthropic SDK's MessageStreamManager.

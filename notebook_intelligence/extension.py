@@ -110,6 +110,25 @@ def _truncate_context_content(content: str, token_budget: int) -> str:
     return truncated + "\n...[truncated]"
 
 
+def _inline_system_prompt_token_budget(
+    manager,
+    chat_history: list[dict],
+    base_system_prompt: str,
+) -> int:
+    """Reserve at most 80% of context for inline history plus system text."""
+    context_budget = int(0.8 * _resolve_context_token_limit(manager))
+    history_tokens = sum(
+        _token_count(message.get("content", ""))
+        for message in chat_history
+        if isinstance(message, dict)
+        and isinstance(message.get("content", ""), str)
+    )
+    # The base code-generation instruction is essential even when the supplied
+    # code context already exceeds the target budget. In that case rules are
+    # omitted rather than trimming the behavioral contract itself.
+    return max(_token_count(base_system_prompt), context_budget - history_tokens)
+
+
 def _build_additional_context_message(
     file_path: str,
     context_filename: str,
@@ -3096,7 +3115,17 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                 language,
                 modifying_existing_code=existing_code != '',
             )
-            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, rule_context=rule_context), response_emitter, options={"system_prompt": system_prompt})
+            request_history = self.chat_history.get_history(chatId)
+            completion_options = {"system_prompt": system_prompt}
+            if is_claude_code_mode:
+                completion_options["system_prompt_token_budget"] = (
+                    _inline_system_prompt_token_budget(
+                        ai_service_manager,
+                        request_history,
+                        system_prompt,
+                    )
+                )
+            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter, options=completion_options)
             thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:

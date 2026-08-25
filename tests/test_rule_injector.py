@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
 from notebook_intelligence.api import ChatRequest
-from notebook_intelligence.rule_injector import RuleInjector
+from notebook_intelligence.rule_injector import RuleInjector, _TOKEN_ENCODING
 from notebook_intelligence.ruleset import Rule, RuleContext
 
 
@@ -102,8 +102,42 @@ class TestRuleInjector:
         base_prompt = ""
         result = injector.inject_rules(base_prompt, request)
         
-        expected = "\n\n# Additional Guidelines\n# Test Rules\n- Be helpful"
+        expected = "# Additional Guidelines\n# Test Rules\n- Be helpful"
         assert result == expected
+
+    def test_disabled_rules_also_suppress_agents_md(self, tmp_path):
+        injector = RuleInjector()
+        request = Mock(spec=ChatRequest)
+        request.rule_context = None
+        request.host.nbi_config.rules_enabled = False
+        (tmp_path / "AGENTS.md").write_text(
+            "# Repo Rules\n- Keep notebooks tidy\n",
+            encoding="utf-8",
+        )
+
+        with patch(
+            "notebook_intelligence.rule_injector.get_jupyter_root_dir",
+            return_value=str(tmp_path),
+        ):
+            result = injector.inject_rules("BASE", request)
+
+        assert result == "BASE"
+
+    def test_token_budget_truncates_additional_guidelines(self):
+        injector = RuleInjector()
+        request = Mock(spec=ChatRequest)
+        request.rule_context = Mock(spec=RuleContext)
+        request.host.nbi_config.rules_enabled = True
+        rule_manager = Mock()
+        rule_manager.get_applicable_rules.return_value = [Mock(spec=Rule)]
+        rule_manager.format_rules_for_llm.return_value = "rule " * 1_000
+        request.host.get_rule_manager.return_value = rule_manager
+
+        result = injector.inject_rules("BASE", request, max_tokens=30)
+
+        assert result.startswith("BASE\n\n# Additional Guidelines")
+        assert result.endswith("...[additional guidelines truncated]")
+        assert len(_TOKEN_ENCODING.encode(result)) <= 30
 
     def test_inject_rules_with_agents_md_only(self, tmp_path):
         injector = RuleInjector()
