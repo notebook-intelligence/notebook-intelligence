@@ -638,8 +638,8 @@ class MCPServerImpl(MCPServer):
             worker = self._client_thread
             if generation != self._connection_generation or worker is None:
                 if (
-                    expected_generation is None
-                    or self.status == MCPServerStatus.FailedToConnect
+                    expected_generation is not None
+                    and self.status == MCPServerStatus.FailedToConnect
                 ):
                     self._mcp_tools = []
                 return False
@@ -703,8 +703,8 @@ class MCPServerImpl(MCPServer):
             worker = self._client_thread
             if generation != self._connection_generation or worker is None:
                 if (
-                    expected_generation is None
-                    or self.status == MCPServerStatus.FailedToConnect
+                    expected_generation is not None
+                    and self.status == MCPServerStatus.FailedToConnect
                 ):
                     self._mcp_prompts = []
                 return False

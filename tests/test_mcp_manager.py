@@ -671,6 +671,19 @@ class TestMCPManagerCapabilityRefresh:
         assert server._mcp_prompts is previous_prompts
         assert server.status == MCPServerStatus.FailedToUpdatePromptList
 
+    def test_disconnected_direct_refresh_preserves_cached_capabilities(self):
+        server = _make_mcp_server()
+        previous_tools = [Mock()]
+        previous_prompts = [Mock()]
+        server._mcp_tools = previous_tools
+        server._mcp_prompts = previous_prompts
+
+        assert server.update_tool_list() is False
+        assert server.update_prompts_list() is False
+
+        assert server._mcp_tools is previous_tools
+        assert server._mcp_prompts is previous_prompts
+
     def test_invalid_list_payloads_preserve_last_known_collections(self):
         server = _make_mcp_server()
         server._client_thread = Mock()
