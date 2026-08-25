@@ -37,20 +37,25 @@ import urllib.parse
 import urllib.request
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
+from notebook_intelligence.checks import (
+    DEFAULT_TIMEOUT_S,
+    SLOW_CHECK_MARGIN_S,
+    CheckTimeout,
+    Skipped,
+    collect_check,
+    run_check,
+    skipped_entry,
+    submit_check,
+)
 from notebook_intelligence.util import resolve_claude_cli_path
 
-DEFAULT_TIMEOUT_S = 2.0
 NETWORK_TIMEOUT_S = 5.0
 _POOL_SIZE = 4
 _MAX_LATENCY_ITERATIONS = 20
 _SUSTAINED_IO_SIZE_BYTES = 4 * 1024 * 1024
-# Margin between a check body's own internal early-stop bound and the outer
-# future timeout that awaits it. Without this slack, a check that legitimately
-# runs right up to its internal bound gets its future abandoned at the same
-# instant, discarding whatever samples it had already collected.
-_SLOW_CHECK_MARGIN_S = 1.0
+_SLOW_CHECK_MARGIN_S = SLOW_CHECK_MARGIN_S
 
 try:
     from notebook_intelligence._version import __version__ as _NBI_VERSION
@@ -58,86 +63,15 @@ except Exception:
     _NBI_VERSION = "0"
 
 
-class _Skipped(Exception):
-    """Raised by a check body to report status="skipped" (not an error)."""
-
-
-class _CheckTimeout(Exception):
-    """Raised by a check body that owns a self-cleaning timeout (e.g.
-    subprocess, sockets) so it reports status="timed_out" like an abandoned
-    future, instead of status="error"."""
-
-
-# ---------------------------------------------------------------------------
-# Pool submission
-# ---------------------------------------------------------------------------
-#
-# There is no module-global pool: run_probe builds a fresh ThreadPoolExecutor
-# for every call (see below) so one run's abandoned/hung checks can never
-# occupy the workers a later run needs. _submit_check and _collect_check are
-# split so a caller can submit every independent check up front and only
-# then start waiting on results, instead of paying each check's timeout one
-# at a time.
-
-
-def _submit_check(
-    pool: concurrent.futures.ThreadPoolExecutor,
-    check_id: str,
-    group: str,
-    timeout_s: float,
-    fn: Callable[[], dict],
-) -> tuple:
-    """Submit fn() to the pool without waiting for it. Pairs with
-    _collect_check."""
-    return (check_id, group, timeout_s, pool.submit(fn))
-
-
-def _collect_check(check_id: str, group: str, timeout_s: float, future: concurrent.futures.Future) -> dict:
-    """Block on an already-submitted future with timeout_s. On timeout the
-    future is abandoned (never awaited again, never cancelled) rather than
-    joined -- cancelling a future whose thread is already running is a no-op
-    in concurrent.futures anyway, so "abandon" is the honest description."""
-    try:
-        detail = future.result(timeout=timeout_s)
-        return {"id": check_id, "group": group, "status": "ok", "detail": detail}
-    except (concurrent.futures.TimeoutError, _CheckTimeout):
-        return {
-            "id": check_id,
-            "group": group,
-            "status": "timed_out",
-            "detail": {"timeout_s": timeout_s},
-        }
-    except _Skipped as e:
-        return {"id": check_id, "group": group, "status": "skipped", "detail": {"reason": str(e)}}
-    except Exception as e:
-        # Exception message intentionally dropped: it can contain paths,
-        # hostnames, or other detail the scrub pass wouldn't know to redact.
-        return {
-            "id": check_id,
-            "group": group,
-            "status": "error",
-            "detail": {"exception_class": type(e).__name__},
-        }
-
-
-def _run_check(
-    pool: concurrent.futures.ThreadPoolExecutor,
-    check_id: str,
-    group: str,
-    timeout_s: float,
-    fn: Callable[[], dict],
-) -> dict:
-    """Submit fn() to the pool and immediately block on its result with
-    timeout_s. Kept for callers (including tests) that want the older
-    synchronous submit-then-wait behavior against their own pool; run_probe
-    itself uses _submit_check/_collect_check directly so independent checks
-    run concurrently instead of each one blocking the next submission."""
-    check_id, group, timeout_s, future = _submit_check(pool, check_id, group, timeout_s, fn)
-    return _collect_check(check_id, group, timeout_s, future)
-
-
-def _skipped_entry(check_id: str, group: str, reason: str) -> dict:
-    return {"id": check_id, "group": group, "status": "skipped", "detail": {"reason": reason}}
+# The bounded-check harness lives in checks.py so the readiness preflight can
+# use the same one. These private aliases keep this module's call sites (and
+# its tests) reading as they did before the extraction.
+_Skipped = Skipped
+_CheckTimeout = CheckTimeout
+_submit_check = submit_check
+_collect_check = collect_check
+_run_check = run_check
+_skipped_entry = skipped_entry
 
 
 # ---------------------------------------------------------------------------

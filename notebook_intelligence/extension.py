@@ -32,6 +32,7 @@ from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatR
 from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence import perf
 from notebook_intelligence import perf_probe
+from notebook_intelligence import readiness
 from notebook_intelligence.cell_output import coerce_payload as _coerce_output_context, format_output_context as _format_output_context
 from notebook_intelligence.feature_flags import (
     CHAT_MODEL_OVERRIDES,
@@ -2731,6 +2732,75 @@ class PerfProbeHandler(APIHandler):
         self.finish(json.dumps(result))
 
 
+class ReadinessHandler(APIHandler):
+    """Answers "is this deployment configured to work, and if not, what is
+    missing?".
+
+    Deliberately NOT gated behind the perf-diagnostics setting the way the
+    two /perf routes are. A user who cannot tell "the admin has not set this
+    up" from "I did something wrong" needs this answer whether or not
+    diagnostics are enabled, and an admin verifying a rollout needs it before
+    anyone has opened the settings dialog. It reports configuration state the
+    authenticated user can already read from the capabilities response and
+    NBI Settings, so it exposes nothing new.
+
+    GET runs the checks that bill nothing. POST with {"live": true} adds one
+    real completion, which is the only way to prove the endpoint actually
+    streams and actually accepts a tool schema; it costs a few tokens, so it
+    is opt-in per run.
+    """
+
+    @tornado.web.authenticated
+    async def get(self):
+        await self._run(include_live=False)
+
+    # Admin gate for the one check that spends money, mirroring the perf
+    # probe's network leg. Set from NBI_READINESS_LIVE_CHECK at startup.
+    live_check_allowed = True
+
+    # One live test at a time per server. The live path holds a default
+    # executor thread for up to LIVE_TIMEOUT_S and bills on every call, so
+    # without this a loop of POSTs both spends money and starves the
+    # executor the rest of the server shares.
+    _live_lock = threading.Lock()
+
+    @tornado.web.authenticated
+    async def post(self):
+        try:
+            data = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError as exc:
+            self.set_status(400)
+            self.finish(json.dumps({"error": f"Invalid JSON: {exc}"}))
+            return
+
+        include_live = bool(data.get("live", False)) and self.live_check_allowed
+        if not include_live:
+            await self._run(include_live=False)
+            return
+
+        if not ReadinessHandler._live_lock.acquire(blocking=False):
+            self.set_status(429)
+            self.finish(
+                json.dumps({"error": "A live endpoint test is already running."})
+            )
+            return
+        try:
+            await self._run(include_live=True)
+        finally:
+            ReadinessHandler._live_lock.release()
+
+    async def _run(self, include_live: bool) -> None:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            readiness.run_readiness,
+            ai_service_manager.nbi_config,
+            ai_service_manager,
+            include_live,
+        )
+        self.finish(json.dumps(result))
+
+
 @dataclass
 class MessageCallbackHandlers:
     response_emitter: WebsocketCopilotResponseEmitter
@@ -3556,6 +3626,18 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    readiness_live_check_allowed = Bool(
+        default_value=True,
+        help="""
+        Whether the readiness preflight's opt-in live endpoint test may run.
+        The live test sends one short completion to the configured model, so
+        it costs tokens; set NBI_READINESS_LIVE_CHECK=off (or this traitlet
+        to False) on a shared deployment where per-seat spend is metered.
+        The rest of the readiness checks bill nothing and stay available.
+        """,
+        config=True,
+    )
+
     claude_continue_conversation_policy = TraitletEnum(
         list(VALID_POLICIES),
         default_value=POLICY_USER_CHOICE,
@@ -3918,6 +4000,7 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
         route_pattern_perf_report = url_path_join(base_url, "notebook-intelligence", "perf", "report")
         route_pattern_perf_probe = url_path_join(base_url, "notebook-intelligence", "perf", "probe")
+        route_pattern_readiness = url_path_join(base_url, "notebook-intelligence", "readiness")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
         route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
@@ -4045,6 +4128,9 @@ class NotebookIntelligence(ExtensionApp):
             "NBI_PERF_PROBE_NETWORK", self.perf_probe_network_allowed
         )
         PerfProbeHandler.perf_probe_network_allowed = GetCapabilitiesHandler.perf_probe_network_allowed
+        ReadinessHandler.live_check_allowed = _resolve_bool_with_env(
+            "NBI_READINESS_LIVE_CHECK", self.readiness_live_check_allowed
+        )
         # Resolved on-wire cap for skill tarball fetches. The constant
         # lives in skill_github_import.py because the fetch helper reads
         # it directly; reassigning the module attribute here lets admins
@@ -4073,6 +4159,7 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_ui_tools, UIToolsHandler),
             (route_pattern_perf_report, PerfReportHandler),
             (route_pattern_perf_probe, PerfProbeHandler),
+            (route_pattern_readiness, ReadinessHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
