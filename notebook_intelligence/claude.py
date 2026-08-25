@@ -634,9 +634,13 @@ def _truncate_tool_result(
     max_output_tokens: Optional[int] = None,
 ) -> str:
     """Bound a tool result using UTF-8-safe head/tail truncation."""
-    text = _normalize_utf8(text)
     if max_output_tokens is None:
         max_output_tokens = CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS
+    if isinstance(max_output_tokens, bool) or not isinstance(
+        max_output_tokens, int
+    ):
+        raise TypeError("max_output_tokens must be an integer")
+    text = _normalize_utf8(text)
     if max_output_tokens == 0:
         return text
     if max_output_tokens < 0:
@@ -652,10 +656,15 @@ def _truncate_tool_result(
     )
     marker_bytes = marker.encode("utf-8")
     if byte_budget <= len(marker_bytes):
-        minimal_marker = CLAUDE_TOOL_RESULT_MINIMAL_MARKER
-        if len(minimal_marker.encode("utf-8")) <= byte_budget:
-            return minimal_marker
-        return ""
+        minimal_markers = (
+            f"[{total_bytes}B cut]",
+            CLAUDE_TOOL_RESULT_MINIMAL_MARKER,
+            "…",
+        )
+        for minimal_marker in minimal_markers:
+            if len(minimal_marker.encode("utf-8")) <= byte_budget:
+                return minimal_marker
+        return "." * byte_budget
 
     content_budget = byte_budget - len(marker_bytes)
     head_budget = (content_budget * 3) // 4
@@ -677,6 +686,8 @@ def _utf8_size(text: str) -> int:
 
 def _normalize_utf8(text: str) -> str:
     """Replace invalid Unicode surrogate code points with U+FFFD."""
+    if text.isascii():
+        return text
     return re.sub(r"[\ud800-\udfff]", "\N{REPLACEMENT CHARACTER}", text)
 
 
@@ -1846,19 +1857,60 @@ async def get_cell_type_and_source(args) -> str:
     return tool_text_response(ui_cmd_response)
 
 
-@tool("get-cell-output", "Gets the output of the cell at zero-based index.", {"cell_index": int})
+@tool(
+    "get-cell-output",
+    (
+        "Gets the output of the cell at zero-based index. Use offset and limit "
+        "to retrieve a specific character range from a large output."
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "cell_index": {"type": "integer"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1},
+        },
+        "required": ["cell_index"],
+    },
+)
 async def get_cell_output(args) -> str:
     """Get cell output for the cell at index for the active notebook.
 
     Args:
         cell_index: Zero based cell index
+        offset: Optional zero-based character offset into the output
+        limit: Optional maximum number of characters to return
     """
+    offset = args.get("offset", 0)
+    limit = args.get("limit")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return tool_text_response(
+            "offset must be a non-negative integer",
+            is_error=True,
+        )
+    if (
+        limit is not None
+        and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1)
+    ):
+        return tool_text_response(
+            "limit must be a positive integer",
+            is_error=True,
+        )
     response = get_current_response()
     ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-cell-output', {"cellIndex": args['cell_index']})
 
     # The frontend command returns `cellOutputAsText`, not a MIME-bundle dict.
     # Stringify an unexpected structured value before applying the text cap.
-    return bounded_text_tool_response(ui_cmd_response)
+    output = str(ui_cmd_response)
+    start = min(offset, len(output))
+    end = len(output) if limit is None else min(len(output), start + limit)
+    page = output[start:end]
+    if start > 0 or end < len(output):
+        range_note = f"cell output characters {start}-{end} of {len(output)}"
+        if end < len(output):
+            range_note += f"; request offset={end} to continue"
+        page += f"\n\n[{range_note}.]"
+    return bounded_text_tool_response(page)
 
 @tool("set-cell-type-and-source", "Sets the type and source of the cell at zero-based index.", {"cell_index": int, "cell_type": str, "source": str})
 async def set_cell_type_and_source(args) -> str:

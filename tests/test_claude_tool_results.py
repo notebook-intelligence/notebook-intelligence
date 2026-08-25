@@ -8,7 +8,6 @@ import pytest
 import notebook_intelligence.claude as claude
 from notebook_intelligence.claude import (
     APPROX_BYTES_PER_TOOL_RESULT_TOKEN,
-    CLAUDE_TOOL_RESULT_MINIMAL_MARKER,
     CLAUDE_TOOL_RESULT_TRUNCATION_MARKER,
     MIN_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS,
     tool_text_response,
@@ -100,7 +99,19 @@ def test_tiny_budget_returns_complete_minimal_marker():
         max_output_tokens=3,
     )
 
-    assert _response_text(result) == CLAUDE_TOOL_RESULT_MINIMAL_MARKER
+    assert _response_text(result) == "[100B cut]"
+
+
+def test_one_token_budget_still_signals_truncation():
+    result = tool_text_response("x" * 100, max_output_tokens=1)
+
+    assert _response_text(result) == "…"
+
+
+@pytest.mark.parametrize("budget", ["256", 1.5, True, False])
+def test_non_integer_programmatic_budget_is_rejected(budget):
+    with pytest.raises(TypeError, match="must be an integer"):
+        tool_text_response("x" * 100, max_output_tokens=budget)
 
 
 def test_negative_programmatic_budget_normalizes_to_positive_minimum():
@@ -161,6 +172,16 @@ def test_utf8_size_matches_encoded_length():
     text = "ascii e\N{LATIN SMALL LETTER E WITH ACUTE} \N{SLIGHTLY SMILING FACE}"
 
     assert claude._utf8_size(text) == len(text.encode("utf-8"))
+
+
+def test_ascii_normalization_skips_regex_scan(monkeypatch):
+    monkeypatch.setattr(
+        claude.re,
+        "sub",
+        lambda *_args, **_kwargs: pytest.fail("regex scan should be skipped"),
+    )
+
+    assert claude._normalize_utf8("plain ascii") == "plain ascii"
 
 
 def test_lone_surrogates_are_replaced_before_truncation():
@@ -272,7 +293,55 @@ def test_get_cell_output_preserves_none_as_bounded_text(monkeypatch):
     result = asyncio.run(claude.get_cell_output.handler({"cell_index": 3}))
 
     assert _response_text(result) == "None"
-    assert "is_error" not in result
+
+
+def test_get_cell_output_supports_resumable_character_ranges(monkeypatch):
+    response = SimpleNamespace(run_ui_command=AsyncMock(return_value="abcdefghij"))
+    monkeypatch.setattr(claude, "get_current_response", lambda: response)
+
+    result = asyncio.run(
+        claude.get_cell_output.handler(
+            {"cell_index": 3, "offset": 3, "limit": 4}
+        )
+    )
+
+    assert _response_text(result) == (
+        "defg\n\n[cell output characters 3-7 of 10; "
+        "request offset=7 to continue.]"
+    )
+
+
+def test_get_cell_output_schema_exposes_optional_range_arguments():
+    schema = claude._tool_json_schema(claude.get_cell_output.input_schema)
+
+    assert schema["required"] == ["cell_index"]
+    assert schema["properties"]["offset"] == {
+        "type": "integer",
+        "minimum": 0,
+    }
+    assert schema["properties"]["limit"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"cell_index": 3, "offset": -1},
+        {"cell_index": 3, "offset": True},
+        {"cell_index": 3, "limit": 0},
+        {"cell_index": 3, "limit": 1.5},
+    ],
+)
+def test_get_cell_output_rejects_invalid_page_arguments(monkeypatch, args):
+    response = SimpleNamespace(run_ui_command=AsyncMock())
+    monkeypatch.setattr(claude, "get_current_response", lambda: response)
+
+    result = asyncio.run(claude.get_cell_output.handler(args))
+
+    assert result["is_error"] is True
+    response.run_ui_command.assert_not_awaited()
 
 
 def test_get_cell_source_remains_lossless(monkeypatch):
