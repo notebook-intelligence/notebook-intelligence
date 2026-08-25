@@ -1465,8 +1465,6 @@ class ClaudeCodeClient():
                 "error": "Claude agent is not connected",
             }
 
-        queue.put(event)
-
         resp = {"data": None}
         def _on_client_response(data: dict):
             if data['id'] == event_id:
@@ -1484,6 +1482,10 @@ class ClaudeCodeClient():
         response_obj = event_args.get("response") if event_args else None
 
         try:
+            # Subscribe before publishing the request. A fast worker can emit
+            # its response synchronously from queue.put(), so publishing first
+            # would lose the response and leave this call polling until timeout.
+            queue.put(event)
             while True:
                 self._reconnect_required = False
                 nbi_request_obj = get_current_request()
