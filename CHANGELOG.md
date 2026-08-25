@@ -8,7 +8,70 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
-## [Unreleased]
+## [5.4.0] - unreleased
+
+Shipped so far in the `5.4.0a1` and `5.4.0a2` pre-releases. 5.4.0 adds a second agent mode (ACP, with Codex as the first agent type) alongside Claude mode, and a way to serve NBI's Jupyter-UI tools to an agent running outside the Lab page. Both are opt-in and both default to off. No traitlet, env-var, REST route, or on-disk-format renames or removals.
+
+### Added
+
+- **Experimental ACP agent mode** (#378). A second agent mode that drives an external coding agent over the [Agent Client Protocol](https://agentclientprotocol.com/), with OpenAI Codex (via the `codex-acp` adapter) as the first selectable agent type. Adds an ACP tab in Settings with an agent-type dropdown, chat model, API key, and base URL; session listing and resume through the agent's own `session/list` and `session/load`; and streaming, tool-call, and permission-request handling that reuses NBI's existing confirmation flow. ACP mode and Claude mode are mutually exclusive: enabling one disables the other on save, and a hand-edited config that enables both resolves to Claude. Two new admin policies both default to `force-off` rather than `user-choice`: `acp_mode_policy` (`NBI_ACP_MODE_POLICY`), the off switch for the whole mode, and `acp_full_access_policy` (`NBI_ACP_FULL_ACCESS_POLICY`), which governs whether the agent may run tools without asking. While full access is `force-off`, NBI pins Codex to `approval_policy = untrusted` through the adapter's `-c` command-line override, so it asks before anything beyond trusted read-only commands. Credentials and model follow the same env-override locks as Claude (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `NBI_ACP_CHAT_MODEL`), and `NBI_ACP_AGENT_COMMAND` overrides the adapter command NBI launches. When an API key is configured, codex runs with an isolated `CODEX_HOME` under the NBI user directory so neither the workspace's nor the user's `~/.codex` config is read. See [Gating the experimental ACP agent](docs/admin-guide.md#gating-the-experimental-acp-agent-378).
+- **Proxied Jupyter UI tools for external agents** (#398). NBI's Jupyter-UI tools (create and edit notebooks, run cells, open files, drive the terminal) were only reachable from the in-process MCP server NBI registers with the Claude SDK. Managed and enterprise Claude Code configurations can forbid dynamically configured MCP servers, which made those tools unavailable in exactly the deployments that most need them. A standalone stdio MCP server, `python -m notebook_intelligence.mcp_ui_proxy`, now serves the same tool manifest and relays each call over HTTP to the running Jupyter Server, so it can be declared in a static `mcp.json` like any other server. Setting `jupyter_ui_tools_external` in the Claude settings switches Claude mode from the in-process tools to the relay. The relay endpoint is `/notebook-intelligence/ui-tools` (GET for the manifest, POST to invoke); it requires Jupyter authentication like every other NBI route, and the proxy additionally sends a per-process bridge secret in an `X-NBI-UI-Tools-Token` header, which the relay uses only to exempt the call from the XSRF check (not as an identity). `NBI_UI_TOOLS_URL`, `NBI_UI_TOOLS_TOKEN`, `NBI_UI_TOOLS_SECRET`, `NBI_UI_TOOLS_HTTP_TIMEOUT`, and `NBI_UI_TOOLS_SERVER_NAME` configure the proxy when discovery cannot find the server on its own. See [Serving the Jupyter UI tools to an external agent](docs/admin-guide.md#serving-the-jupyter-ui-tools-to-an-external-agent-398).
+
+### Changed
+
+- **Dependency floors raised past known-vulnerable releases** (#399). `cryptography>=48.0.1`, `jupyter_server>=2.20.0`, `litellm>=1.83.7`, `mcp>=1.28.1`, `urllib3>=2.7.0`, `tornado>=6.5.7`, `starlette>=1.3.1`, `pydantic-settings>=2.14.2`, `aiohttp>=3.14.1`, `mistune>=3.3.0`, and `python-multipart>=0.0.27`, plus npm-side overrides for the transitive packages whose parents did not pin tightly enough. `mcp` is additionally capped below `2.0`: 2.x moved the FastMCP server out of the SDK, so `mcp.server.fastmcp.tools` no longer exists there and the server extension fails to load.
+
+### Fixed
+
+- **AI-streamed code blocks no longer pick up trailing whitespace** (#384). The chat renderer ran a blanket `\n` to `  \n` string replace before markdown parsing, intended for user input but applied to every message, which injected two trailing spaces into every line of a streamed fenced code block and carried them into anything copy-pasted out. The pre-parse transform is gone; NBI now uses the `remark-breaks` plugin, which converts soft breaks to hard breaks at the AST level and is fence-aware, so prose still breaks on single newlines while code blocks are left alone in both directions.
+- **Inline-code styling no longer leaks into fenced code blocks** (#401). `react-markdown` 9 stopped setting the `inline` prop, so the chat renderer's `inline || !match` branch also caught fenced blocks with an unrecognized or missing language and gave them the inline-code pill background; the visible symptom reported was a first-line indent on highlighted blocks, which is that rule's `padding: 1px 4px` landing on a `<code>` it was never meant to reach. Inline and fenced content are now told apart by content shape (`remark-rehype` appends a trailing newline to fenced code and never to an inline span), and the CSS targets an explicit `.inline-code` class instead of `:not(pre) > code`, which had itself been broken by the `PreTag="div"` wrapper the syntax highlighter inserts.
+- **Korean and other IME composition needs only one Enter to submit** (#400). The chat input listened for `keydown` without checking composition state, so the Enter that commits an IME candidate also submitted the message, and users typing Hangul had to retype the last syllable. The handler now ignores Enter while a composition is in progress.
+
+## [5.3.1] - 2026-07-29
+
+A patch release: one skills-import fix. No traitlet, env-var, REST route, or on-disk-format changes.
+
+### Fixed
+
+- **The GitHub skill-import size cap applies to the skill subpath, not the whole repository** (#394). Importing a single skill from a large monorepo could be rejected because the cap was measured against every file in the archive rather than the subdirectory actually being imported, so legitimate imports failed on repository size alone.
+
+## [5.3.0] - 2026-07-22
+
+5.3.0 makes notebook work kernel-aware rather than Python-assuming, modernizes the Claude model defaults, and adds an opt-in per-turn usage footer. It also carries two workspace-containment fixes for the built-in file tools. One ruleset frontmatter key was removed; see the migration note.
+
+### Migration note
+
+- **`scope.kernels` is no longer accepted in ruleset frontmatter** (#379). The old key conflated a kernel name with a language. Rules now scope on `scope.languages` (the notebook's language, e.g. `python`) or `scope.kernel_names` (the kernelspec name, e.g. `python3`), and a rule file that still uses `scope.kernels` is rejected with a `ValueError` naming the file rather than being silently ignored. Update any rule that used it; see [Ruleset system](docs/rulesets.md).
+
+### Added
+
+- **Multi-language and kernel-aware notebook support** (#379). Notebook creation, cell insertion, and inline code generation previously assumed Python. NBI now resolves the active notebook's kernel and language and carries them through the chat context, the built-in toolsets, and the ruleset scope, so generated code matches the notebook it is going into. A `list-available-notebook-kernels` tool lets the agent enumerate installed kernelspecs instead of guessing a name, and the Claude system prompt instructs it to call that tool before creating a notebook in a language the current context has not established. Requesting a notebook in a kernel that is not installed now raises instead of silently falling back to Python.
+- **Opt-in per-turn usage footer in Claude mode** (#391). The Claude SDK ends every turn with a `ResultMessage` carrying duration, token counts, and a cost estimate, which NBI previously discarded. Setting `show_turn_usage` in the Claude settings (default off) appends a one-line italic footer to each completed turn. The `$` cost segment is shown only when NBI is running against a direct Anthropic API key on Anthropic's own endpoint: the SDK prices from the CLI's built-in public list rates, so on a subscription login the marginal cost is really zero and on a custom `base_url` the endpoint's pricing is unknown. Duration and token counts, which are always accurate, are shown either way.
+- **Inline-completion and inline-chat acceptance are tracked as distinct telemetry events** (#383). Acceptance of a ghost-text completion and acceptance of an inline-chat edit were previously indistinguishable. JupyterLab's inline-completer provider interface has no accept callback, so NBI wraps JupyterLab's own `IInlineCompleterFactory` and patches `accept()` on the widget instance rather than subclassing the completer. The factory is taken as an optional dependency, so NBI still loads if JupyterLab stops providing it. See [Telemetry events](docs/admin-guide.md#telemetry-events).
+
+### Changed
+
+- **Claude model defaults modernized, and inline-completion output bounded** (#389). The chat default resolves to `claude-sonnet-5` and the inline-completion default to `claude-haiku-4-5`, both resolved against the live model list rather than a hardcoded id, with a version-aware fallback within the tier (a bogus `claude-sonnet-99` resolves to the newest Sonnet, not a lexicographic pick). Because the Models API lists Haiku only under its dated id, the inline default resolves to that snapshot and logs an INFO line at startup; that line is expected, not an error. Inline-completion output is capped at 1024 tokens instead of 10,000, since a suggestion is at most a few dozen lines and the old ceiling let a rambling response generate for seconds before the extraction regex discarded most of it. `NBI_CLAUDE_INLINE_COMPLETION_MAX_TOKENS` overrides the cap and is clamped to `[1, 4096]`. The fetched model list is cached per endpoint, so switching `base_url` no longer reuses the previous endpoint's models.
+- **Context token budget derives from the Claude model in Claude mode** (#390). The budget was computed from the general chat model's context window even when Claude mode was active, so history was trimmed against the wrong number.
+
+### Fixed
+
+- **`search_files` reads are confined to the workspace** (#386). The tool sandboxed only the search root, then opened each glob hit directly, so a symlink inside the workspace pointing outside it (`leak.txt -> /etc/passwd`) let an agent-mode model read arbitrary host files through `content_pattern` matches. `read_file` already routed every path through the workspace gate and rejected outbound symlinks after resolution; `search_files` now does the same for each match. Confidentiality only, no write path.
+- **Outbound symlinks are no longer stat-followed during enumeration** (#387). The directory-descent check called `is_dir(follow_symlinks=True)` on a symlink's target before testing that target for workspace containment. The containment check still rejected it afterwards, so nothing was read, but the probe itself reached past the workspace boundary. The path is now resolved and range-checked first, and only an in-workspace target is stat'd. No behavior change beyond that.
+- **Attachment context survives a slash-command prompt** (#388). When the last user line started with `/`, the CLI query assembly kept only that line and silently discarded the context lines NBI had just appended for the same turn: attachment `@`-mentions, cell pointers, and output context. Control-only commands (`/clear`, `/cost`, and friends) still drop the context, since it means nothing to them, but any other command is now moved to the front of the query, where the CLI expects it, with the context lines preserved after it. Custom skill and plugin commands therefore receive the user's attachments.
+- **Kernel-scoped rules apply to inline code generation** (#379). Inline generation did not pass the notebook's kernel into rule selection, so rules scoped to a kernel or language never matched there.
+
+## [5.2.1] - 2026-06-26
+
+A patch release: one Claude-mode timeout fix. No traitlet, env-var, REST route, or on-disk-format changes.
+
+### Fixed
+
+- **A turn waiting on a user prompt no longer times out** (#381). Time spent blocked on the user counted toward the agent response timeout, so an approval left on screen for about 30 minutes failed the turn with "Claude agent response timeout" while the worker was still mid-request, and the orphaned request then wedged the next prompt. NBI now tracks the wall-clock time a turn spends waiting on input (every tool approval, plan confirmation, and question) and subtracts it from the timeout window, so a slow human reply no longer looks like an unresponsive agent while a genuine post-approval hang still trips the timeout. The user-input listener is also disconnected in a `finally`, so a cancelled turn cannot leak the subscription. Because a parked approval no longer self-resolves via the timeout, in-flight requests are cancelled when the WebSocket closes: an abandoned turn (the user closes the tab) tears down its worker thread and the Claude subprocess instead of spinning until the process exits.
+
+## [5.2.0] - 2026-06-18
+
+5.2.0 adds the Claude permission-mode selector to the chat input, halves the server-extension import cost by deferring provider SDK imports, and makes three Claude-CLI integration points honor `CLAUDE_CONFIG_DIR`. One new admin policy (`claude_bypass_permissions_policy`), which defaults to `force-off`; no traitlet, env-var, REST route, or on-disk-format renames or removals.
 
 ### Added
 
