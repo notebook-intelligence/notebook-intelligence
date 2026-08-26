@@ -194,6 +194,12 @@ describe('chatbook-core', () => {
     expect(commented.source).toBe('# plot sales\n# by region');
 
     expect(promptAsHashComment('')).toBe('# <empty Chatbook prompt>');
+    expect(promptAsHashComment('plot sales', 'javascript')).toBe(
+      '// plot sales'
+    );
+    expect(promptAsHashComment('plot sales\rprint(1)')).toBe(
+      '# plot sales\n# print(1)'
+    );
     expect(resolveChatbookPrompt('plot sales', {})).toBe('plot sales');
     expect(
       resolveChatbookPrompt('print(1)', {
@@ -228,6 +234,26 @@ describe('chatbook-core', () => {
     expect((out.cells as any)[0].source).toBe('# hi');
     expect((out.cells as any)[1].source).toBe('print(1)');
     expect((out.metadata as any).kernelspec.name).toBe('python3');
+    const js = buildCodeNotebookFromChatbook(
+      {
+        nbformat: 4,
+        cells: [
+          {
+            cell_type: 'code',
+            source: 'plot the sales by region',
+            metadata: {},
+            outputs: []
+          }
+        ],
+        metadata: {}
+      },
+      {
+        name: 'javascript',
+        display_name: 'JavaScript',
+        language: 'javascript'
+      }
+    );
+    expect((js.cells as any)[0].source).toBe('// plot the sales by region');
     expect(chatbookExportNotebookPath('analysis.ipynb', 'python')).toBe(
       'analysis-python.ipynb'
     );
@@ -268,14 +294,23 @@ describe('chatbook-core', () => {
     expect((out.cells as any)[0].source).toBe('value = 42');
   });
 
-  it('passes cachedCode only when the prompt hash matches', () => {
+  it('passes cachedCode only when this session opts in and the hash matches', () => {
     const hit = buildExecuteChatbookMeta({
+      cellId: 'c1',
+      prompt: 'plot',
+      promptHash: 'aaa',
+      allowCachedCode: true,
+      cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
+    });
+    expect(hit.cachedCode).toBe('x = 1');
+
+    const fromDisk = buildExecuteChatbookMeta({
       cellId: 'c1',
       prompt: 'plot',
       promptHash: 'aaa',
       cellMeta: { generatedCode: 'x = 1', promptHash: 'aaa' }
     });
-    expect(hit.cachedCode).toBe('x = 1');
+    expect(fromDisk.cachedCode).toBeUndefined();
 
     const miss = buildExecuteChatbookMeta({
       cellId: 'c1',
@@ -323,6 +358,7 @@ describe('chatbook-core', () => {
       prompt: 'plot',
       promptHash: 'aaa',
       contextHash: 'ctx-new',
+      allowCachedCode: true,
       cellMeta: {
         generatedCode: 'x = 1',
         promptHash: 'aaa',

@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 from types import SimpleNamespace
 from urllib.error import HTTPError
 
@@ -47,6 +48,7 @@ from notebook_intelligence.chatbook_kernel.nbi_client import (
     NBIClient,
     NBIClientError,
     resolve_generate_url,
+    jupyter_api_token,
 )
 from notebook_intelligence.chatbook_kernel.kernel import is_code_execute
 from notebook_intelligence.util import get_jupyter_root_dir, set_jupyter_root_dir
@@ -533,7 +535,7 @@ def test_manager_uses_dedicated_safe_acp_client_for_chatbook(monkeypatch):
 def test_resolve_generate_url_uses_runtime(monkeypatch):
     monkeypatch.setattr(
         nbi_client_module,
-        '_latest_jupyter_server_runtime',
+        '_jupyter_server_runtime',
         lambda: {'url': 'http://127.0.0.1:8888/'},
     )
     assert resolve_generate_url() == (
@@ -544,7 +546,7 @@ def test_resolve_generate_url_uses_runtime(monkeypatch):
 def test_resolve_generate_url_keeps_hub_prefix(monkeypatch):
     monkeypatch.setattr(
         nbi_client_module,
-        '_latest_jupyter_server_runtime',
+        '_jupyter_server_runtime',
         lambda: {'url': 'http://127.0.0.1:8888/user/alice/'},
     )
     assert resolve_generate_url() == (
@@ -554,10 +556,31 @@ def test_resolve_generate_url_keeps_hub_prefix(monkeypatch):
 
 def test_resolve_generate_url_requires_runtime(monkeypatch):
     monkeypatch.setattr(
-        nbi_client_module, '_latest_jupyter_server_runtime', lambda: None
+        nbi_client_module, '_jupyter_server_runtime', lambda: None
     )
     with pytest.raises(NBIClientError, match='no Jupyter server runtime'):
         resolve_generate_url()
+
+
+def test_jupyter_runtime_prefers_parent_pid(monkeypatch, tmp_path):
+    older = tmp_path / 'jpserver-2222.json'
+    newer = tmp_path / 'jpserver-1111.json'
+    older.write_text(
+        '{"url": "http://127.0.0.1:9999/", "token": "OTHER"}', encoding='utf-8'
+    )
+    newer.write_text(
+        '{"url": "http://127.0.0.1:8888/", "token": "PARENT"}', encoding='utf-8'
+    )
+    older_stat = older.stat()
+    os.utime(older, (older_stat.st_atime, older_stat.st_mtime + 10))
+    monkeypatch.setenv('JPY_PARENT_PID', '1111')
+    monkeypatch.setattr(
+        nbi_client_module, 'jupyter_runtime_dir', lambda: str(tmp_path)
+    )
+    assert resolve_generate_url() == (
+        'http://127.0.0.1:8888/notebook-intelligence/chatbook/generate'
+    )
+    assert jupyter_api_token() == 'PARENT'
 
 
 class _FakeResponse:

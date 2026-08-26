@@ -1,6 +1,6 @@
 // Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
-import { KernelSpec } from '@jupyterlab/services';
+import { KernelSpec, KernelSpecManager } from '@jupyterlab/services';
 
 export interface INotebookKernelProfile {
   language: string;
@@ -36,6 +36,20 @@ export const CHATBOOK_KERNEL: INotebookKernelProfile = Object.freeze({
   kernelName: 'chatbook',
   displayName: 'Chatbook'
 });
+
+let sharedSpecs: KernelSpecManager | null = null;
+
+/**
+ * One KernelSpecManager for Chatbook UI. Each `new KernelSpecManager()`
+ * starts a poller until `dispose()`, so constructing one per config change
+ * leaks GET /api/kernelspecs forever.
+ */
+export function sharedKernelSpecManager(): KernelSpecManager {
+  if (!sharedSpecs || sharedSpecs.isDisposed) {
+    sharedSpecs = new KernelSpecManager();
+  }
+  return sharedSpecs;
+}
 
 export function normalizeNotebookLanguage(raw: string | undefined): string {
   const language = (raw ?? '').trim().toLowerCase();

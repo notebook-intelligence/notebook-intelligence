@@ -1359,59 +1359,63 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       execute: async args => {
         const contents = new ContentsManager();
         const kernels = new KernelSpecManager();
-        await kernels.ready;
-        let profile;
         try {
-          profile = findKernelProfile(kernels.specs?.kernelspecs, {
-            language: args.language as string | undefined,
-            kernelName: args.kernelName as string | undefined
+          await kernels.ready;
+          let profile;
+          try {
+            profile = findKernelProfile(kernels.specs?.kernelspecs, {
+              language: args.language as string | undefined,
+              kernelName: args.kernelName as string | undefined
+            });
+          } catch (error) {
+            if (error instanceof NotebookKernelNotFoundError) {
+              app.commands.execute('apputils:notify', {
+                message: error.message,
+                type: 'error',
+                options: { autoClose: true }
+              });
+            }
+            throw error;
+          }
+
+          const newNBFile = await contents.newUntitled({
+            ext: '.ipynb',
+            path: defaultBrowser?.model.path
           });
-        } catch (error) {
-          if (error instanceof NotebookKernelNotFoundError) {
-            app.commands.execute('apputils:notify', {
-              message: error.message,
-              type: 'error',
-              options: { autoClose: true }
+          const nbFileContent = structuredClone(emptyNotebookContent);
+          nbFileContent.metadata = {
+            kernelspec: {
+              language: profile.language,
+              name: profile.kernelName,
+              display_name: profile.displayName
+            },
+            language_info: {
+              name: profile.language
+            }
+          };
+
+          if (args.code) {
+            nbFileContent.cells.push({
+              cell_type: 'code',
+              metadata: { trusted: true },
+              source: [args.code as string],
+              outputs: []
             });
           }
-          throw error;
-        }
 
-        const newNBFile = await contents.newUntitled({
-          ext: '.ipynb',
-          path: defaultBrowser?.model.path
-        });
-        const nbFileContent = structuredClone(emptyNotebookContent);
-        nbFileContent.metadata = {
-          kernelspec: {
-            language: profile.language,
-            name: profile.kernelName,
-            display_name: profile.displayName
-          },
-          language_info: {
-            name: profile.language
-          }
-        };
-
-        if (args.code) {
-          nbFileContent.cells.push({
-            cell_type: 'code',
-            metadata: { trusted: true },
-            source: [args.code as string],
-            outputs: []
+          contents.save(newNBFile.path, {
+            content: nbFileContent,
+            format: 'json',
+            type: 'notebook'
           });
+          docManager.openOrReveal(newNBFile.path);
+
+          await waitForFileToBeActive(newNBFile.path);
+
+          return newNBFile;
+        } finally {
+          kernels.dispose();
         }
-
-        contents.save(newNBFile.path, {
-          content: nbFileContent,
-          format: 'json',
-          type: 'notebook'
-        });
-        docManager.openOrReveal(newNBFile.path);
-
-        await waitForFileToBeActive(newNBFile.path);
-
-        return newNBFile;
       }
     });
 
@@ -1567,10 +1571,14 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     app.commands.addCommand(CommandIDs.listAvailableNotebookKernels, {
       execute: async () => {
         const kernels = new KernelSpecManager();
-        await kernels.ready;
-        return {
-          kernels: listKernelProfiles(kernels.specs?.kernelspecs)
-        };
+        try {
+          await kernels.ready;
+          return {
+            kernels: listKernelProfiles(kernels.specs?.kernelspecs)
+          };
+        } finally {
+          kernels.dispose();
+        }
       }
     });
 

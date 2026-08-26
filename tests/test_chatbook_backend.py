@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import pytest
+from types import SimpleNamespace
 from jupyter_client.session import Session
 
 from notebook_intelligence.chatbook_kernel.backend import (
@@ -60,9 +61,11 @@ def test_non_python_static_scan_is_risky():
     assert scan['reasons']
 
 
-def test_python_static_scan_still_clean_for_plain_code():
-    scan = scan_generated_code('total = 1\ntotal\n', 'python')
-    assert scan['level'] == 'clean'
+def test_unknown_language_static_scan_is_risky():
+    scan = scan_generated_code('total = 1\ntotal\n', '')
+    assert scan['level'] == 'risky'
+    missing = scan_generated_code('total = 1\ntotal\n', None)  # type: ignore[arg-type]
+    assert missing['level'] == 'risky'
 
 
 def test_r_codegen_instructions_omit_ipython_magics():
@@ -130,6 +133,9 @@ class _FakeManager:
 
     def interrupt_kernel(self):
         self.interrupted = True
+
+    def is_alive(self):
+        return getattr(self, 'alive', True)
 
 
 class _RecordingSession(Session):
@@ -236,3 +242,43 @@ def test_backend_execute_relays_iopub_and_returns_reply():
     backend.shutdown()
     assert manager.interrupted
     assert manager.shutdown_called
+
+
+def test_backend_execute_raises_when_child_dies():
+    manager = _FakeManager('python3')
+    manager.alive = False
+    backend = ChatbookBackend(
+        'python3', cwd='/tmp', manager_factory=lambda name: manager
+    )
+    backend.start()
+    with pytest.raises(RuntimeError, match='died'):
+        backend.execute('print(1)', lambda t, c: None)
+    assert backend.ready is False
+
+
+def test_kernel_clamps_client_policy_to_admin_cap(monkeypatch):
+    monkeypatch.setenv('NBI_CHATBOOK_MAX_EXECUTION_MODE', 'always-confirm')
+    kernel = ChatbookKernel()
+    monkeypatch.setattr(
+        'notebook_intelligence.chatbook_kernel.kernel.NBIConfig',
+        lambda: SimpleNamespace(chatbook_execution_mode='auto-run'),
+    )
+    assert (
+        kernel._execution_policy({'executionPolicy': 'auto-run'})
+        == 'always-confirm'
+    )
+
+
+def test_kernel_aborts_queue_on_error_reply():
+    kernel = _kernel_with_backend(
+        {
+            'status': 'error',
+            'ename': 'ValueError',
+            'evalue': 'boom',
+            'traceback': ['line'],
+        }
+    )
+    called = []
+    kernel._abort_queues = lambda *args, **kwargs: called.append(args)
+    kernel._execute_in_backend(None, b'ident', {'content': {}}, 'print(1)')
+    assert called

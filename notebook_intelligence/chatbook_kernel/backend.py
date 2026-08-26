@@ -48,7 +48,7 @@ def list_backend_kernels(specs: Optional[dict] = None) -> list[dict[str, str]]:
         backends.append(
             {
                 "name": name,
-                "language": language or "python",
+                "language": language,
                 "display_name": display_name or name,
             }
         )
@@ -119,7 +119,22 @@ class ChatbookBackend:
 
     @property
     def ready(self) -> bool:
-        return self._kc is not None
+        return self._kc is not None and self.is_alive()
+
+    def is_alive(self) -> bool:
+        if self._kc is None:
+            return False
+        km = self._km
+        check = getattr(km, "is_alive", None) if km is not None else None
+        if callable(check):
+            try:
+                return bool(check())
+            except Exception:
+                return False
+        return True
+
+    def _mark_dead(self) -> None:
+        self._kc = None
 
     def start(self) -> None:
         if self.ready:
@@ -174,9 +189,10 @@ class ChatbookBackend:
 
     def execute(self, code: str, relay: Callable[[str, dict], None]) -> dict:
         """Run ``code`` in the child kernel and relay IOPub content via ``relay``."""
-        if self._kc is None:
+        if self._kc is None or not self.is_alive():
+            self._mark_dead()
             raise RuntimeError(
-                f"Chatbook backend kernel '{self.kernel_name}' is not running. "
+                f"Chatbook backend kernel '{self.kernel_name}' died. "
                 "Restart the Chatbook kernel after choosing a backend in Settings."
             )
         msg_id = self._kc.execute(
@@ -184,14 +200,28 @@ class ChatbookBackend:
             silent=False,
             store_history=True,
             allow_stdin=False,
-            stop_on_error=False,
+            stop_on_error=True,
         )
         idle = False
         while not idle:
             try:
                 msg = self._kc.get_iopub_msg(timeout=0.1)
             except Empty:
+                if not self.is_alive():
+                    self._mark_dead()
+                    raise RuntimeError(
+                        f"Chatbook backend kernel '{self.kernel_name}' died. "
+                        "Restart the Chatbook kernel."
+                    )
                 continue
+            except Exception as exc:
+                if not self.is_alive():
+                    self._mark_dead()
+                    raise RuntimeError(
+                        f"Chatbook backend kernel '{self.kernel_name}' died. "
+                        "Restart the Chatbook kernel."
+                    ) from exc
+                raise
             header = msg.get("header") or {}
             parent = msg.get("parent_header") or {}
             if parent.get("msg_id") != msg_id:
@@ -209,6 +239,14 @@ class ChatbookBackend:
                 shell_msg = self._kc.get_shell_msg(timeout=0.1)
             except Empty:
                 break
+            except Exception as exc:
+                if not self.is_alive():
+                    self._mark_dead()
+                    raise RuntimeError(
+                        f"Chatbook backend kernel '{self.kernel_name}' died. "
+                        "Restart the Chatbook kernel."
+                    ) from exc
+                raise
             parent = shell_msg.get("parent_header") or {}
             if parent.get("msg_id") != msg_id:
                 continue

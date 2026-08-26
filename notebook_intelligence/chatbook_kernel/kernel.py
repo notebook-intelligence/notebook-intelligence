@@ -18,7 +18,10 @@ from .codegen import (
     resolve_executable_source,
 )
 from .danger import merge_danger_scans, scan_generated_code
-from .execution import parse_execution_mode, should_execute_generated
+from .execution import (
+    effective_execution_mode,
+    should_execute_generated,
+)
 from .nbi_client import NBIClient, NBIClientError
 
 log = logging.getLogger(__name__)
@@ -60,6 +63,7 @@ class ChatbookKernel(Kernel):
                 self._backend.interrupt()
             except Exception:
                 log.debug("Backend interrupt failed", exc_info=True)
+        self._abort_pending_executes(force=True)
         interrupt = getattr(super(), "interrupt_request", None)
         if callable(interrupt):
             return interrupt(stream, ident, parent)
@@ -89,9 +93,9 @@ class ChatbookKernel(Kernel):
         except (ChatbookCodegenError, NBIClientError) as exc:
             return self._reply_error(stream, ident, parent, str(exc))
 
-        language = self._backend_info.get("language") or "python"
+        language = self._backend_info.get("language") or ""
         scan = scan_generated_code(generated, language)
-        if chatbook_meta.get("llmDangerScan") and scan.get("level") != "risky":
+        if self._use_llm_danger_scan(chatbook_meta) and scan.get("level") != "risky":
             scan = merge_danger_scans(
                 scan,
                 self._llm_danger_scan(generated, chatbook_meta),
@@ -111,12 +115,35 @@ class ChatbookKernel(Kernel):
             payload["contextHash"] = context_hash
         self._publish_chatbook_code(parent, payload)
 
-        policy = parse_execution_mode(chatbook_meta.get("executionPolicy"))
+        policy = self._execution_policy(chatbook_meta)
         if generated and should_execute_generated(policy, scan.get("level") or "risky"):
             return self._execute_in_backend(stream, ident, parent, generated)
         return self._reply_ok_without_execute(stream, ident, parent)
 
+    def _execution_policy(self, chatbook_meta: dict) -> str:
+        stored = ""
+        try:
+            stored = NBIConfig().chatbook_execution_mode
+        except Exception:
+            stored = ""
+        return effective_execution_mode(
+            chatbook_meta.get("executionPolicy"),
+            stored or None,
+        )
+
+    def _use_llm_danger_scan(self, chatbook_meta: dict) -> bool:
+        try:
+            return bool(NBIConfig().chatbook_llm_danger_scan)
+        except Exception:
+            return bool(chatbook_meta.get("llmDangerScan"))
+
     def _ensure_backend(self) -> ChatbookBackend:
+        if self._backend is not None and not self._backend.ready:
+            try:
+                self._backend.shutdown()
+            except Exception:
+                log.debug("Stale backend shutdown failed", exc_info=True)
+            self._backend = None
         if self._backend is not None and self._backend.ready:
             return self._backend
         preferred = ""
@@ -172,6 +199,8 @@ class ChatbookKernel(Kernel):
         self.session.send(
             stream, "execute_reply", reply_content, parent, ident=ident
         )
+        if status == "error":
+            self._abort_pending_executes(parent)
         return None
 
     def _generate(self, prompt: str, chatbook_meta: dict) -> dict[str, Any]:
@@ -244,6 +273,30 @@ class ChatbookKernel(Kernel):
             parent,
             ident=ident,
         )
+        self._abort_pending_executes(parent)
+
+    def _abort_pending_executes(self, parent: dict | None = None, force: bool = False) -> None:
+        """Match ipykernel: abort queued execute_request after an error or interrupt."""
+        if not force:
+            content = (parent or {}).get("content") or {}
+            if content.get("stop_on_error", True) is False:
+                return
+        abort = getattr(self, "_abort_queues", None)
+        if not callable(abort):
+            self._aborting = True
+            return
+        try:
+            abort()
+            return
+        except TypeError:
+            pass
+        except Exception:
+            log.debug("Could not abort execute queues", exc_info=True)
+            return
+        try:
+            abort(None)
+        except Exception:
+            log.debug("Could not abort execute queues", exc_info=True)
 
 
 def is_code_execute(chatbook_meta: dict | None) -> bool:

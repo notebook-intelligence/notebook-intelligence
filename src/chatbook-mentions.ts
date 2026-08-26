@@ -309,12 +309,17 @@ class ChatbookMentionMenu {
   };
 
   private close(): void {
+    const idle =
+      this._timer === null && this._request === null && this._menu === null;
     if (this._timer !== null) {
       window.clearTimeout(this._timer);
       this._timer = null;
     }
     this._request?.abort();
     this._request = null;
+    if (idle) {
+      return;
+    }
     window.removeEventListener('keydown', this._onKeyDown, true);
     this._menu?.remove();
     this._menu = null;
@@ -405,10 +410,17 @@ export function setChatbookMentionsEnabled(
   enabled: boolean,
   notebookPath = ''
 ): void {
-  if (view.state.field(mentionEnabledField, false) === undefined) {
+  const currentEnabled = view.state.field(mentionEnabledField, false);
+  const currentPath = view.state.field(mentionNotebookPathField, false);
+  if (currentEnabled === undefined) {
+    if (!enabled) {
+      return;
+    }
     view.dispatch({
       effects: StateEffect.appendConfig.of(mentionExtension)
     });
+  } else if (currentEnabled === enabled && currentPath === notebookPath) {
+    return;
   }
   view.dispatch({
     effects: [

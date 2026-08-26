@@ -186,7 +186,7 @@ def jupyter_api_token() -> str:
         value = os.environ.get(key, "").strip()
         if value:
             return value
-    runtime = _latest_jupyter_server_runtime()
+    runtime = _jupyter_server_runtime()
     if runtime:
         token = runtime.get("token") or ""
         if isinstance(token, str):
@@ -195,7 +195,7 @@ def jupyter_api_token() -> str:
 
 
 def resolve_generate_url() -> str:
-    runtime = _latest_jupyter_server_runtime()
+    runtime = _jupyter_server_runtime()
     base = str((runtime or {}).get("url") or "").rstrip("/")
     if not base:
         raise NBIClientError(
@@ -204,15 +204,34 @@ def resolve_generate_url() -> str:
     return base + "/notebook-intelligence/chatbook/generate"
 
 
+def _read_runtime_file(path: str) -> Optional[dict]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(data, dict) and data.get("url"):
+        return data
+    return None
+
+
+def _jupyter_server_runtime() -> Optional[dict]:
+    runtime_dir = jupyter_runtime_dir()
+    parent_pid = os.environ.get("JPY_PARENT_PID", "").strip()
+    if parent_pid.isdigit():
+        data = _read_runtime_file(
+            os.path.join(runtime_dir, f"jpserver-{parent_pid}.json")
+        )
+        if data:
+            return data
+    return _latest_jupyter_server_runtime()
+
+
 def _latest_jupyter_server_runtime() -> Optional[dict]:
     pattern = os.path.join(jupyter_runtime_dir(), "jpserver-*.json")
     files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
     for path in files:
-        try:
-            with open(path, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data, dict) and data.get("url"):
+        data = _read_runtime_file(path)
+        if data:
             return data
     return None

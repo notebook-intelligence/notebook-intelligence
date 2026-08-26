@@ -72,6 +72,18 @@ def test_execution_mode_clamp_and_run_policy():
     assert parse_execution_mode("generate-only") == "always-confirm"
     assert clamp_execution_mode("auto-run", "generate-only") == "always-confirm"
     assert clamp_execution_mode("auto-run", "always-confirm") == "always-confirm"
+    from notebook_intelligence.chatbook_kernel.execution import (
+        effective_execution_mode,
+    )
+
+    assert (
+        effective_execution_mode("auto-run", "auto-run", "always-confirm")
+        == "always-confirm"
+    )
+    assert (
+        effective_execution_mode("auto-run", "always-confirm", "auto-run")
+        == "always-confirm"
+    )
     assert should_execute_generated("auto-run", "risky") is True
     assert should_execute_generated("confirm-if-risky", "clean") is True
     assert should_execute_generated("confirm-if-risky", "risky") is False

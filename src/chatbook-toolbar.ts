@@ -4,7 +4,6 @@ import { JupyterFrontEnd } from '@jupyterlab/application';
 import { Dialog, showDialog } from '@jupyterlab/apputils';
 import { DocumentRegistry } from '@jupyterlab/docregistry';
 import { INotebookModel, NotebookPanel } from '@jupyterlab/notebook';
-import { KernelSpecManager } from '@jupyterlab/services';
 import { LabIcon, ToolbarButton } from '@jupyterlab/ui-components';
 import { IDisposable, DisposableDelegate } from '@lumino/disposable';
 
@@ -18,7 +17,8 @@ import { NBIAPI } from './api';
 import {
   NotebookKernelNotFoundError,
   findKernelProfile,
-  resolveChatbookBackendProfile
+  resolveChatbookBackendProfile,
+  sharedKernelSpecManager
 } from './notebook-kernels';
 import switchSvgstr from '../style/icons/chatbook-switch.svg';
 import exportSvgstr from '../style/icons/chatbook-export.svg';
@@ -42,7 +42,7 @@ export async function confirmConvertChatbookNotebook(
   if (!isChatbookSession(panel.sessionContext)) {
     return;
   }
-  const kernels = new KernelSpecManager();
+  const kernels = sharedKernelSpecManager();
   await kernels.ready;
   const profile = resolveChatbookBackendProfile(
     kernels.specs?.kernelspecs,
@@ -122,13 +122,19 @@ class ChatbookToolbarController {
     );
     panel.sessionContext.kernelChanged.connect(this.sync, this);
     panel.sessionContext.sessionChanged.connect(this.sync, this);
-    panel.model?.contentChanged.connect(this.sync, this);
     void panel.sessionContext.ready.then(() => this.sync());
     this.sync();
   }
 
   sync(): void {
     const isChatbook = isChatbookSession(this._panel.sessionContext);
+    if (isChatbook && !this._contentChangedConnected) {
+      this._panel.model?.contentChanged.connect(this.sync, this);
+      this._contentChangedConnected = true;
+    } else if (!isChatbook && this._contentChangedConnected) {
+      this._panel.model?.contentChanged.disconnect(this.sync, this);
+      this._contentChangedConnected = false;
+    }
     if (isChatbook) {
       this._showCodeButton.show();
       this._convertButton.show();
@@ -146,7 +152,10 @@ class ChatbookToolbarController {
   dispose(): void {
     this._panel.sessionContext.kernelChanged.disconnect(this.sync, this);
     this._panel.sessionContext.sessionChanged.disconnect(this.sync, this);
-    this._panel.model?.contentChanged.disconnect(this.sync, this);
+    if (this._contentChangedConnected) {
+      this._panel.model?.contentChanged.disconnect(this.sync, this);
+      this._contentChangedConnected = false;
+    }
     this._showCodeButton.dispose();
     this._convertButton.dispose();
   }
@@ -155,6 +164,7 @@ class ChatbookToolbarController {
   private _panel: NotebookPanel;
   private _showCodeButton: ToolbarButton;
   private _convertButton: ToolbarButton;
+  private _contentChangedConnected = false;
 }
 
 export class ChatbookToolbarExtension

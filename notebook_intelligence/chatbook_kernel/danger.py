@@ -61,10 +61,10 @@ def scan_generated_python(source: str) -> dict[str, Any]:
 
 def scan_generated_code(source: str, language: str = "python") -> dict[str, Any]:
     """Scan generated source. Non-Python languages fail closed as risky."""
-    lang = (language or "python").strip().lower()
-    if lang in {"", "python", "py"}:
+    lang = (language or "").strip().lower()
+    if lang in {"python", "py"}:
         return scan_generated_python(source)
-    label = (language or "code").strip() or "code"
+    label = (language or "code").strip() or "unknown language"
     return {
         "level": DANGER_LEVEL_RISKY,
         "reasons": [f"No static scanner for {label} code"],

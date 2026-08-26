@@ -5,14 +5,15 @@ import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
 import { EditorView } from '@codemirror/view';
 import { ISessionContext, Notification } from '@jupyterlab/apputils';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
-import { Contents, Kernel, KernelSpecManager } from '@jupyterlab/services';
+import { Contents, Kernel } from '@jupyterlab/services';
 import { JSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 
 import {
   INotebookKernelProfile,
   mimeTypeForNotebookLanguage,
-  resolveChatbookBackendProfile
+  resolveChatbookBackendProfile,
+  sharedKernelSpecManager
 } from './notebook-kernels';
 import {
   CHATBOOK_LANGUAGE,
@@ -64,7 +65,7 @@ let chatbookBackendDisplayName = 'Python';
 let chatbookLanguageRegistry: IEditorLanguageRegistry | undefined;
 
 export async function refreshChatbookBackendProfile(): Promise<INotebookKernelProfile> {
-  const kernels = new KernelSpecManager();
+  const kernels = sharedKernelSpecManager();
   await kernels.ready;
   const profile = resolveChatbookBackendProfile(
     kernels.specs?.kernelspecs,
@@ -244,6 +245,7 @@ export function patchCodeCellExecute(): void {
       executionPolicy: executionMode,
       llmDangerScan: NBIAPI.config.chatbookLlmDangerScan,
       allowCachedCode:
+        alreadyExecuted &&
         !NBIAPI.config.chatbookHasContextProviders &&
         !NBIAPI.config.chatbookHasGuidelines &&
         !hasMentionContext
@@ -382,6 +384,19 @@ export function toggleAllChatbookCellModes(
   return nextMode;
 }
 
+function debounceAnimationFrame(fn: () => void): () => void {
+  let frame = 0;
+  return () => {
+    if (frame) {
+      return;
+    }
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      fn();
+    });
+  };
+}
+
 export function attachChatbookNotebooks(
   tracker: INotebookTracker,
   options: {
@@ -408,7 +423,11 @@ export function attachChatbookNotebooks(
     }
     attached.add(panel);
     let kernelConnection: Kernel.IKernelConnection | null = null;
+    let contentChangedConnected = false;
     const syncCellBadges = () => {
+      if (panel.isDisposed) {
+        return;
+      }
       const isChatbook = isChatbookSession(panel.sessionContext);
       for (const widget of panel.content.widgets) {
         const editorView = (
@@ -499,13 +518,31 @@ export function attachChatbookNotebooks(
       }
       applyChatbookPayload(panel, msg.content as Record<string, unknown>);
     };
+    const debouncedSyncCellBadges = debounceAnimationFrame(syncCellBadges);
+    const setContentChangedListening = (listen: boolean) => {
+      if (listen === contentChangedConnected) {
+        return;
+      }
+      if (listen) {
+        panel.model?.contentChanged.connect(debouncedSyncCellBadges);
+      } else {
+        panel.model?.contentChanged.disconnect(debouncedSyncCellBadges);
+      }
+      contentChangedConnected = listen;
+    };
     const connectKernel = () => {
+      if (panel.isDisposed) {
+        return;
+      }
       if (kernelConnection) {
         kernelConnection.anyMessage.disconnect(onAnyMessage);
         kernelConnection = null;
       }
+      const isChatbook = isChatbookSession(panel.sessionContext);
+      setContentChangedListening(isChatbook);
       const kernel = panel.sessionContext.session?.kernel;
       if (!kernel || !isChatbookKernelName(kernel.name)) {
+        syncCellBadges();
         return;
       }
       kernelConnection = kernel;
@@ -513,18 +550,22 @@ export function attachChatbookNotebooks(
       syncCellBadges();
     };
     panel.sessionContext.kernelChanged.connect(connectKernel);
-    panel.model?.contentChanged.connect(syncCellBadges);
     panel.content.activeCellChanged.connect(syncCellBadges);
     resyncBadges.push(syncCellBadges);
     void panel.sessionContext.ready.then(connectKernel);
-    void panel.context.ready.then(syncCellBadges);
-    syncCellBadges();
+    void panel.context.ready.then(() => {
+      if (!panel.isDisposed) {
+        syncCellBadges();
+      }
+    });
+    connectKernel();
     panel.disposed.connect(() => {
       if (kernelConnection) {
         kernelConnection.anyMessage.disconnect(onAnyMessage);
         kernelConnection = null;
       }
-      panel.model?.contentChanged.disconnect(syncCellBadges);
+      panel.sessionContext.kernelChanged.disconnect(connectKernel);
+      setContentChangedListening(false);
       panel.content.activeCellChanged.disconnect(syncCellBadges);
       const index = resyncBadges.indexOf(syncCellBadges);
       if (index >= 0) {

@@ -231,14 +231,55 @@ export function resolveChatbookCode(
   return meta.generatedCode || '';
 }
 
-export function promptAsHashComment(prompt: string): string {
-  const text = prompt.replace(/\s+$/u, '');
+const LINE_COMMENT_PREFIX: Record<string, string> = {
+  python: '#',
+  py: '#',
+  r: '#',
+  ruby: '#',
+  perl: '#',
+  bash: '#',
+  sh: '#',
+  julia: '#',
+  yaml: '#',
+  toml: '#',
+  sql: '--',
+  lua: '--',
+  haskell: '--',
+  javascript: '//',
+  js: '//',
+  typescript: '//',
+  ts: '//',
+  java: '//',
+  scala: '//',
+  kotlin: '//',
+  go: '//',
+  c: '//',
+  cpp: '//',
+  rust: '//',
+  swift: '//'
+};
+
+export function lineCommentPrefix(language: string): string {
+  const key = (language || '').trim().toLowerCase();
+  return LINE_COMMENT_PREFIX[key] || '#';
+}
+
+function normalizeCommentNewlines(text: string): string {
+  return text.replace(/\u2028|\u2029/gu, '\n').replace(/\r\n?/g, '\n');
+}
+
+export function promptAsHashComment(
+  prompt: string,
+  language = 'python'
+): string {
+  const prefix = lineCommentPrefix(language);
+  const text = normalizeCommentNewlines(prompt).replace(/\s+$/u, '');
   if (!text) {
-    return '# <empty Chatbook prompt>';
+    return `${prefix} <empty Chatbook prompt>`;
   }
   return text
     .split('\n')
-    .map(line => (line.length ? `# ${line}` : '#'))
+    .map(line => (line.length ? `${prefix} ${line}` : prefix))
     .join('\n');
 }
 
@@ -298,6 +339,7 @@ export function switchChatbookCellMode(options: {
 export function convertChatbookCellToCode(options: {
   source: string;
   meta: IChatbookCellMeta;
+  language?: string;
 }): { source: string; meta: IChatbookCellMeta } {
   const snapshot = snapshotChatbookCell(options);
   if (snapshot.mode === 'code') {
@@ -320,7 +362,10 @@ export function convertChatbookCellToCode(options: {
     meta.generatedCode = snapshot.generatedCode;
     return { source: snapshot.generatedCode, meta };
   }
-  return { source: promptAsHashComment(meta.prompt || ''), meta };
+  return {
+    source: promptAsHashComment(meta.prompt || '', options.language),
+    meta
+  };
 }
 
 export interface IChatbookKernelSpec {
@@ -360,7 +405,9 @@ export function buildCodeNotebookFromChatbook(
   kernelspec: IChatbookKernelSpec
 ): Record<string, unknown> {
   const cells = Array.isArray(notebook.cells)
-    ? notebook.cells.map(cell => convertNotebookCellToCode(cell))
+    ? notebook.cells.map(cell =>
+        convertNotebookCellToCode(cell, kernelspec.language)
+      )
     : [];
   const metadata: Record<string, unknown> = {
     ...((notebook.metadata as Record<string, unknown>) || {})
@@ -374,7 +421,7 @@ export function buildCodeNotebookFromChatbook(
   };
 }
 
-function convertNotebookCellToCode(cell: unknown): unknown {
+function convertNotebookCellToCode(cell: unknown, language: string): unknown {
   if (!cell || typeof cell !== 'object') {
     return cell;
   }
@@ -384,7 +431,8 @@ function convertNotebookCellToCode(cell: unknown): unknown {
   }
   const converted = convertChatbookCellToCode({
     source: cellSourceToString(next.source),
-    meta: getChatbookCellMeta(next.metadata)
+    meta: getChatbookCellMeta(next.metadata),
+    language
   });
   next.source = converted.source;
   next.metadata = mergeChatbookCellMeta(next.metadata, converted.meta);
@@ -524,14 +572,16 @@ export function buildExecuteChatbookMeta(options: {
   if (options.llmDangerScan) {
     meta.llmDangerScan = true;
   }
-  // The stored code belongs to the prompt that produced it, so re-running an
-  // unchanged prompt reuses it. Notebook context deliberately does not count:
-  // it carries cell outputs, which this very cell changes when it runs, and
-  // would make every re-run a miss.
+  // Cached code is session-opt-in. Notebook files are not a trust boundary:
+  // persisted `generatedCode` can be attacker-authored, so the client must
+  // have already run this prompt in this session (`allowCachedCode: true`).
+  // Notebook context deliberately does not count: it carries cell outputs,
+  // which this very cell changes when it runs, and would make every re-run
+  // a miss.
   if (
+    options.allowCachedCode === true &&
     options.cellMeta.generatedCode &&
-    options.cellMeta.promptHash === options.promptHash &&
-    options.allowCachedCode !== false
+    options.cellMeta.promptHash === options.promptHash
   ) {
     meta.cachedCode = options.cellMeta.generatedCode;
   }
