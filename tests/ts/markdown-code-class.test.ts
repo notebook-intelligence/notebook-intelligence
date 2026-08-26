@@ -27,13 +27,20 @@ describe('resolveCodeClassName', () => {
     expect(resolveCodeClassName('x\n', 'language-text')).toBe('language-text');
   });
 
-  it('does not mark empty content (a fence mid-stream before its language token arrives)', () => {
+  it('does not mark an empty string, defensively — the real pipeline never actually produces this shape', () => {
     expect(resolveCodeClassName('')).toBeUndefined();
     expect(resolveCodeClassName('', 'language-python')).toBe('language-python');
   });
 
-  it('does not mark undefined/null children, which is what react-markdown actually passes for an empty code node', () => {
+  it('does not mark undefined children, which is what react-markdown actually passes for an empty code node mid-stream (a fence before its language token arrives)', () => {
     expect(resolveCodeClassName(undefined)).toBeUndefined();
+    expect(resolveCodeClassName(undefined, 'language-python')).toBe(
+      'language-python'
+    );
+  });
+
+  it('does not mark null children, defensively — the real pipeline never actually passes this either', () => {
+    expect(resolveCodeClassName(null)).toBeUndefined();
     expect(resolveCodeClassName(null, 'language-python')).toBe(
       'language-python'
     );
@@ -41,5 +48,11 @@ describe('resolveCodeClassName', () => {
 
   it('marks inline code that spans a source newline, since remark normalizes it to a space first', () => {
     expect(resolveCodeClassName('multi word')).toBe('inline-code');
+  });
+
+  it('does not mark an empty fence whose info string has no word-only language token, since /language-(\\w+)/ cannot match it', () => {
+    expect(resolveCodeClassName(undefined, 'language-{.python')).toBe(
+      'language-{.python'
+    );
   });
 });
