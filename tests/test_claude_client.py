@@ -143,6 +143,27 @@ class TestClientThreadEventLoop:
 
 
 class TestSendClaudeAgentRequestDeadThread:
+    def test_subscribes_before_publishing_request(self):
+        client = _make_client()
+        live_thread = Mock()
+        live_thread.is_alive.return_value = True
+        client._client_thread = live_thread
+
+        class ImmediateResponseQueue:
+            def put(self, event):
+                client._client_thread_signal.emit({
+                    "id": event["id"],
+                    "data": "done",
+                })
+
+        client._client_queue = ImmediateResponseQueue()
+
+        result = client._send_claude_agent_request(
+            ClaudeAgentEventType.Query, {}
+        )
+
+        assert result == {"data": "done", "success": True, "error": None}
+
     def test_bails_out_quickly_when_worker_thread_dead(self, monkeypatch):
         # Make the poll loop's sleep a no-op so a slow test host doesn't mask
         # the bug: the behavior we're guarding is structural (returns without

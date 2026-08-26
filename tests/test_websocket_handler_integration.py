@@ -634,10 +634,10 @@ class TestWebsocketHandlerIntegration:
             str(upload_root / "bad name.pdf"),
             str(upload_root / "bad‮name.pdf"),
         ]
-        for hazardous in hazardous_paths:
+        for index, hazardous in enumerate(hazardous_paths):
             mock_ai_manager.handle_chat_request.reset_mock()
             message = {
-                'id': 'test-message-id',
+                'id': f'test-message-id-{index}',
                 'type': 'chat-request',
                 'data': {
                     'chatId': 'test-chat-id',

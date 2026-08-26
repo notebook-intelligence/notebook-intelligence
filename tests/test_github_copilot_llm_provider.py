@@ -476,6 +476,37 @@ class TestResponsesEndToEnd:
         assert called_url.endswith("/chat/completions")
         assert "messages" in post.call_args.kwargs["json"]
 
+    def test_chat_completions_stops_streaming_after_cancellation(self):
+        events = [
+            _FakeEvent('{"choices":[{"delta":{"content":"late"}}]}'),
+            _FakeEvent("[DONE]"),
+        ]
+        request_mock, sse_mock = self._make_request_mock(events)
+        response = MagicMock()
+
+        class CancelAfterRequestStarts:
+            checks = 0
+
+            @property
+            def is_cancel_requested(self):
+                self.checks += 1
+                return self.checks > 1
+
+        cancel_token = CancelAfterRequestStarts()
+
+        with patch.object(gh_copilot, "generate_copilot_headers", return_value={}), \
+             patch("notebook_intelligence.github_copilot.requests.post", return_value=request_mock), \
+             patch("notebook_intelligence.github_copilot.sseclient.SSEClient", return_value=sse_mock):
+            gh_copilot.completions(
+                "gpt-4.1",
+                [{"role": "user", "content": "hi"}],
+                response=response,
+                cancel_token=cancel_token,
+            )
+
+        response.finish.assert_called_once_with()
+        response.stream.assert_not_called()
+
 
 class TestResponsesStreamingMode:
     """Covers the non-aggregate branch of `responses()`. The aggregate path

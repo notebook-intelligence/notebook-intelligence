@@ -72,6 +72,7 @@ class Client:
         self._client_info = client_info
         self._stack: Optional[AsyncExitStack] = None
         self._session: Optional[ClientSession] = None
+        self._server_capabilities = None
 
     async def __aenter__(self) -> "Client":
         stack = AsyncExitStack()
@@ -100,7 +101,7 @@ class Client:
             session = await stack.enter_async_context(
                 ClientSession(read, write, client_info=self._client_info)
             )
-            await session.initialize()
+            initialize_result = await session.initialize()
         except BaseException:
             # The exit stack owns every context we entered above; let it
             # tear them down in reverse order before re-raising so we
@@ -113,12 +114,14 @@ class Client:
             raise
         self._stack = stack
         self._session = session
+        self._server_capabilities = initialize_result.capabilities
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         stack = self._stack
         self._stack = None
         self._session = None
+        self._server_capabilities = None
         if stack is None:
             return False
         return await stack.__aexit__(exc_type, exc, tb)
@@ -132,6 +135,22 @@ class Client:
 
     async def ping(self) -> Any:
         return await self._require_session().send_ping()
+
+    @property
+    def supports_tools(self) -> bool:
+        """Whether the server advertised the MCP tools capability."""
+        return (
+            self._server_capabilities is not None
+            and self._server_capabilities.tools is not None
+        )
+
+    @property
+    def supports_prompts(self) -> bool:
+        """Whether the server advertised the MCP prompts capability."""
+        return (
+            self._server_capabilities is not None
+            and self._server_capabilities.prompts is not None
+        )
 
     async def list_tools(self):
         """Return a list of ``mcp.types.Tool``, matching fastmcp's shape."""

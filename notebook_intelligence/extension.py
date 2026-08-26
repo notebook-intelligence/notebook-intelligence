@@ -26,7 +26,7 @@ from jupyter_server.utils import url_path_join
 import tornado
 from tornado import websocket
 from traitlets import Bool, Enum as TraitletEnum, Int, List, Unicode
-from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl
+from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl, UICommandCancelledError, UserInputCancelledError
 from notebook_intelligence.ai_service_manager import AIServiceManager
 from notebook_intelligence.cell_output import coerce_payload as _coerce_output_context, format_output_context as _format_output_context
 from notebook_intelligence.feature_flags import (
@@ -2166,6 +2166,12 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         self.chat_history = chat_history
         self.streamed_contents = []
         self.streamed_reasoning_contents = []
+        self._lifecycle_lock = threading.RLock()
+        self._finished = False
+        self._finishing = False
+        self._warned_after_finish = False
+        # Lock order is lifecycle -> UI-command/user-input state. State
+        # callbacks never acquire the lifecycle lock in the reverse order.
         # Capture the Tornado IOLoop the websocket lives on. stream() /
         # finish() / run_ui_command() get called from worker threads
         # (Claude SDK, MCP, base chat participant); writing directly to
@@ -2177,9 +2183,55 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         self._io_loop = tornado.ioloop.IOLoop.current()
 
     def _send_async(self, message: dict) -> None:
-        self._io_loop.asyncio_loop.call_soon_threadsafe(
-            self.websocket_handler.write_message, message
-        )
+        def _write_if_open(pending_message: dict) -> None:
+            if getattr(self.websocket_handler, "ws_connection", None) is None:
+                log.debug(
+                    "Ignoring response %s after websocket closed",
+                    self.messageId,
+                )
+                return
+            try:
+                self.websocket_handler.write_message(pending_message)
+            except websocket.WebSocketClosedError:
+                log.debug(
+                    "Ignoring response %s after websocket closed",
+                    self.messageId,
+                )
+
+        try:
+            self._io_loop.asyncio_loop.call_soon_threadsafe(
+                _write_if_open, message
+            )
+        except RuntimeError:
+            log.debug(
+                "Ignoring response %s after event loop closed",
+                self.messageId,
+            )
+
+    def stream_transient_markdown(self, content: str) -> None:
+        """Stream a user-facing notice without adding it to model history."""
+        with self._lifecycle_lock:
+            if self._finished:
+                return
+            self._send_async({
+                "id": self.messageId,
+                "participant": self.participant_id,
+                "type": BackendMessageType.StreamMessage,
+                "data": {
+                    "choices": [{
+                        "delta": {
+                            "nbiContent": {
+                                "type": ResponseStreamDataType.MarkdownPart,
+                                "content": content,
+                                "reasoning_content": None,
+                            },
+                            "content": "",
+                            "role": "assistant",
+                        }
+                    }]
+                },
+                "created": dt.datetime.now().isoformat(),
+            })
 
     @property
     def chat_id(self) -> str:
@@ -2190,6 +2242,18 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         return self.messageId
 
     def stream(self, data: Union[ResponseStreamData, dict]):
+        with self._lifecycle_lock:
+            if self._finished:
+                if not self._warned_after_finish:
+                    self._warned_after_finish = True
+                    log.warning(
+                        "Ignoring stream data after response %s finished",
+                        self.messageId,
+                    )
+                return
+            self._stream_unlocked(data)
+
+    def _stream_unlocked(self, data: Union[ResponseStreamData, dict]):
         data_type = ResponseStreamDataType.LLMRaw if type(data) is dict else data.data_type
 
         if data_type == ResponseStreamDataType.Markdown:
@@ -2390,18 +2454,18 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
                 ]
             }
             if content is not None:
-                self.streamed_contents.append(content)
+                self.streamed_contents.append(str(content))
             if reasoning_content is not None:
-                self.streamed_reasoning_contents.append(reasoning_content)
+                self.streamed_reasoning_contents.append(str(reasoning_content))
         else: # ResponseStreamDataType.LLMRaw
             if len(data.get("choices", [])) > 0:
                 delta = data["choices"][0].get("delta", {})
                 content = delta.get("content", "")
                 reasoning_content = delta.get("reasoning_content", "")
                 if content is not None:
-                    self.streamed_contents.append(content)
+                    self.streamed_contents.append(str(content))
                 if reasoning_content is not None:
-                    self.streamed_reasoning_contents.append(reasoning_content)
+                    self.streamed_reasoning_contents.append(str(reasoning_content))
 
         self._send_async({
             "id": self.messageId,
@@ -2412,29 +2476,93 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         })
 
     def finish(self) -> None:
-        self.chat_history.add_message(self.chatId, {"role": "assistant", "content": "".join(self.streamed_contents), "reasoning_content": "".join(self.streamed_reasoning_contents)})
-        self.streamed_contents = []
-        self.streamed_reasoning_contents = []
-        self._send_async({
-            "id": self.messageId,
-            "participant": self.participant_id,
-            "type": BackendMessageType.StreamEnd,
-            "data": {}
-        })
+        with self._lifecycle_lock:
+            if self._finished or self._finishing:
+                return
+            self._finishing = True
+            try:
+                content = "".join(str(part) for part in self.streamed_contents)
+                reasoning_content = "".join(
+                    str(part) for part in self.streamed_reasoning_contents
+                )
+                self.streamed_contents = []
+                self.streamed_reasoning_contents = []
+                if content or reasoning_content:
+                    try:
+                        self.chat_history.add_message(self.chatId, {
+                            "role": "assistant",
+                            "content": content,
+                            "reasoning_content": reasoning_content,
+                        })
+                    except Exception:
+                        log.exception(
+                            "Failed to persist response %s before finalizing",
+                            self.messageId,
+                        )
+                try:
+                    self.cancel_pending_ui_commands(
+                        f"Response {self.messageId} finished before the UI command completed"
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to cancel UI commands for response %s",
+                        self.messageId,
+                    )
+                try:
+                    self.cancel_pending_user_inputs(
+                        f"Response {self.messageId} finished before user input arrived"
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to cancel user input for response %s",
+                        self.messageId,
+                    )
+                self._send_async({
+                    "id": self.messageId,
+                    "participant": self.participant_id,
+                    "type": BackendMessageType.StreamEnd,
+                    "data": {}
+                })
+                self._finished = True
+            finally:
+                self._finishing = False
 
-    async def run_ui_command(self, command: str, args: dict = {}) -> None:
+    async def run_ui_command(self, command: str, args: dict = {}) -> dict:
         callback_id = str(uuid.uuid4())
-        self._send_async({
-            "id": self.messageId,
-            "participant": self.participant_id,
-            "type": BackendMessageType.RunUICommand,
-            "data": {
-                "callback_id": callback_id,
-                "commandId": command,
-                "args": args
-            }
-        })
-        response = await ChatResponse.wait_for_run_ui_command_response(self, callback_id)
+        with self._lifecycle_lock:
+            if self._finished:
+                error = (
+                    f"Cannot run UI command '{command}' after response "
+                    f"{self.messageId} finished"
+                )
+                log.warning(
+                    "Rejecting UI command: %s",
+                    error,
+                )
+                raise UICommandCancelledError(error)
+            pending = self.prepare_run_ui_command_response(callback_id)
+            try:
+                if not pending.done():
+                    self._send_async({
+                        "id": self.messageId,
+                        "participant": self.participant_id,
+                        "type": BackendMessageType.RunUICommand,
+                        "data": {
+                            "callback_id": callback_id,
+                            "commandId": command,
+                            "args": args
+                        }
+                    })
+            except Exception:
+                with self._run_ui_command_state_lock:
+                    self._pending_ui_commands.pop(callback_id, None)
+                pending.cancel()
+                raise
+        response = await ChatResponse.wait_for_run_ui_command_response(
+            self,
+            callback_id,
+            pending,
+        )
         return response
 
 class CancelTokenImpl(CancelToken):
@@ -2564,9 +2692,18 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
         ai_service_manager.websocket_connector = ws_connector
         github_copilot.websocket_connector = ws_connector
 
-    def _run_request_thread(self, coro, message_id):
-        """Worker-thread entrypoint that pops the messageId from
-        `_messageCallbackHandlers` on completion (success or failure).
+    def _run_request_thread(self, coro, message_id, response_emitter):
+        """Worker-thread entrypoint that finalizes the explicit emitter and
+        pops the messageId on completion (success or failure).
+
+        Passing the emitter directly keeps terminal delivery independent of a
+        concurrent cancellation removing the callback-handler entry before
+        this worker starts.
+
+        Participant handlers must finish streaming before their awaited
+        coroutine returns. Background work that retains an emitter after
+        return is unsupported because this wrapper closes the response stream.
+
         The dict entry is only needed while the request is in flight —
         ChatUserInput / RunUICommandResponse / Cancel messages from the
         client are routed to the emitter by messageId, and the client
@@ -2574,8 +2711,32 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
         """
         try:
             asyncio.run(coro)
+        except (UICommandCancelledError, UserInputCancelledError) as error:
+            log.debug("Request %s cancelled: %s", message_id, error)
+        except Exception:
+            log.exception("Unhandled error while processing request %s", message_id)
+            try:
+                response_emitter.stream_transient_markdown(
+                    "\n\nOops! There was a problem handling this request. "
+                    "Please try again. Check the server logs for details."
+                )
+            except Exception:
+                log.exception(
+                    "Failed to stream terminal notice for request %s",
+                    message_id,
+                )
         finally:
-            self._messageCallbackHandlers.pop(message_id, None)
+            try:
+                if response_emitter is not None:
+                    response_emitter.finish()
+            except Exception:
+                log.exception("Failed to finalize request %s", message_id)
+            handlers = self._messageCallbackHandlers.get(message_id)
+            if (
+                handlers is not None
+                and handlers.response_emitter is response_emitter
+            ):
+                self._messageCallbackHandlers.pop(message_id, None)
 
     @ws_authenticated
     def open(self):
@@ -2595,6 +2756,25 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
 
         messageId = msg['id']
         messageType = msg['type']
+        handlers = self._messageCallbackHandlers.get(messageId)
+        if handlers is not None and messageType in (
+            RequestDataType.ChatRequest,
+            RequestDataType.GenerateCode,
+            RequestDataType.InlineCompletionRequest,
+        ):
+            log.warning("Rejecting duplicate active request id %s", messageId)
+            # The id cannot identify a separate terminal response for the
+            # duplicate without also terminating the original request. Keep
+            # the registered request alive and discard only the duplicate.
+            if (
+                messageType != RequestDataType.InlineCompletionRequest
+                and handlers.response_emitter is not None
+            ):
+                handlers.response_emitter.stream_transient_markdown(
+                    "\n\nA duplicate submission with this message ID was ignored; "
+                    "the original request is still running."
+                )
+            return
         if messageType == RequestDataType.ChatRequest:
             data = msg['data']
             chatId = data['chatId']
@@ -2877,7 +3057,7 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             # last prompt is added later
             request_chat_history = chat_history[chat_history_initial_size:-1] if is_agent_session_mode else chat_history[:-1]
             coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context, permission_mode=permission_mode), response_emitter)
-            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId))
+            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.GenerateCode:
             data = msg['data']
@@ -2914,7 +3094,7 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             )
             
             coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, rule_context=rule_context), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."})
-            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId))
+            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:
             data = msg['data']
@@ -2930,7 +3110,7 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
 
             coro = WebsocketCopilotHandler.handle_inline_completions(prefix, suffix, language, filename, response_emitter, cancel_token)
-            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId))
+            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.ChatUserInput:
             handlers = self._messageCallbackHandlers.get(messageId)
@@ -2966,6 +3146,12 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             handlers = self._messageCallbackHandlers.get(messageId)
             if handlers is None:
                 return
+            handlers.response_emitter.cancel_pending_ui_commands(
+                "Request cancelled before the UI command completed"
+            )
+            handlers.response_emitter.cancel_pending_user_inputs(
+                "Request cancelled before user input arrived"
+            )
             handlers.cancel_token.cancel_request()
  
     def on_close(self):
@@ -2981,6 +3167,12 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
         # "dictionary changed size during iteration" here on the IOLoop thread.
         for handlers in list(self._messageCallbackHandlers.values()):
             try:
+                handlers.response_emitter.cancel_pending_ui_commands(
+                    "WebSocket closed before the UI command completed"
+                )
+                handlers.response_emitter.cancel_pending_user_inputs(
+                    "WebSocket closed before user input arrived"
+                )
                 handlers.cancel_token.cancel_request()
             except Exception as e:
                 log.warning(f"Error cancelling in-flight request on close: {e}")

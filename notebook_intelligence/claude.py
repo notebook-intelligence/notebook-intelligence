@@ -15,7 +15,7 @@ from typing import Any, Optional, TYPE_CHECKING
 import uuid
 import re
 from anyio.abc import Process
-from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData
+from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData, UICommandCancelledError, UserInputCancelledError
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS
 from notebook_intelligence.feature_flags import is_external_ui_tools_active
@@ -1465,8 +1465,6 @@ class ClaudeCodeClient():
                 "error": "Claude agent is not connected",
             }
 
-        queue.put(event)
-
         resp = {"data": None}
         def _on_client_response(data: dict):
             if data['id'] == event_id:
@@ -1484,6 +1482,10 @@ class ClaudeCodeClient():
         response_obj = event_args.get("response") if event_args else None
 
         try:
+            # Subscribe before publishing the request. A fast worker can emit
+            # its response synchronously from queue.put(), so publishing first
+            # would lose the response and leave this call polling until timeout.
+            queue.put(event)
             while True:
                 self._reconnect_required = False
                 nbi_request_obj = get_current_request()
@@ -1951,6 +1953,18 @@ async def invoke_ui_tool(name: str, arguments: dict, timeout: float = CLAUDE_AGE
 async def custom_permission_handler(
     tool_name: str,
     input_data: dict,
+    context: dict,
+):
+    try:
+        return await _custom_permission_handler(tool_name, input_data, context)
+    except (UserInputCancelledError, UICommandCancelledError) as error:
+        log.debug("Permission request for %s cancelled: %s", tool_name, error)
+        return PermissionResultDeny(message="Request cancelled", interrupt=True)
+
+
+async def _custom_permission_handler(
+    tool_name: str,
+    input_data: dict,
     context: dict
 ):
     """Custom logic for tool permissions."""
@@ -1970,15 +1984,20 @@ async def custom_permission_handler(
     callback_id = str(uuid.uuid4())
 
     if tool_name == "EnterPlanMode":
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             title="Enter Plan Mode",
             message="Claude wants to enter plan mode to explore and design an implementation approach. In plan mode, Claude will explore the codebase thoroughly, identify existing patterns, design an implementation strategy, and present a plan for your approval. No code changes will be made until you approve the plan.",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Yes, enter plan mode",
             cancelLabel="No, start implementing now",
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == True:
             response.stream(MarkdownData(f"&#x2713; Entered plan mode"))
             return PermissionResultAllow()
@@ -1990,25 +2009,35 @@ async def custom_permission_handler(
             response.stream(MarkdownData(plan))
         else:
             log.error(f"No plan provided in ExitPlanMode tool call")
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message="Do you want to confirm the plan above?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Yes, approve plan",
             cancelLabel="No, continue planning",
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == True:
             await apply_permission_mode(get_current_claude_client(), DEFAULT_PERMISSION_MODE)
             return PermissionResultAllow(updated_input={"message": "Plan approved", "approved": True})
         else:
             return PermissionResultDeny(message="User did not confirm the plan", interrupt=True)
     elif tool_name == "AskUserQuestion":
-        response.stream(AskUserQuestionData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            AskUserQuestionData(
             identifier={"id": response.message_id, "callback_id": callback_id},
             questions=input_data['questions']
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == False or len(user_input['selectedAnswers']) == 0:
             return PermissionResultDeny(message="User did not choose any options", interrupt=True)
         else:
@@ -2022,14 +2051,18 @@ async def custom_permission_handler(
             })
     elif tool_name == "Bash":
         response.stream(MarkdownData(f"&#x2713; **{input_data.get('description', '')}**\n```shell\n{input_data.get('command', '')}\n```"))
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message=f"Approve Bash tool to execute the command above?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == False:
-            response.finish()
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
         log.debug(f"Allowing tool {tool_name} with input {input_data}")
@@ -2041,15 +2074,19 @@ async def custom_permission_handler(
         if tool_name in _approved_tools_for_response:
             return PermissionResultAllow()
         response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message=f"Are you sure you want to call this tool?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             confirmSessionArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed_for_session": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input.get('confirmed', None) == False:
-            response.finish()
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
         if user_input.get('confirmed_for_session', None) == True:

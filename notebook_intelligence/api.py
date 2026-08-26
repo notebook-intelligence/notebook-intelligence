@@ -9,6 +9,7 @@ from enum import Enum
 import uuid
 from fuzzy_json import loads as fuzzy_json_loads
 import logging
+import threading
 from mcp.server.fastmcp.tools import Tool as MCPToolClass
 
 from notebook_intelligence.config import NBIConfig
@@ -27,6 +28,14 @@ class RegistrationError(Exception):
     production logs that authors rarely read. Raising lets the loader
     surface the failure at install/import time instead.
     """
+
+
+class UICommandCancelledError(RuntimeError):
+    """Raised when a pending frontend command cannot produce a result."""
+
+
+class UserInputCancelledError(RuntimeError):
+    """Raised when pending interactive input cannot produce a result."""
 
 
 class RequestDataType(str, Enum):
@@ -82,8 +91,10 @@ class MCPServerStatus(str, Enum):
     Connected = 'connected'
     UpdatingToolList = 'updating-tool-list'
     UpdatedToolList = 'updated-tool-list'
+    FailedToUpdateToolList = 'failed-to-update-tool-list'
     UpdatingPromptList = 'updating-prompt-list'
     UpdatedPromptList = 'updated-prompt-list'
+    FailedToUpdatePromptList = 'failed-to-update-prompt-list'
 
 class ClaudeToolType(str, Enum):
   ClaudeCodeTools = 'claude-code:built-in-tools'
@@ -92,9 +103,11 @@ class ClaudeToolType(str, Enum):
 class Signal:
     def __init__(self):
         self._listeners = []
+        self._listeners_lock = threading.Lock()
 
     def connect(self, listener: Callable) -> None:
-        self._listeners.append(listener)
+        with self._listeners_lock:
+            self._listeners.append(listener)
 
     def disconnect(self, listener: Callable) -> None:
         # `list.remove` raises ``ValueError`` on a missing entry; tolerating
@@ -102,17 +115,43 @@ class Signal:
         # plugin disconnects twice or after a crash recovery. Surfaced at
         # DEBUG so a real plugin bug can still be diagnosed if the noise
         # ever matters.
-        try:
-            self._listeners.remove(listener)
-        except ValueError:
-            log.debug("Signal.disconnect: listener %r was not connected", listener)
+        with self._listeners_lock:
+            try:
+                self._listeners.remove(listener)
+            except ValueError:
+                log.debug("Signal.disconnect: listener %r was not connected", listener)
+
+    def __deepcopy__(self, memo):
+        """Copy the listener registry without copying its thread lock.
+
+        Subscribers are intentionally not carried into an independent copy;
+        retaining bound listeners would couple cancellation across requests.
+        """
+        copied = object.__new__(type(self))
+        memo[id(self)] = copied
+        copied.__setstate__({"_listeners": []})
+        return copied
+
+    def __getstate__(self):
+        """Serialize listeners while excluding the non-picklable lock."""
+        with self._listeners_lock:
+            return {"_listeners": list(self._listeners)}
+
+    def __setstate__(self, state):
+        self._listeners = state.get("_listeners", [])
+        self._listeners_lock = threading.Lock()
 
 class SignalImpl(Signal):
     def __init__(self):
         super().__init__()
 
     def emit(self, *args, **kwargs) -> None:
-        for listener in self._listeners:
+        # Listener callbacks may disconnect themselves from another thread
+        # while an event is being delivered. Iterate a synchronized snapshot
+        # so list compaction cannot skip a pending request's callback.
+        with self._listeners_lock:
+            listeners = tuple(self._listeners)
+        for listener in listeners:
             listener(*args, **kwargs)
 
 class CancelToken:
@@ -310,7 +349,13 @@ class CompletionContext:
 class ChatResponse:
     def __init__(self):
         self._user_input_signal: SignalImpl = SignalImpl()
+        self._user_input_state_lock = threading.RLock()
+        self._pending_user_inputs: dict[str, asyncio.Future] = {}
+        self._user_input_cancel_reason: Optional[str] = None
         self._run_ui_command_response_signal: SignalImpl = SignalImpl()
+        self._run_ui_command_state_lock = threading.RLock()
+        self._pending_ui_commands: dict[str, asyncio.Future] = {}
+        self._run_ui_command_cancel_reason: Optional[str] = None
         self.participant_id = ''
         # Cumulative wall-clock seconds spent blocked on a user reply (tool
         # approval, plan confirm, AskUserQuestion), plus the start of any wait
@@ -320,16 +365,18 @@ class ChatResponse:
         # (issue #381).
         self._user_input_wait_total = 0.0
         self._user_input_wait_started = None
+        self._user_input_wait_count = 0
 
     @property
     def user_input_wait_seconds(self) -> float:
         """Total time this response has spent awaiting user input, including
         any wait still in progress."""
-        total = self._user_input_wait_total
-        started = self._user_input_wait_started
-        if started is not None:
-            total += time.time() - started
-        return total
+        with self._user_input_state_lock:
+            total = self._user_input_wait_total
+            started = self._user_input_wait_started
+            if self._user_input_wait_count > 0 and started is not None:
+                total += time.monotonic() - started
+            return total
 
     @property
     def message_id(self) -> str:
@@ -346,31 +393,117 @@ class ChatResponse:
         return self._user_input_signal
 
     def on_user_input(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            log.warning("Ignoring malformed user-input response: %r", data)
+            return
+        callback_id = data.get('callback_id')
+        if not isinstance(callback_id, str) or not callback_id or 'data' not in data:
+            log.warning("Ignoring malformed user-input response: %r", data)
+            return
+        with self._user_input_state_lock:
+            cancelled = self._user_input_cancel_reason is not None
+            pending = None if cancelled else self._pending_user_inputs.pop(
+                callback_id,
+                None,
+            )
+        if pending is not None:
+            try:
+                pending.get_loop().call_soon_threadsafe(
+                    self._resolve_user_input,
+                    pending,
+                    data['data'],
+                )
+            except RuntimeError:
+                pass
+        # Preserve the public signal contract for extension listeners. Core
+        # approval handling uses the guarded future above, so a late signal
+        # cannot override terminal cancellation.
         self._user_input_signal.emit(data)
 
-    @staticmethod
-    async def wait_for_chat_user_input(response: 'ChatResponse', callback_id: str):
-        resp = {"data": None}
-        def _on_user_input(data: dict):
-            if data['callback_id'] == callback_id:
-                resp["data"] = data['data']
+    def cancel_pending_user_inputs(self, reason: str) -> None:
+        with self._user_input_state_lock:
+            self._user_input_cancel_reason = reason
+            pending_inputs = list(self._pending_user_inputs.values())
+            self._pending_user_inputs.clear()
+        for pending in pending_inputs:
+            try:
+                pending.get_loop().call_soon_threadsafe(
+                    self._reject_user_input,
+                    pending,
+                    reason,
+                )
+            except RuntimeError:
+                pass
 
-        response.user_input_signal.connect(_on_user_input)
-        response._user_input_wait_started = time.time()
+    @staticmethod
+    def _resolve_user_input(pending: asyncio.Future, data: Any) -> None:
+        if not pending.done():
+            pending.set_result(data)
+
+    @staticmethod
+    def _reject_user_input(pending: asyncio.Future, reason: str) -> None:
+        if not pending.done():
+            pending.set_exception(UserInputCancelledError(reason))
+
+    def prepare_chat_user_input(self, callback_id: str) -> asyncio.Future:
+        """Register an expected callback before its prompt is streamed."""
+        pending = asyncio.get_running_loop().create_future()
+        pending.add_done_callback(self._consume_future_exception)
+        with self._user_input_state_lock:
+            reason = self._user_input_cancel_reason
+            if reason is None:
+                self._pending_user_inputs[callback_id] = pending
+        if reason is not None:
+            self._reject_user_input(pending, reason)
+        return pending
+
+    def stream_user_input_request(
+        self,
+        callback_id: str,
+        data: ResponseStreamData,
+    ) -> asyncio.Future:
+        """Register expected input and stream its prompt as one operation."""
+        pending = self.prepare_chat_user_input(callback_id)
+        try:
+            self.stream(data)
+        except BaseException:
+            with self._user_input_state_lock:
+                if self._pending_user_inputs.get(callback_id) is pending:
+                    self._pending_user_inputs.pop(callback_id, None)
+            pending.cancel()
+            raise
+        return pending
+
+    @staticmethod
+    async def wait_for_chat_user_input(
+        response: 'ChatResponse',
+        callback_id: str,
+        pending: Optional[asyncio.Future] = None,
+    ):
+        if pending is None:
+            pending = response.prepare_chat_user_input(callback_id)
+        with response._user_input_state_lock:
+            if response._user_input_wait_count == 0:
+                response._user_input_wait_started = time.monotonic()
+            response._user_input_wait_count += 1
 
         try:
-            while True:
-                if resp["data"] is not None:
-                    return resp["data"]
-                await asyncio.sleep(0.1)
+            return await pending
         finally:
-            response.user_input_signal.disconnect(_on_user_input)
-            started = response._user_input_wait_started
-            if started is not None:
-                response._user_input_wait_total += time.time() - started
-                response._user_input_wait_started = None
+            with response._user_input_state_lock:
+                if response._pending_user_inputs.get(callback_id) is pending:
+                    response._pending_user_inputs.pop(callback_id, None)
+            with response._user_input_state_lock:
+                response._user_input_wait_count -= 1
+                if response._user_input_wait_count == 0:
+                    started = response._user_input_wait_started
+                    if started is not None:
+                        response._user_input_wait_total += (
+                            time.monotonic() - started
+                        )
+                    response._user_input_wait_started = None
 
-    async def run_ui_command(self, command: str, args: dict = {}) -> None:
+    async def run_ui_command(self, command: str, args: dict = {}) -> dict:
         raise NotImplementedError
     
     @property
@@ -378,24 +511,85 @@ class ChatResponse:
         return self._run_ui_command_response_signal
     
     def on_run_ui_command_response(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            log.warning("Ignoring malformed UI-command response: %r", data)
+            return
+        callback_id = data.get('callback_id')
+        if not isinstance(callback_id, str) or not callback_id or 'result' not in data:
+            log.warning("Ignoring malformed UI-command response: %r", data)
+            return
+        with self._run_ui_command_state_lock:
+            pending = self._pending_ui_commands.pop(callback_id, None)
+        if pending is not None:
+            try:
+                pending.get_loop().call_soon_threadsafe(
+                    self._resolve_ui_command,
+                    pending,
+                    data['result'],
+                )
+            except RuntimeError:
+                pass
         self._run_ui_command_response_signal.emit(data)
 
+    def cancel_pending_ui_commands(self, reason: str) -> None:
+        with self._run_ui_command_state_lock:
+            self._run_ui_command_cancel_reason = reason
+            pending_commands = list(self._pending_ui_commands.values())
+            self._pending_ui_commands.clear()
+        for pending in pending_commands:
+            try:
+                pending.get_loop().call_soon_threadsafe(
+                    self._reject_ui_command,
+                    pending,
+                    reason,
+                )
+            except RuntimeError:
+                # The owning event loop has already shut down, so there is
+                # no worker left to wake.
+                pass
+
     @staticmethod
-    async def wait_for_run_ui_command_response(response: 'ChatResponse', callback_id: str):
-        resp = {"result": None}
-        def _on_ui_command_response(data: dict):
-            if data['callback_id'] == callback_id:
-                resp["result"] = data['result']
+    def _resolve_ui_command(pending: asyncio.Future, result: Any) -> None:
+        if not pending.done():
+            pending.set_result(result)
 
-        response.run_ui_command_response_signal.connect(_on_ui_command_response)
+    @staticmethod
+    def _reject_ui_command(pending: asyncio.Future, reason: str) -> None:
+        if not pending.done():
+            pending.set_exception(UICommandCancelledError(reason))
 
+    def prepare_run_ui_command_response(self, callback_id: str) -> asyncio.Future:
+        """Register a command waiter synchronously, before frontend dispatch."""
+        pending = asyncio.get_running_loop().create_future()
+        pending.add_done_callback(self._consume_future_exception)
+        with self._run_ui_command_state_lock:
+            reason = self._run_ui_command_cancel_reason
+            if reason is None:
+                self._pending_ui_commands[callback_id] = pending
+        if reason is not None:
+            self._reject_ui_command(pending, reason)
+        return pending
+
+    @staticmethod
+    def _consume_future_exception(pending: asyncio.Future) -> None:
+        """Prevent abandoned terminal futures from producing noisy warnings."""
+        if not pending.cancelled():
+            pending.exception()
+
+    @staticmethod
+    async def wait_for_run_ui_command_response(
+        response: 'ChatResponse',
+        callback_id: str,
+        pending: Optional[asyncio.Future] = None,
+    ):
+        if pending is None:
+            pending = response.prepare_run_ui_command_response(callback_id)
         try:
-            while True:
-                if resp["result"] is not None:
-                    return resp["result"]
-                await asyncio.sleep(0.1)
+            return await pending
         finally:
-            response.run_ui_command_response_signal.disconnect(_on_ui_command_response)
+            with response._run_ui_command_state_lock:
+                if response._pending_ui_commands.get(callback_id) is pending:
+                    response._pending_ui_commands.pop(callback_id, None)
 
 @dataclass
 class ToolPreInvokeResponse:
@@ -735,15 +929,21 @@ class ChatParticipant:
                         if tool_pre_invoke_response.message is not None:
                             response.stream(MarkdownData(f"&#x2713; {tool_pre_invoke_response.message}...", tool_pre_invoke_response.detail))
                         if tool_pre_invoke_response.confirmationMessage is not None:
-                            response.stream(ConfirmationData(
+                            pending_user_input = response.stream_user_input_request(
+                                tool_call['id'],
+                                ConfirmationData(
                                 title=tool_pre_invoke_response.confirmationTitle,
                                 message=tool_pre_invoke_response.confirmationMessage,
                                 confirmArgs={"id": response.message_id, "data": { "callback_id": tool_call['id'], "data": {"confirmed": True}}},
                                 cancelArgs={"id": response.message_id, "data": { "callback_id": tool_call['id'], "data": {"confirmed": False}}},
-                            ))
-                            user_input = await ChatResponse.wait_for_chat_user_input(response, tool_call['id'])
+                                ),
+                            )
+                            user_input = await ChatResponse.wait_for_chat_user_input(
+                                response,
+                                tool_call['id'],
+                                pending_user_input,
+                            )
                             if user_input['confirmed'] == False:
-                                response.finish()
                                 return
 
                     tool_call_response = await tool_to_call.handle_tool_call(request, response, tool_context, args)
@@ -766,6 +966,9 @@ class ChatParticipant:
                 else:
                     response.finish()
                     return
+            except (UserInputCancelledError, UICommandCancelledError) as error:
+                log.debug("Tool call loop cancelled: %s", error)
+                return
             except Exception as e:
                 log.error(f"Error in tool call loop: {str(e)}")
                 response.stream(MarkdownData(f"Oops! I am sorry, there was a problem generating response with tools. Please try again. You can check server logs for more details."))
