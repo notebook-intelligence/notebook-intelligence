@@ -130,6 +130,7 @@ log = logging.getLogger(__name__)
 
 APPROX_BYTES_PER_OUTPUT_TOKEN = 4
 DEFAULT_READ_FILE_MAX_OUTPUT_TOKENS = 10_000
+DEFAULT_CELL_OUTPUT_MAX_OUTPUT_TOKENS = 10_000
 READ_FILE_TRUNCATION_MARKER_TEMPLATE = (
     "\n[output truncated within line {line} column {column}]"
 )
@@ -196,6 +197,56 @@ def _truncate_read_file_output(
     truncated_content = _truncate_utf8_to_byte_budget(content, content_budget)
     marker = _read_file_truncation_marker(start_line, truncated_content)
     return prefix + truncated_content + marker
+
+
+def _bounded_cell_output(
+    value,
+    offset: int = 0,
+    limit: int = None,
+    max_output_tokens: int = DEFAULT_CELL_OUTPUT_MAX_OUTPUT_TOKENS,
+) -> str:
+    """Return a resumable cell-output page within an approximate token cap."""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return "Error: offset must be a non-negative integer"
+    if (
+        limit is not None
+        and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1)
+    ):
+        return "Error: limit must be a positive integer"
+
+    output = str(value)
+    start = min(offset, len(output))
+    end = len(output) if limit is None else min(len(output), start + limit)
+    page = output[start:end]
+    pagination_marker = ""
+    if start > 0 or end < len(output):
+        range_note = f"cell output characters {start}-{end} of {len(output)}"
+        if end < len(output):
+            range_note += f"; request offset={end} to continue"
+        pagination_marker = f"\n\n[{range_note}.]"
+
+    byte_budget = max(0, max_output_tokens) * APPROX_BYTES_PER_OUTPUT_TOKEN
+    normalized_page = page.encode("utf-8", errors="replace").decode("utf-8")
+    if len((normalized_page + pagination_marker).encode("utf-8")) <= byte_budget:
+        return normalized_page + pagination_marker
+
+    truncation_marker = (
+        f"\n\n[cell output truncated; request offset={offset} with a smaller limit.]"
+    )
+    content_budget = max(
+        0,
+        byte_budget - len(truncation_marker.encode("utf-8")),
+    )
+    head_budget = (content_budget * 3) // 4
+    tail_budget = content_budget - head_budget
+    head = _truncate_utf8_to_byte_budget(normalized_page, head_budget)
+    tail_bytes = (
+        normalized_page.encode("utf-8")[-tail_budget:]
+        if tail_budget > 0
+        else b""
+    )
+    tail = tail_bytes.decode("utf-8", errors="ignore")
+    return head + truncation_marker + tail
 
 
 @nbapi.auto_approve
@@ -312,16 +363,30 @@ async def get_cell_type_and_source(cell_index: int, **args) -> str:
 
 @nbapi.auto_approve
 @nbapi.tool
-async def get_cell_output(cell_index: int, **args) -> str:
+async def get_cell_output(
+    cell_index: int,
+    offset: int = 0,
+    limit: int = None,
+    **args,
+) -> str:
     """Get cell output for the cell at zero-based index for the active notebook.
 
     Args:
         cell_index: Zero based cell index
+        offset: Optional zero-based character offset into the output
+        limit: Optional maximum number of characters to return
     """
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return "Error: offset must be a non-negative integer"
+    if (
+        limit is not None
+        and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1)
+    ):
+        return "Error: limit must be a positive integer"
     response = args["response"]
     ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-cell-output', {"cellIndex": cell_index})
 
-    return str(ui_cmd_response)
+    return _bounded_cell_output(ui_cmd_response, offset=offset, limit=limit)
 
 @nbapi.auto_approve
 @nbapi.tool
