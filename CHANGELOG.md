@@ -22,6 +22,7 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 ### Fixed
 
+- **Claude inline edits now receive their intended system instructions and applicable workspace rules.** The inline-edit prompt is forwarded through the Claude handler to Anthropic's `system` field instead of being silently dropped before generation. Injected repository guidance is capped against the model context window, and disabling rules now suppresses `AGENTS.md` instructions as well as configured rule files.
 - **Session history follows `CLAUDE_CONFIG_DIR`** (#373). The chat-sidebar resume picker and the launcher tile's session list always read transcripts from `~/.claude/projects`, so both came up empty when the Claude CLI was configured with `CLAUDE_CONFIG_DIR` and wrote its transcripts elsewhere. The session listing now resolves the CLI's config dir the same way the skills and spinner-verbs paths already did.
 - **User-scope MCP config and the plugin cache follow `CLAUDE_CONFIG_DIR`** (#375). The MCP management tab read user-scope servers from `~/.claude.json` even though the CLI relocates that file to `$CLAUDE_CONFIG_DIR/.claude.json` when the override is set (so reads and CLI-mediated writes diverged), and the Plugins panel's cache fallback pointed at `~/.claude/plugins` instead of the relocated cache. Both now resolve the CLI's actual locations; `CLAUDE_CODE_PLUGIN_CACHE_DIR` still wins for the plugin cache when set.
 

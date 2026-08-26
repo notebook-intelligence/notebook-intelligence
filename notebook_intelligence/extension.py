@@ -73,6 +73,7 @@ from notebook_intelligence.claude import (
 )
 from notebook_intelligence.claude_mcp_manager import ClaudeMCPManager
 from notebook_intelligence.plugin_manager import PluginManager
+from notebook_intelligence.prompts import Prompts
 from notebook_intelligence.tour_config import load_tour_config
 from notebook_intelligence.claude_sessions import (
     NBI_CONTEXT_PREFIX,
@@ -107,6 +108,25 @@ def _truncate_context_content(content: str, token_budget: int) -> str:
         return ''
 
     return truncated + "\n...[truncated]"
+
+
+def _inline_system_prompt_token_budget(
+    manager,
+    chat_history: list[dict],
+    base_system_prompt: str,
+) -> int:
+    """Reserve at most 80% of context for inline history plus system text."""
+    context_budget = int(0.8 * _resolve_context_token_limit(manager))
+    history_tokens = sum(
+        _token_count(message.get("content", ""))
+        for message in chat_history
+        if isinstance(message, dict)
+        and isinstance(message.get("content", ""), str)
+    )
+    # The base code-generation instruction is essential even when the supplied
+    # code context already exceeds the target budget. In that case rules are
+    # omitted rather than trimming the behavioral contract itself.
+    return max(_token_count(base_system_prompt), context_budget - history_tokens)
 
 
 def _build_additional_context_message(
@@ -3081,8 +3101,6 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
             cancel_token = CancelTokenImpl()
             self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
-            existing_code_message = " Update the existing code section and return a modified version. Don't just return the update, recreate the existing code section with the update." if existing_code != '' else ''
-            
             # Create rule context for rule evaluation
             # Note: Using 'inline-chat' mode for rule matching even though chat_mode is 'ask' for handler compatibility
             rule_context = self._context_factory.create(
@@ -3093,7 +3111,21 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                 root_dir=NotebookIntelligence.root_dir
             )
             
-            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=self.chat_history.get_history(chatId), cancel_token=cancel_token, rule_context=rule_context), response_emitter, options={"system_prompt": f"You are an assistant that generates code for '{language}' language. You generate code between existing leading and trailing code sections.{existing_code_message} Be concise and return only code as a response. Don't include leading content or trailing content in your response, they are provided only for context. You can reuse methods and symbols defined in leading and trailing content."})
+            system_prompt = Prompts.inline_chat_system_prompt(
+                language,
+                modifying_existing_code=existing_code != '',
+            )
+            request_history = self.chat_history.get_history(chatId)
+            completion_options = {"system_prompt": system_prompt}
+            if is_claude_code_mode:
+                completion_options["system_prompt_token_budget"] = (
+                    _inline_system_prompt_token_budget(
+                        ai_service_manager,
+                        request_history,
+                        system_prompt,
+                    )
+                )
+            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter, options=completion_options)
             thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:
