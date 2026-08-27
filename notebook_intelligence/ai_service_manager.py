@@ -598,12 +598,18 @@ class AIServiceManager(Host):
             return
         response.participant_id = prompt_parts.participant
 
-        # add MCP server prompt messages to chat history
+        # Add MCP server prompt messages to chat history. Record their count
+        # so ask-mode budgeting can distinguish this current-request prompt
+        # sequence from prior conversation and keep its roles atomic.
+        request.mcp_prompt_message_count = 0
         if prompt_parts.mcp_prompt_name != "":
             mcp_server_prompt_messages = request.host.get_mcp_server_prompt_value(prompt_parts.mcp_server_name, prompt_parts.mcp_prompt_name, prompt_parts.mcp_arguments)
             if mcp_server_prompt_messages is not None:
                 for message in mcp_server_prompt_messages:
                     request.chat_history.append(message)
+                request.mcp_prompt_message_count = len(
+                    mcp_server_prompt_messages
+                )
             request.chat_history.append({"role": "user", "content": prompt_parts.input})
         else:
             request.chat_history.append({"role": "user", "content": prompt_parts.input})

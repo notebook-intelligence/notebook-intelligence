@@ -53,6 +53,16 @@ class OpenAICompatibleChatModel(ChatModel):
         except:
             return DEFAULT_CONTEXT_WINDOW
 
+    @property
+    def context_window_is_configured(self) -> bool:
+        context_window_prop = self.get_property("context_window")
+        if context_window_prop is None:
+            return False
+        try:
+            return int(context_window_prop.value) > 0
+        except (TypeError, ValueError):
+            return False
+
     def completions(self, messages: list[dict], tools: list[dict] = None, response: ChatResponse = None, cancel_token: CancelToken = None, options: dict = {}) -> Any:
         from openai import OpenAI, omit
         stream = response is not None

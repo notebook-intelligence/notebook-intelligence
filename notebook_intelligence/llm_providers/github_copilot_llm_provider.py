@@ -13,11 +13,12 @@ log = logging.getLogger(__name__)
 GH_COPILOT_EXCLUDED_MODELS = set(["o1"])
 
 class GitHubCopilotChatModel(ChatModel):
-    def __init__(self, provider: LLMProvider, model_id: str, model_name: str, context_window: int, supports_tools: bool):
+    def __init__(self, provider: LLMProvider, model_id: str, model_name: str, context_window: int, supports_tools: bool, context_window_is_configured: bool = True):
         super().__init__(provider)
         self._model_id = model_id
         self._model_name = model_name
         self._context_window = context_window
+        self._context_window_is_configured = context_window_is_configured
         self._supports_tools = supports_tools
 
     @property
@@ -31,6 +32,10 @@ class GitHubCopilotChatModel(ChatModel):
     @property
     def context_window(self) -> int:
         return self._context_window
+
+    @property
+    def context_window_is_configured(self) -> bool:
+        return self._context_window_is_configured
 
     @property
     def supports_tools(self) -> bool:
@@ -88,11 +93,25 @@ class GitHubCopilotLLMProvider(LLMProvider):
         cached = gh_copilot.copilot_models_cache
         if cached:
             return [
-                GitHubCopilotChatModel(self, entry["id"], entry["name"], entry["context_window"], True)
+                GitHubCopilotChatModel(
+                    self,
+                    entry["id"],
+                    entry["name"],
+                    entry["context_window"],
+                    True,
+                    entry.get("context_window_is_configured", True),
+                )
                 for entry in cached
             ]
         return [
-            GitHubCopilotChatModel(self, model_id, model_name, ctx, True)
+            GitHubCopilotChatModel(
+                self,
+                model_id,
+                model_name,
+                ctx,
+                True,
+                False,
+            )
             for (model_id, model_name, ctx) in self._FALLBACK_CHAT_MODELS
         ]
 
@@ -117,4 +136,3 @@ class GitHubCopilotLLMProvider(LLMProvider):
     @property
     def embedding_models(self) -> list[EmbeddingModel]:
         return []
-

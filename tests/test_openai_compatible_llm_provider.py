@@ -1,6 +1,10 @@
 from unittest.mock import MagicMock, patch
 
+from notebook_intelligence.base_chat_participant import (
+    _chat_history_context_window,
+)
 from notebook_intelligence.llm_providers.openai_compatible_llm_provider import (
+    DEFAULT_CONTEXT_WINDOW,
     OpenAICompatibleLLMProvider,
     sanitize_tools_for_openai_compatible,
 )
@@ -23,6 +27,19 @@ def test_sanitize_tools_for_openai_compatible_removes_function_strict_without_mu
 
     assert sanitized[0]["function"].get("strict") is None
     assert tools[0]["function"]["strict"] is True
+
+
+def test_blank_context_window_does_not_trigger_history_pruning():
+    model = OpenAICompatibleLLMProvider().chat_models[0]
+
+    assert model.context_window == DEFAULT_CONTEXT_WINDOW
+    assert model.context_window_is_configured is False
+    assert _chat_history_context_window(model) == 0
+
+    model.set_property_value("context_window", "65536")
+
+    assert model.context_window_is_configured is True
+    assert _chat_history_context_window(model) == 65536
 
 
 @patch("openai.OpenAI")

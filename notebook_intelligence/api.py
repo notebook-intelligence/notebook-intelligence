@@ -191,6 +191,10 @@ class ChatRequest:
     # Claude-mode permission mode, already clamped server-side against the
     # bypass policy and managed settings at the websocket boundary.
     permission_mode: str = 'default'
+    # These budgeting hints are appended to preserve the positional indexes
+    # of the existing public ChatRequest fields.
+    mcp_prompt_message_count: int = 0
+    required_context_message_count: int = 0
 
 @dataclass
 class ResponseStreamData:
@@ -1055,6 +1059,11 @@ class AIModel(LLMPropertyProvider):
     @property
     def context_window(self) -> int:
         raise NotImplementedError
+
+    @property
+    def context_window_is_configured(self) -> bool:
+        """Whether context_window is authoritative enough for pruning."""
+        return True
 
     @property
     def supports_tools(self) -> bool:

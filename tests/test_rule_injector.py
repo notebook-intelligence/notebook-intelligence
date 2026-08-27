@@ -1,7 +1,9 @@
 from unittest.mock import Mock, patch
 
+import notebook_intelligence.chat_history_budget as budget_module
 from notebook_intelligence.api import ChatRequest
-from notebook_intelligence.rule_injector import RuleInjector, _TOKEN_ENCODING
+from notebook_intelligence.chat_history_budget import text_token_count
+from notebook_intelligence.rule_injector import RuleInjector
 from notebook_intelligence.ruleset import Rule, RuleContext
 
 
@@ -123,7 +125,12 @@ class TestRuleInjector:
 
         assert result == "BASE"
 
-    def test_token_budget_truncates_additional_guidelines(self):
+    def test_token_budget_truncates_additional_guidelines(self, monkeypatch):
+        monkeypatch.setattr(
+            budget_module,
+            "_tokenizer_encoding",
+            budget_module.tiktoken.encoding_for_model("gpt-4o"),
+        )
         injector = RuleInjector()
         request = Mock(spec=ChatRequest)
         request.rule_context = Mock(spec=RuleContext)
@@ -137,7 +144,7 @@ class TestRuleInjector:
 
         assert result.startswith("BASE\n\n# Additional Guidelines")
         assert result.endswith("...[additional guidelines truncated]")
-        assert len(_TOKEN_ENCODING.encode(result)) <= 30
+        assert text_token_count(result) <= 30
 
     def test_inject_rules_with_agents_md_only(self, tmp_path):
         injector = RuleInjector()

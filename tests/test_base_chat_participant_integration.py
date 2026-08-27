@@ -1,14 +1,46 @@
 import asyncio
 from unittest.mock import Mock, AsyncMock
+
+import notebook_intelligence.base_chat_participant as base_participant_module
+import notebook_intelligence.chat_history_budget as budget_module
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.base_chat_participant import CreateNewNotebookTool
 from notebook_intelligence.base_chat_participant import ListAvailableNotebookKernelsTool
 from notebook_intelligence.api import ChatRequest, ChatResponse, ChatMode, CancelToken
+from notebook_intelligence.chat_history_budget import (
+    CHAT_INPUT_BUDGET_RATIO,
+    TRUNCATION_MARKER,
+    estimate_message_tokens,
+)
 from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.rule_injector import RuleInjector
 
 
 class TestBaseChatParticipantIntegration:
+    def test_history_budget_uses_window_for_models_without_configured_flag(self):
+        class LegacyChatModel:
+            context_window = 8192
+
+        assert (
+            base_participant_module._chat_history_context_window(
+                LegacyChatModel()
+            )
+            == 8192
+        )
+
+    def test_history_budget_fails_open_when_window_lookup_raises(self):
+        class BrokenChatModel:
+            @property
+            def context_window(self):
+                raise NotImplementedError
+
+        assert (
+            base_participant_module._chat_history_context_window(
+                BrokenChatModel()
+            )
+            == 0
+        )
+
     def test_init_with_default_rule_injector(self):
         """Test BaseChatParticipant initialization with default rule injector."""
         participant = BaseChatParticipant()
@@ -90,8 +122,153 @@ class TestBaseChatParticipantIntegration:
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "Enhanced system prompt"
 
-    def test_handle_chat_request_agent_mode_with_rules(self):
+    def test_ask_mode_budgets_oversized_history_as_complete_turns(self):
+        mock_injector = Mock(spec=RuleInjector)
+        mock_injector.inject_rules.return_value = "Enhanced system prompt"
+        participant = BaseChatParticipant(rule_injector=mock_injector)
+
+        mock_chat_model = Mock()
+        mock_chat_model.provider.name = "test-provider"
+        mock_chat_model.provider.id = "test-provider"
+        mock_chat_model.name = "test-model"
+        mock_chat_model.context_window = 256
+        mock_host = Mock()
+        mock_host.chat_model = mock_chat_model
+
+        request = ChatRequest(
+            host=mock_host,
+            chat_mode=ChatMode("ask", "Ask"),
+            prompt="current question",
+            chat_history=[
+                {"role": "user", "content": "old question " * 500},
+                {"role": "assistant", "content": "old answer " * 500},
+                {"role": "user", "content": "recent question"},
+                {"role": "assistant", "content": "recent answer"},
+                {"role": "user", "content": "current question"},
+            ],
+            cancel_token=Mock(spec=CancelToken),
+        )
+        response = Mock(spec=ChatResponse)
+
+        asyncio.run(participant.handle_ask_mode_chat_request(request, response))
+
+        messages = mock_chat_model.completions.call_args.args[0]
+        assert messages[-1]["content"] == "current question"
+        assert any(
+            message["content"] == "recent question" for message in messages
+        )
+        assert not any(
+            message["content"] == "old question " * 500 for message in messages
+        )
+
+    def test_ask_mode_fails_open_when_app_prompt_and_rules_cannot_both_fit(
+        self,
+        monkeypatch,
+    ):
+        class CharacterEncoding:
+            def encode(self, text, **_kwargs):
+                return [ord(character) for character in text]
+
+            def decode(self, tokens):
+                return "".join(chr(token) for token in tokens)
+
+        monkeypatch.setattr(
+            budget_module,
+            "_get_encoding",
+            lambda: CharacterEncoding(),
+        )
+        protected_rules = (
+            "# Additional Guidelines\n"
+            "# Repository Instructions (AGENTS.md)\n"
+            "Always use parameterized queries.\n\n"
+            "# Workspace Rules\nNever delete user data."
+        )
+        mock_injector = Mock(spec=RuleInjector)
+        mock_injector.inject_rules.return_value = (
+            "generic assistant prompt " * 500
+            + "\n\n"
+            + protected_rules
+        )
+        participant = BaseChatParticipant(rule_injector=mock_injector)
+
+        chat_model = Mock()
+        chat_model.provider.name = "test-provider"
+        chat_model.provider.id = "test-provider"
+        chat_model.name = "test-model"
+        chat_model.context_window = 512
+        host = Mock()
+        host.chat_model = chat_model
+        request = ChatRequest(
+            host=host,
+            chat_mode=ChatMode("ask", "Ask"),
+            prompt="current question",
+            chat_history=[
+                {"role": "user", "content": "current question"},
+            ],
+            cancel_token=Mock(spec=CancelToken),
+        )
+        response = Mock(spec=ChatResponse)
+
+        asyncio.run(
+            participant.handle_ask_mode_chat_request(request, response)
+        )
+
+        messages = chat_model.completions.call_args.args[0]
+        system_content = messages[0]["content"]
+        assert "Always use parameterized queries." in system_content
+        assert "Never delete user data." in system_content
+        assert TRUNCATION_MARKER not in system_content
+        assert system_content.count("generic assistant prompt") == 500
+
+    def test_builtin_generation_paths_budget_messages(self):
+        participant = BaseChatParticipant()
+        chat_model = Mock()
+        chat_model.context_window = 256
+        chat_model.completions.side_effect = [
+            {"choices": [{"message": {"content": "print('hello')"}}]},
+            {"choices": [{"message": {"content": "Generated explanation"}}]},
+            {"choices": [{"message": {"content": "print('file')"}}]},
+        ]
+        request = Mock(spec=ChatRequest)
+        request.host.chat_model = chat_model
+        request.chat_history = [
+            {"role": "user", "content": "old question " * 500},
+            {"role": "assistant", "content": "old answer " * 500},
+            {"role": "user", "content": "Generate it"},
+        ]
+        request.prompt = "Generate it"
+
+        asyncio.run(participant.generate_code_cell(request))
+        asyncio.run(participant.generate_markdown_for_code(request, "print('hello')"))
+
+        request.command = "newPythonFile"
+        response = Mock(spec=ChatResponse)
+        response.run_ui_command = AsyncMock(return_value={"path": "generated.py"})
+        asyncio.run(participant.handle_ask_mode_chat_request(request, response))
+
+        assert chat_model.completions.call_count == 3
+        for call in chat_model.completions.call_args_list:
+            messages = call.args[0]
+            assert not any(
+                message.get("content") == "old question " * 500
+                for message in messages
+            )
+            assert not any(
+                message.get("content") == "old answer " * 500
+                for message in messages
+            )
+            assert sum(
+                estimate_message_tokens(message) for message in messages
+            ) <= int(256 * CHAT_INPUT_BUDGET_RATIO)
+
+    def test_handle_chat_request_agent_mode_with_rules(self, monkeypatch):
         """Test agent mode chat request handling with rule injection."""
+        budget_mock = Mock()
+        monkeypatch.setattr(
+            base_participant_module,
+            "budget_chat_messages",
+            budget_mock,
+        )
         mock_injector = Mock(spec=RuleInjector)
         mock_injector.inject_rules.return_value = "Enhanced agent prompt"
         
@@ -153,6 +330,7 @@ class TestBaseChatParticipantIntegration:
         
         assert "system_prompt" in options
         assert options["system_prompt"] == "Enhanced agent prompt"
+        budget_mock.assert_not_called()
 
     def test_handle_ask_mode_new_notebook_uses_request_language_and_kernel(self):
         participant = BaseChatParticipant()

@@ -18,7 +18,6 @@ from typing import Optional, Union
 import uuid
 import threading
 import logging
-import tiktoken
 
 from jupyter_server.extension.application import ExtensionApp
 from jupyter_server.auth.decorator import ws_authenticated
@@ -81,6 +80,12 @@ from notebook_intelligence.claude import (
     resolve_permission_mode,
 )
 from notebook_intelligence.claude_mcp_manager import ClaudeMCPManager
+from notebook_intelligence.chat_history_budget import (
+    CHAT_INPUT_BUDGET_RATIO,
+    text_token_count as _token_count,
+    truncate_text as _truncate_context_content,
+    warm_tokenizer_encoding,
+)
 from notebook_intelligence.plugin_manager import PluginManager
 from notebook_intelligence.prompts import Prompts
 from notebook_intelligence.tour_config import load_tour_config
@@ -147,29 +152,7 @@ def _stream_chunk_byte_estimate(data) -> int:
     # when diagnostics are on, and it is still far cheaper than the
     # asdict + json.dumps this replaced.
     return len(content.encode("utf-8", errors="ignore"))
-
-
-tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
-
-
-def _token_count(text: str) -> int:
-    return len(tiktoken_encoding.encode(text))
-
-
-def _truncate_context_content(content: str, token_budget: int) -> str:
-    if token_budget <= 0 or content == '':
-        return ''
-
-    encoded = tiktoken_encoding.encode(content)
-    if len(encoded) <= token_budget:
-        return content
-
-    truncated = tiktoken_encoding.decode(encoded[:token_budget]).rstrip()
-    if truncated == '':
-        return ''
-
-    return truncated + "\n...[truncated]"
 
 
 def _inline_system_prompt_token_budget(
@@ -178,7 +161,9 @@ def _inline_system_prompt_token_budget(
     base_system_prompt: str,
 ) -> int:
     """Reserve at most 80% of context for inline history plus system text."""
-    context_budget = int(0.8 * _resolve_context_token_limit(manager))
+    context_budget = int(
+        CHAT_INPUT_BUDGET_RATIO * _resolve_context_token_limit(manager)
+    )
     history_tokens = sum(
         _token_count(message.get("content", ""))
         for message in chat_history
@@ -3233,7 +3218,7 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                     chat_history.append({"role": "user", "content": current_directory_file_msg})
 
                 token_limit = _resolve_context_token_limit(ai_service_manager)
-                remaining_token_budget = int(0.8 * token_limit)
+                remaining_token_budget = int(CHAT_INPUT_BUDGET_RATIO * token_limit)
 
                 # Resolve once; reused for sandbox containment and for
                 # workspace-relative @-mention path computation below.
@@ -3514,17 +3499,22 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                 language,
                 modifying_existing_code=existing_code != '',
             )
-            request_history = self.chat_history.get_history(chatId)
+            # AIServiceManager appends the final prompt. Exclude the persisted
+            # copy here, matching ordinary chat requests, so current-request
+            # context remains directly before that final prompt.
+            persisted_request_history = self.chat_history.get_history(chatId)
+            request_history = persisted_request_history[:-1]
+            inline_prompt = f"Generate code for: {prompt}"
             completion_options = {"system_prompt": system_prompt}
             if is_claude_code_mode:
                 completion_options["system_prompt_token_budget"] = (
                     _inline_system_prompt_token_budget(
                         ai_service_manager,
-                        request_history,
+                        persisted_request_history,
                         system_prompt,
                     )
                 )
-            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_history, cancel_token=cancel_token, rule_context=rule_context), response_emitter, options=completion_options)
+            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, prompt=inline_prompt, language=language, kernel_name=kernel_name, chat_history=request_history, cancel_token=cancel_token, rule_context=rule_context, required_context_message_count=1 if existing_code != '' else 0), response_emitter, options=completion_options)
             thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
             thread.start()
         elif messageType == RequestDataType.InlineCompletionRequest:
@@ -4161,7 +4151,7 @@ class NotebookIntelligence(ExtensionApp):
     )
 
     def initialize_settings(self):
-        pass
+        warm_tokenizer_encoding()
 
     def _publish_policies(self, feature_policies: dict, string_overrides: dict) -> None:
         """Wire the resolved policies into the HTTP handlers.
