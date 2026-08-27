@@ -179,15 +179,20 @@ describe('chatbook-core', () => {
     expect(chatbook.prompt).toBe('plot sales');
   });
 
-  it('converts cells to code, commenting prompts without generated code', () => {
-    const withCode = convertChatbookCellToCode({
+  it('converts cells to code, commenting prompts without generated code', async () => {
+    const promptHash = await sha256Hex('plot sales');
+    const withCode = await convertChatbookCellToCode({
       source: 'plot sales',
-      meta: { generatedCode: 'print(1)' }
+      meta: {
+        prompt: 'plot sales',
+        promptHash,
+        generatedCode: 'print(1)'
+      }
     });
     expect(withCode.source).toBe('print(1)');
     expect(withCode.meta.prompt).toBe('plot sales');
 
-    const commented = convertChatbookCellToCode({
+    const commented = await convertChatbookCellToCode({
       source: 'plot sales\nby region',
       meta: {}
     });
@@ -196,6 +201,10 @@ describe('chatbook-core', () => {
     expect(promptAsHashComment('')).toBe('# <empty Chatbook prompt>');
     expect(promptAsHashComment('plot sales', 'javascript')).toBe(
       '// plot sales'
+    );
+    expect(promptAsHashComment('plot sales', 'C++17')).toBe('// plot sales');
+    expect(() => promptAsHashComment('plot sales', 'unknown-lang')).toThrow(
+      'no safe line comment'
     );
     expect(promptAsHashComment('plot sales\rprint(1)')).toBe(
       '# plot sales\n# print(1)'
@@ -209,7 +218,8 @@ describe('chatbook-core', () => {
     ).toBe('plot sales');
   });
 
-  it('builds a code notebook copy without mutating the source', () => {
+  it('builds a code notebook copy without mutating the source', async () => {
+    const promptHash = await sha256Hex('plot sales');
     const source = {
       nbformat: 4,
       cells: [
@@ -217,13 +227,21 @@ describe('chatbook-core', () => {
         {
           cell_type: 'code',
           source: ['plot sales'],
-          metadata: { nbi: { chatbook: { generatedCode: 'print(1)' } } },
-          outputs: []
+          metadata: {
+            nbi: {
+              chatbook: {
+                prompt: 'plot sales',
+                promptHash,
+                generatedCode: 'print(1)'
+              }
+            }
+          },
+          outputs: [] as unknown[]
         }
       ],
       metadata: {}
     };
-    const out = buildCodeNotebookFromChatbook(source, {
+    const out = await buildCodeNotebookFromChatbook(source, {
       name: 'python3',
       display_name: 'Python 3',
       language: 'python'
@@ -234,7 +252,7 @@ describe('chatbook-core', () => {
     expect((out.cells as any)[0].source).toBe('# hi');
     expect((out.cells as any)[1].source).toBe('print(1)');
     expect((out.metadata as any).kernelspec.name).toBe('python3');
-    const js = buildCodeNotebookFromChatbook(
+    const js = await buildCodeNotebookFromChatbook(
       {
         nbformat: 4,
         cells: [
@@ -242,7 +260,7 @@ describe('chatbook-core', () => {
             cell_type: 'code',
             source: 'plot the sales by region',
             metadata: {},
-            outputs: []
+            outputs: [] as unknown[]
           }
         ],
         metadata: {}
@@ -265,7 +283,23 @@ describe('chatbook-core', () => {
     );
   });
 
-  it('exports code-authored cells without rewriting their source', () => {
+  it('comments an edited prompt instead of exporting stale generated code', async () => {
+    const oldPromptHash = await sha256Hex('show me the first 5 rows');
+    const converted = await convertChatbookCellToCode({
+      source: 'drop the customers table',
+      meta: {
+        prompt: 'show me the first 5 rows',
+        promptHash: oldPromptHash,
+        generatedCode: 'df.head(5)'
+      }
+    });
+    expect(converted.source).toBe('# drop the customers table');
+    expect(converted.meta.prompt).toBe('drop the customers table');
+    expect(converted.meta.generatedCode).toBeUndefined();
+    expect(converted.meta.promptHash).toBeUndefined();
+  });
+
+  it('exports code-authored cells without rewriting their source', async () => {
     const source = {
       nbformat: 4,
       cells: [
@@ -281,12 +315,12 @@ describe('chatbook-core', () => {
               }
             }
           },
-          outputs: []
+          outputs: [] as unknown[]
         }
       ],
       metadata: {}
     };
-    const out = buildCodeNotebookFromChatbook(source, {
+    const out = await buildCodeNotebookFromChatbook(source, {
       name: 'python3',
       display_name: 'Python 3',
       language: 'python'

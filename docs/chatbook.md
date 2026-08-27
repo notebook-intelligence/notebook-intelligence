@@ -60,4 +60,6 @@ Chatbook is on by default. Users do not set an environment variable. An admin ca
 
 `NBI_CHATBOOK_MAX_EXECUTION_MODE` (traitlet `chatbook_max_execution_mode`) caps how permissive a user can be. Values, from safest to least: `always-confirm`, `confirm-if-risky`, `auto-run` (default, no cap). A tenant can set `always-confirm` to hide Auto-run.
 
+The cap applies to natural-language generation. A cell explicitly switched to **Cd** is user-authored code and executes like a normal notebook code cell, without generation, scanning, or confirmation. It is not a sandbox or a restriction on code the user can run directly.
+
 User preference is stored as `chatbook_execution_mode` and `chatbook_backend_kernel` in `~/.jupyter/nbi/config.json`.

@@ -119,6 +119,35 @@ CHATBOOK_DISABLED_MESSAGE = "Chatbook is disabled by your administrator"
 CHATBOOK_KERNEL_NAME = "chatbook"
 
 
+def _set_chatbook_kernelspec_execution_cap(kernel_spec_manager, max_mode: str) -> None:
+    """Put the resolved admin cap in the Chatbook kernel's process env.
+
+    The wrapper kernel cannot read the server extension's traitlets directly.
+    Adding the resolved value to its live kernelspec makes env- and
+    traitlet-configured caps equivalent at the actual execution decision.
+    """
+    if kernel_spec_manager is None:
+        return
+    resolved = parse_execution_mode(max_mode, DEFAULT_CHATBOOK_MAX_EXECUTION_MODE)
+    kernel_spec_manager._nbi_chatbook_max_execution_mode = resolved
+    if getattr(kernel_spec_manager, "_nbi_chatbook_cap_wrapped", False):
+        return
+    orig_get = kernel_spec_manager.get_kernel_spec
+
+    def get_kernel_spec(kernel_name, *args, **kwargs):
+        spec = orig_get(kernel_name, *args, **kwargs)
+        if kernel_name == CHATBOOK_KERNEL_NAME:
+            env = dict(getattr(spec, "env", None) or {})
+            env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] = (
+                kernel_spec_manager._nbi_chatbook_max_execution_mode
+            )
+            spec.env = env
+        return spec
+
+    kernel_spec_manager.get_kernel_spec = get_kernel_spec
+    kernel_spec_manager._nbi_chatbook_cap_wrapped = True
+
+
 def _finish_if_chatbook_disabled(handler) -> bool:
     """Return True after writing a 403 when the admin Chatbook gate is off."""
     if getattr(handler, "chatbook_enabled", True):
@@ -4038,6 +4067,10 @@ class NotebookIntelligence(ExtensionApp):
         )
         GetCapabilitiesHandler.chatbook_max_execution_mode = max_mode
         ConfigHandler.chatbook_max_execution_mode = max_mode
+        _set_chatbook_kernelspec_execution_cap(
+            getattr(self.serverapp, "kernel_spec_manager", None),
+            max_mode,
+        )
 
     def initialize_handlers(self):
         NotebookIntelligence.root_dir = self.serverapp.root_dir

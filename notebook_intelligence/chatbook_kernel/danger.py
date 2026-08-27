@@ -52,7 +52,9 @@ def scan_generated_python(source: str) -> dict[str, Any]:
     reasons.extend(_scan_magics(text))
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except Exception:
+        # Python 3.10/3.11 raise ValueError for null bytes while newer
+        # versions raise SyntaxError. Scanner failures must always fail closed.
         reasons.append("Generated Python could not be parsed")
         return _result(reasons)
     reasons.extend(_scan_ast(tree))
@@ -75,14 +77,19 @@ def merge_danger_scans(*scans: Optional[dict[str, Any]]) -> dict[str, Any]:
     """Combine scans. Any risky result wins; reasons are de-duplicated."""
     reasons: list[str] = []
     seen: set[str] = set()
+    risky = False
     for scan in scans:
         if not scan:
             continue
+        if scan.get("level") == DANGER_LEVEL_RISKY:
+            risky = True
         for reason in scan.get("reasons") or []:
             text = str(reason).strip()
             if text and text not in seen:
                 seen.add(text)
                 reasons.append(text)
+    if risky and not reasons:
+        reasons.append("Danger scan flagged the generated code")
     return _result(reasons)
 
 
@@ -94,7 +101,12 @@ def parse_llm_danger_response(text: str) -> dict[str, Any]:
             "level": DANGER_LEVEL_RISKY,
             "reasons": ["Danger classifier returned unreadable output"],
         }
-    risky = bool(payload.get("risky"))
+    if not isinstance(payload.get("risky"), bool):
+        return {
+            "level": DANGER_LEVEL_RISKY,
+            "reasons": ["Danger classifier omitted a valid risky decision"],
+        }
+    risky = payload["risky"]
     reasons = [
         str(item).strip()
         for item in (payload.get("reasons") or [])

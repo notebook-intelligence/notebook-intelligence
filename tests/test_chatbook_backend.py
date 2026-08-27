@@ -86,6 +86,7 @@ class _FakeClient:
         self.executed = []
         self._iopub = []
         self._shell = []
+        self.channels_stopped = False
 
     def execute(self, code, **kwargs):
         self.executed.append(code)
@@ -98,7 +99,7 @@ class _FakeClient:
         return None
 
     def stop_channels(self):
-        return None
+        self.channels_stopped = True
 
     def get_iopub_msg(self, timeout=0.1):
         if self._iopub:
@@ -154,11 +155,15 @@ class _StubBackend:
     def __init__(self, reply):
         self.reply = reply
         self.relayed = []
+        self.interrupted = False
 
     def execute(self, code, relay):
         relay('stream', {'name': 'stdout', 'text': 'hi\n'})
         self.relayed.append(code)
         return self.reply
+
+    def interrupt(self):
+        self.interrupted = True
 
 
 def _kernel_with_backend(reply):
@@ -254,6 +259,17 @@ def test_backend_execute_raises_when_child_dies():
     with pytest.raises(RuntimeError, match='died'):
         backend.execute('print(1)', lambda t, c: None)
     assert backend.ready is False
+    assert manager.client_obj.channels_stopped is True
+
+
+def test_interrupt_targets_child_and_aborts_queue_without_wrapper_sigint():
+    kernel = _kernel_with_backend({'status': 'ok'})
+    aborted = []
+    kernel._abort_queues = lambda *args, **kwargs: aborted.append(args)
+
+    assert kernel.interrupt_request(None, b'ident', {'content': {}}) is None
+    assert kernel._backend.interrupted is True
+    assert aborted
 
 
 def test_kernel_clamps_client_policy_to_admin_cap(monkeypatch):

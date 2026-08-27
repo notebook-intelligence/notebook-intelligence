@@ -252,16 +252,39 @@ const LINE_COMMENT_PREFIX: Record<string, string> = {
   java: '//',
   scala: '//',
   kotlin: '//',
+  groovy: '//',
+  csharp: '//',
+  'c#': '//',
+  fsharp: '//',
+  'f#': '//',
+  dart: '//',
   go: '//',
   c: '//',
   cpp: '//',
+  'c++': '//',
   rust: '//',
-  swift: '//'
+  swift: '//',
+  matlab: '%',
+  octave: '%',
+  clojure: ';',
+  scheme: ';',
+  lisp: ';',
+  erlang: '%',
+  fortran: '!'
 };
 
 export function lineCommentPrefix(language: string): string {
   const key = (language || '').trim().toLowerCase();
-  return LINE_COMMENT_PREFIX[key] || '#';
+  if (/^(?:c|gnu)?\+\+(?:\d+)?$/u.test(key) || /^c\+\+\d+$/u.test(key)) {
+    return '//';
+  }
+  const prefix = LINE_COMMENT_PREFIX[key];
+  if (!prefix) {
+    throw new Error(
+      `Cannot export unrun Chatbook cells: no safe line comment for ${language || 'the selected language'}`
+    );
+  }
+  return prefix;
 }
 
 function normalizeCommentNewlines(text: string): string {
@@ -336,11 +359,11 @@ export function switchChatbookCellMode(options: {
   return { source, meta };
 }
 
-export function convertChatbookCellToCode(options: {
+export async function convertChatbookCellToCode(options: {
   source: string;
   meta: IChatbookCellMeta;
   language?: string;
-}): { source: string; meta: IChatbookCellMeta } {
+}): Promise<{ source: string; meta: IChatbookCellMeta }> {
   const snapshot = snapshotChatbookCell(options);
   if (snapshot.mode === 'code') {
     const code = snapshot.codeSource || snapshot.generatedCode;
@@ -358,10 +381,19 @@ export function convertChatbookCellToCode(options: {
     ...options.meta,
     prompt: snapshot.prompt || options.source
   };
-  if (snapshot.generatedCode.trim()) {
+  // `meta.prompt` records the prompt that produced `generatedCode`. If the
+  // visible prompt has changed since that run, exporting the old code would
+  // silently create a notebook that does something different from the cell.
+  const generatedMatchesPrompt =
+    Boolean(options.meta.promptHash) &&
+    options.meta.promptHash === (await sha256Hex(snapshot.prompt));
+  if (snapshot.generatedCode.trim() && generatedMatchesPrompt) {
     meta.generatedCode = snapshot.generatedCode;
     return { source: snapshot.generatedCode, meta };
   }
+  meta.generatedCode = undefined;
+  meta.promptHash = undefined;
+  meta.contextHash = undefined;
   return {
     source: promptAsHashComment(meta.prompt || '', options.language),
     meta
@@ -400,13 +432,15 @@ export function chatbookExportNotebookPath(
   return dir ? `${dir}/${name}` : name;
 }
 
-export function buildCodeNotebookFromChatbook(
+export async function buildCodeNotebookFromChatbook(
   notebook: Record<string, unknown>,
   kernelspec: IChatbookKernelSpec
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const cells = Array.isArray(notebook.cells)
-    ? notebook.cells.map(cell =>
-        convertNotebookCellToCode(cell, kernelspec.language)
+    ? await Promise.all(
+        notebook.cells.map(cell =>
+          convertNotebookCellToCode(cell, kernelspec.language)
+        )
       )
     : [];
   const metadata: Record<string, unknown> = {
@@ -421,7 +455,10 @@ export function buildCodeNotebookFromChatbook(
   };
 }
 
-function convertNotebookCellToCode(cell: unknown, language: string): unknown {
+async function convertNotebookCellToCode(
+  cell: unknown,
+  language: string
+): Promise<unknown> {
   if (!cell || typeof cell !== 'object') {
     return cell;
   }
@@ -429,7 +466,7 @@ function convertNotebookCellToCode(cell: unknown, language: string): unknown {
   if (next.cell_type !== 'code') {
     return next;
   }
-  const converted = convertChatbookCellToCode({
+  const converted = await convertChatbookCellToCode({
     source: cellSourceToString(next.source),
     meta: getChatbookCellMeta(next.metadata),
     language

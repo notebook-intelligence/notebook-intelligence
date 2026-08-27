@@ -74,11 +74,21 @@ export async function confirmConvertChatbookNotebook(
     throw error;
   }
 
-  const path = await exportChatbookNotebookAsCode(
-    panel,
-    resolved,
-    app.serviceManager.contents
-  );
+  let path: string;
+  try {
+    path = await exportChatbookNotebookAsCode(
+      panel,
+      resolved,
+      app.serviceManager.contents
+    );
+  } catch (error) {
+    void app.commands.execute('apputils:notify', {
+      message: `Export failed: ${error instanceof Error ? error.message : error}`,
+      type: 'error',
+      options: { autoClose: true }
+    });
+    return;
+  }
   await app.commands.execute('docmanager:open', { path });
   void app.commands.execute('apputils:notify', {
     message: `Exported ${path}`,
@@ -129,10 +139,10 @@ class ChatbookToolbarController {
   sync(): void {
     const isChatbook = isChatbookSession(this._panel.sessionContext);
     if (isChatbook && !this._contentChangedConnected) {
-      this._panel.model?.contentChanged.connect(this.sync, this);
+      this._panel.model?.contentChanged.connect(this._scheduleSync);
       this._contentChangedConnected = true;
     } else if (!isChatbook && this._contentChangedConnected) {
-      this._panel.model?.contentChanged.disconnect(this.sync, this);
+      this._panel.model?.contentChanged.disconnect(this._scheduleSync);
       this._contentChangedConnected = false;
     }
     if (isChatbook) {
@@ -153,8 +163,12 @@ class ChatbookToolbarController {
     this._panel.sessionContext.kernelChanged.disconnect(this.sync, this);
     this._panel.sessionContext.sessionChanged.disconnect(this.sync, this);
     if (this._contentChangedConnected) {
-      this._panel.model?.contentChanged.disconnect(this.sync, this);
+      this._panel.model?.contentChanged.disconnect(this._scheduleSync);
       this._contentChangedConnected = false;
+    }
+    if (this._syncFrame) {
+      cancelAnimationFrame(this._syncFrame);
+      this._syncFrame = 0;
     }
     this._showCodeButton.dispose();
     this._convertButton.dispose();
@@ -165,6 +179,16 @@ class ChatbookToolbarController {
   private _showCodeButton: ToolbarButton;
   private _convertButton: ToolbarButton;
   private _contentChangedConnected = false;
+  private _syncFrame = 0;
+  private _scheduleSync = (): void => {
+    if (this._syncFrame) {
+      return;
+    }
+    this._syncFrame = requestAnimationFrame(() => {
+      this._syncFrame = 0;
+      this.sync();
+    });
+  };
 }
 
 export class ChatbookToolbarExtension

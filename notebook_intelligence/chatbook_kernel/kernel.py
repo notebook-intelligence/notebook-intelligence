@@ -64,9 +64,10 @@ class ChatbookKernel(Kernel):
             except Exception:
                 log.debug("Backend interrupt failed", exc_info=True)
         self._abort_pending_executes(force=True)
-        interrupt = getattr(super(), "interrupt_request", None)
-        if callable(interrupt):
-            return interrupt(stream, ident, parent)
+        # The child interrupt above produces its own KeyboardInterrupt reply.
+        # Calling ipykernel's implementation also SIGINTs this wrapper while
+        # its shell thread is blocked relaying that reply, which can orphan the
+        # active execute_request with no execute_reply.
         return None
 
     def execute_request(self, stream, ident, parent):

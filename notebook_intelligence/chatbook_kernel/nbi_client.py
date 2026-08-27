@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 from typing import Optional
@@ -14,6 +15,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from jupyter_core.paths import jupyter_runtime_dir
+
+log = logging.getLogger(__name__)
 
 
 class NBIClientError(Exception):
@@ -218,12 +221,26 @@ def _read_runtime_file(path: str) -> Optional[dict]:
 def _jupyter_server_runtime() -> Optional[dict]:
     runtime_dir = jupyter_runtime_dir()
     parent_pid = os.environ.get("JPY_PARENT_PID", "").strip()
-    if parent_pid.isdigit():
-        data = _read_runtime_file(
-            os.path.join(runtime_dir, f"jpserver-{parent_pid}.json")
-        )
+    if parent_pid:
+        if not parent_pid.isdigit():
+            raise NBIClientError(
+                "Cannot identify the parent Jupyter server: "
+                f"invalid JPY_PARENT_PID {parent_pid!r}"
+            )
+        path = os.path.join(runtime_dir, f"jpserver-{parent_pid}.json")
+        data = _read_runtime_file(path)
         if data:
             return data
+        # Silently falling back can send the prompt and notebook context to a
+        # different server owned by the same user.
+        raise NBIClientError(
+            "Cannot identify the parent Jupyter server: "
+            f"runtime file {path!r} is missing or invalid"
+        )
+    log.warning(
+        "JPY_PARENT_PID is not set; falling back to the newest Jupyter "
+        "server runtime file"
+    )
     return _latest_jupyter_server_runtime()
 
 

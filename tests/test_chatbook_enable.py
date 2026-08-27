@@ -1,6 +1,7 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from jupyter_client.kernelspec import NoSuchKernel
@@ -12,6 +13,7 @@ from notebook_intelligence.extension import (
     GetCapabilitiesHandler,
     _finish_if_chatbook_disabled,
     _hide_chatbook_kernelspec,
+    _set_chatbook_kernelspec_execution_cap,
 )
 
 
@@ -43,7 +45,7 @@ def test_hide_chatbook_kernelspec_drops_chatbook_and_is_idempotent():
     assert "chatbook" not in manager.get_all_specs()
     with pytest.raises(NoSuchKernel):
         manager.get_kernel_spec("chatbook")
-    assert manager.get_kernel_spec("python3") == "python3-spec"
+    assert manager.get_kernel_spec("python3").name == "python3"
 
     _hide_chatbook_kernelspec(manager)
     assert "chatbook" not in manager.find_kernel_specs()
@@ -66,6 +68,20 @@ def test_hide_chatbook_kernelspec_accepts_none():
     _hide_chatbook_kernelspec(None)
 
 
+def test_chatbook_kernelspec_inherits_resolved_traitlet_cap():
+    manager = _FakeKernelSpecManager()
+    _set_chatbook_kernelspec_execution_cap(manager, "always-confirm")
+
+    spec = manager.get_kernel_spec("chatbook")
+    assert spec.env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] == "always-confirm"
+    assert manager.get_kernel_spec("python3").env == {}
+
+    # Updating settings should update the existing wrapper, not wrap again.
+    _set_chatbook_kernelspec_execution_cap(manager, "confirm-if-risky")
+    spec = manager.get_kernel_spec("chatbook")
+    assert spec.env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] == "confirm-if-risky"
+
+
 class _DummyHandler:
     def __init__(self, chatbook_enabled: bool):
         self.chatbook_enabled = chatbook_enabled
@@ -84,7 +100,7 @@ class _FakeKernelSpecManager:
         return {"python3": "/python3", "chatbook": "/chatbook"}
 
     def get_kernel_spec(self, name):
-        return f"{name}-spec"
+        return SimpleNamespace(name=name, env={})
 
     def get_all_specs(self):
         return {"python3": {}, "chatbook": {}}

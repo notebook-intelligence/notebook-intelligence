@@ -59,6 +59,11 @@ def test_merge_and_llm_parse():
 
     llm_bad = parse_llm_danger_response("not json")
     assert llm_bad["level"] == "risky"
+    assert parse_llm_danger_response('{"level": "risky"}')["level"] == "risky"
+
+    no_reason = merge_danger_scans({"level": "risky", "reasons": []})
+    assert no_reason["level"] == "risky"
+    assert no_reason["reasons"]
 
     llm_raise = parse_llm_danger_response(
         'Sure.\n{"risky": true, "reasons": ["network"]}\n'

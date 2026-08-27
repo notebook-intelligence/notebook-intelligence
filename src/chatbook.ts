@@ -28,7 +28,6 @@ import {
   isChatbookKernelName,
   mergeChatbookCellMeta,
   chatbookExportNotebookPath,
-  resolveChatbookCode,
   resolveChatbookPrompt,
   sha256Hex,
   snapshotChatbookContextCell,
@@ -171,9 +170,12 @@ export function patchCodeCellExecute(): void {
     const incoming = nbiChatbookFromMetadata(metadata);
     const forceCode = incoming.executeMode === 'code';
     if (mode === 'code' || forceCode) {
-      const code = forceCode
-        ? String(incoming.codeSource || resolveChatbookCode(source, cellMeta))
-        : resolveChatbookCode(source, cellMeta);
+      // A forced code run must never fall back to file-persisted
+      // `generatedCode`; if codeSource is absent, execute only visible source.
+      const code =
+        forceCode && typeof incoming.codeSource === 'string'
+          ? incoming.codeSource
+          : source;
       if (mode === 'code') {
         writeChatbookCellMeta(cell, {
           mode: 'code',
@@ -525,8 +527,10 @@ export function attachChatbookNotebooks(
       }
       if (listen) {
         panel.model?.contentChanged.connect(debouncedSyncCellBadges);
+        panel.content.activeCellChanged.connect(debouncedSyncCellBadges);
       } else {
         panel.model?.contentChanged.disconnect(debouncedSyncCellBadges);
+        panel.content.activeCellChanged.disconnect(debouncedSyncCellBadges);
       }
       contentChangedConnected = listen;
     };
@@ -550,7 +554,6 @@ export function attachChatbookNotebooks(
       syncCellBadges();
     };
     panel.sessionContext.kernelChanged.connect(connectKernel);
-    panel.content.activeCellChanged.connect(syncCellBadges);
     resyncBadges.push(syncCellBadges);
     void panel.sessionContext.ready.then(connectKernel);
     void panel.context.ready.then(() => {
@@ -566,7 +569,6 @@ export function attachChatbookNotebooks(
       }
       panel.sessionContext.kernelChanged.disconnect(connectKernel);
       setContentChangedListening(false);
-      panel.content.activeCellChanged.disconnect(syncCellBadges);
       const index = resyncBadges.indexOf(syncCellBadges);
       if (index >= 0) {
         resyncBadges.splice(index, 1);
@@ -901,7 +903,7 @@ export async function exportChatbookNotebookAsCode(
   const notebook = structuredClone(
     panel.model.toJSON() as Record<string, unknown>
   );
-  const content = buildCodeNotebookFromChatbook(notebook, {
+  const content = await buildCodeNotebookFromChatbook(notebook, {
     name: profile.kernelName,
     display_name: profile.displayName,
     language: profile.language

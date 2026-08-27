@@ -134,7 +134,17 @@ class ChatbookBackend:
         return True
 
     def _mark_dead(self) -> None:
-        self._kc = None
+        # A dead kernel still leaves the client's ZMQ channels and heartbeat
+        # thread alive. Detach and stop them before `_ensure_backend` calls
+        # `shutdown()` and starts a replacement.
+        kc, self._kc = self._kc, None
+        if kc is not None:
+            stop = getattr(kc, "stop_channels", None)
+            if callable(stop):
+                try:
+                    stop()
+                except Exception:
+                    log.debug("Dead backend channel cleanup failed", exc_info=True)
 
     def start(self) -> None:
         if self.ready:
