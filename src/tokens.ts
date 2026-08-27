@@ -77,8 +77,10 @@ export enum MCPServerStatus {
   Connected = 'connected',
   UpdatingToolList = 'updating-tool-list',
   UpdatedToolList = 'updated-tool-list',
+  FailedToUpdateToolList = 'failed-to-update-tool-list',
   UpdatingPromptList = 'updating-prompt-list',
-  UpdatedPromptList = 'updated-prompt-list'
+  UpdatedPromptList = 'updated-prompt-list',
+  FailedToUpdatePromptList = 'failed-to-update-prompt-list'
 }
 
 export interface IContextItem {

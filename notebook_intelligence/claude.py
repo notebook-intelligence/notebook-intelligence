@@ -18,7 +18,7 @@ import uuid
 import re
 from anyio.abc import Process
 from notebook_intelligence import perf
-from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData
+from notebook_intelligence.api import AskUserQuestionData, BackendMessageType, CancelToken, ChatCommand, ChatModel, ChatRequest, ChatResponse, ClaudeToolType, CompletionContext, ConfirmationData, Host, InlineCompletionModel, MarkdownData, ProgressData, SignalImpl, ToolCallData, UICommandCancelledError, UserInputCancelledError
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS
 from notebook_intelligence.feature_flags import is_external_ui_tools_active
@@ -112,6 +112,42 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
 # a max_tokens value the API rejects.
 CLAUDE_INLINE_COMPLETION_MAX_TOKENS = _bounded_int_env(
     "NBI_CLAUDE_INLINE_COMPLETION_MAX_TOKENS", 1024, 1, 4096
+)
+
+
+# Tool responses feed directly back into the agent's context. Keep the same
+# conservative four-bytes-per-token approximation used by the built-in file
+# reader, and retain enough of both ends to preserve command setup at the start
+# and tracebacks or summaries at the end.
+APPROX_BYTES_PER_TOOL_RESULT_TOKEN = 4
+TOOL_RESULT_UTF8_CHUNK_SIZE = 64 * 1024
+DEFAULT_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS = 10_000
+MIN_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS = 256
+MAX_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS = 100_000
+CLAUDE_TOOL_RESULT_TRUNCATION_MARKER = "[tool result truncated by host"
+CLAUDE_TOOL_RESULT_MINIMAL_MARKER = "[truncated]"
+
+
+def _tool_result_max_output_tokens_from_env() -> int:
+    """Resolve the tool-result cap, reserving only explicit zero as unlimited."""
+    name = "NBI_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS"
+    raw = os.getenv(name)
+    if raw is not None:
+        try:
+            if raw.strip() and int(raw) == 0:
+                return 0
+        except ValueError:
+            pass
+    return _bounded_int_env(
+        name,
+        DEFAULT_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS,
+        MIN_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS,
+        MAX_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS,
+    )
+
+
+CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS = (
+    _tool_result_max_output_tokens_from_env()
 )
 CLAUDE_CODE_CHAT_PARTICIPANT_ID = "claude-code"
 CLAUDE_CODE_MAX_BUFFER_SIZE = 20 * 1024 * 1024 # 20MB
@@ -599,8 +635,106 @@ async def apply_permission_mode(sdk_client: ClaudeSDKClient, mode: str) -> bool:
     _notify_permission_mode(mode)
     return True
 
-def tool_text_response(text: Any, *, is_error: bool = False) -> dict[str, Any]:
-    """Shape an MCP tool result. Set ``is_error=True`` for rejection paths.
+def _truncate_tool_result(
+    text: str,
+    max_output_tokens: Optional[int] = None,
+) -> str:
+    """Bound a tool result using UTF-8-safe head/tail truncation."""
+    if max_output_tokens is None:
+        max_output_tokens = CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS
+    if isinstance(max_output_tokens, bool) or not isinstance(
+        max_output_tokens, int
+    ):
+        raise TypeError("max_output_tokens must be an integer")
+    text = _normalize_utf8(text)
+    if max_output_tokens == 0:
+        return text
+    if max_output_tokens < 0:
+        max_output_tokens = MIN_CLAUDE_TOOL_RESULT_MAX_OUTPUT_TOKENS
+    byte_budget = max(0, max_output_tokens) * APPROX_BYTES_PER_TOOL_RESULT_TOKEN
+    total_bytes = _utf8_size(text)
+    if total_bytes <= byte_budget:
+        return text
+
+    marker = (
+        f"\n\n{CLAUDE_TOOL_RESULT_TRUNCATION_MARKER}: "
+        f"{total_bytes} UTF-8 bytes; request a narrower result.]\n\n"
+    )
+    marker_bytes = marker.encode("utf-8")
+    if byte_budget <= len(marker_bytes):
+        minimal_markers = (
+            f"[{total_bytes}B cut]",
+            CLAUDE_TOOL_RESULT_MINIMAL_MARKER,
+            "…",
+        )
+        for minimal_marker in minimal_markers:
+            if len(minimal_marker.encode("utf-8")) <= byte_budget:
+                return minimal_marker
+        return "." * byte_budget
+
+    content_budget = byte_budget - len(marker_bytes)
+    head_budget = (content_budget * 3) // 4
+    tail_budget = content_budget - head_budget
+    head = _truncate_utf8_prefix(text, head_budget)
+    tail = _truncate_utf8_suffix(text, tail_budget)
+    return head + marker + tail
+
+
+def _utf8_size(text: str) -> int:
+    """Return UTF-8 byte length using bounded, C-encoded chunks."""
+    if text.isascii():
+        return len(text)
+    return sum(
+        len(text[start:start + TOOL_RESULT_UTF8_CHUNK_SIZE].encode("utf-8"))
+        for start in range(0, len(text), TOOL_RESULT_UTF8_CHUNK_SIZE)
+    )
+
+
+def _normalize_utf8(text: str) -> str:
+    """Replace invalid Unicode surrogate code points with U+FFFD."""
+    if text.isascii():
+        return text
+    return re.sub(r"[\ud800-\udfff]", "\N{REPLACEMENT CHARACTER}", text)
+
+
+def _truncate_utf8_prefix(text: str, byte_budget: int) -> str:
+    """Return the longest UTF-8-safe prefix within ``byte_budget``."""
+    if byte_budget <= 0:
+        return ""
+    candidate = text[:byte_budget].encode("utf-8")
+    return candidate[:byte_budget].decode("utf-8", errors="ignore")
+
+
+def _truncate_utf8_suffix(text: str, byte_budget: int) -> str:
+    """Return the longest UTF-8-safe suffix within ``byte_budget``."""
+    if byte_budget <= 0:
+        return ""
+    candidate = text[-byte_budget:].encode("utf-8")
+    return candidate[-byte_budget:].decode("utf-8", errors="ignore")
+
+
+def bounded_text_tool_response(
+    text: Any,
+    *,
+    is_error: bool = False,
+) -> dict[str, Any]:
+    """Stringify and bound a result from a text-oriented UI bridge."""
+    return tool_text_response(str(text), is_error=is_error, truncate=True)
+
+
+def tool_text_response(
+    text: Any,
+    *,
+    is_error: bool = False,
+    truncate: bool = False,
+    max_output_tokens: Optional[int] = None,
+) -> dict[str, Any]:
+    """Shape an MCP tool result, optionally applying a bounded text budget.
+
+    Truncation is opt-in so structured payloads and source-returning tools stay
+    lossless. ``max_output_tokens`` is an approximate budget based on four
+    UTF-8 bytes per token and also opts into truncation when supplied. Set
+    ``is_error=True`` for rejection paths.
 
     The Claude Agent SDK reads ``result.get("is_error", False)`` and maps
     it to ``CallToolResult.isError``. Without the flag, model-side retry
@@ -608,10 +742,13 @@ def tool_text_response(text: Any, *, is_error: bool = False) -> dict[str, Any]:
     fault to recover from, so a tool call rejected for security reasons
     can leak into chat as a confusing "successful" result.
     """
+    response_text = str(text)
+    if isinstance(text, str) and (truncate or max_output_tokens is not None):
+        response_text = _truncate_tool_result(text, max_output_tokens)
     result: dict[str, Any] = {
         "content": [{
             "type": "text",
-            "text": str(text)
+            "text": response_text
         }]
     }
     if is_error:
@@ -900,11 +1037,15 @@ class ClaudeChatModel(ChatModel):
             response.finish()
             return
         try:
-            with self._client.messages.stream(
-                model=self._model_id,
-                max_tokens=10000,
-                messages=messages
-            ) as stream:
+            stream_options: dict[str, Any] = {
+                "model": self._model_id,
+                "max_tokens": 10000,
+                "messages": messages,
+            }
+            system_prompt = options.get("system_prompt")
+            if system_prompt:
+                stream_options["system"] = system_prompt
+            with self._client.messages.stream(**stream_options) as stream:
                 for chunk in stream.text_stream:
                     if cancel_token is not None and cancel_token.is_cancel_requested:
                         break
@@ -1540,8 +1681,6 @@ class ClaudeCodeClient():
                 "error": "Claude agent is not connected",
             }
 
-        queue.put(event)
-
         resp = {"data": None}
         def _on_client_response(data: dict):
             if data['id'] == event_id:
@@ -1559,6 +1698,10 @@ class ClaudeCodeClient():
         response_obj = event_args.get("response") if event_args else None
 
         try:
+            # Subscribe before publishing the request. A fast worker can emit
+            # its response synchronously from queue.put(), so publishing first
+            # would lose the response and leave this call polling until timeout.
+            queue.put(event)
             while True:
                 self._reconnect_required = False
                 nbi_request_obj = get_current_request()
@@ -1750,7 +1893,7 @@ async def create_new_notebook(args) -> str:
     return tool_text_response(f"Created new notebook at {file_path}")
 
 @tool("rename-notebook", "Renames the notebook.", {"new_name": str})
-async def rename_notebook(args) -> str: 
+async def rename_notebook(args) -> str:
     """Renames the notebook.
     Args:
         new_name: New name for the notebook
@@ -1807,17 +1950,60 @@ async def get_cell_type_and_source(args) -> str:
     return tool_text_response(ui_cmd_response)
 
 
-@tool("get-cell-output", "Gets the output of the cell at zero-based index.", {"cell_index": int})
+@tool(
+    "get-cell-output",
+    (
+        "Gets the output of the cell at zero-based index. Use offset and limit "
+        "to retrieve a specific character range from a large output."
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "cell_index": {"type": "integer"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1},
+        },
+        "required": ["cell_index"],
+    },
+)
 async def get_cell_output(args) -> str:
     """Get cell output for the cell at index for the active notebook.
 
     Args:
         cell_index: Zero based cell index
+        offset: Optional zero-based character offset into the output
+        limit: Optional maximum number of characters to return
     """
+    offset = args.get("offset", 0)
+    limit = args.get("limit")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return tool_text_response(
+            "offset must be a non-negative integer",
+            is_error=True,
+        )
+    if (
+        limit is not None
+        and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1)
+    ):
+        return tool_text_response(
+            "limit must be a positive integer",
+            is_error=True,
+        )
     response = get_current_response()
     ui_cmd_response = await response.run_ui_command('notebook-intelligence:get-cell-output', {"cellIndex": args['cell_index']})
 
-    return tool_text_response(ui_cmd_response)
+    # The frontend command returns `cellOutputAsText`, not a MIME-bundle dict.
+    # Stringify an unexpected structured value before applying the text cap.
+    output = str(ui_cmd_response)
+    start = min(offset, len(output))
+    end = len(output) if limit is None else min(len(output), start + limit)
+    page = output[start:end]
+    if start > 0 or end < len(output):
+        range_note = f"cell output characters {start}-{end} of {len(output)}"
+        if end < len(output):
+            range_note += f"; request offset={end} to continue"
+        page += f"\n\n[{range_note}.]"
+    return bounded_text_tool_response(page)
 
 @tool("set-cell-type-and-source", "Sets the type and source of the cell at zero-based index.", {"cell_index": int, "cell_type": str, "source": str})
 async def set_cell_type_and_source(args) -> str:
@@ -1902,14 +2088,14 @@ async def run_command_in_jupyter_terminal(args) -> str:
         try:
             work_dir = safe_jupyter_path(working_directory)
         except ValueError as e:
-            return tool_text_response(f"Error: {e}", is_error=True)
+            return bounded_text_tool_response(f"Error: {e}", is_error=True)
         if not work_dir.exists():
-            return tool_text_response(
+            return bounded_text_tool_response(
                 f"Directory '{working_directory}' does not exist",
                 is_error=True,
             )
         if not work_dir.is_dir():
-            return tool_text_response(
+            return bounded_text_tool_response(
                 f"'{working_directory}' is not a directory",
                 is_error=True,
             )
@@ -1924,9 +2110,9 @@ async def run_command_in_jupyter_terminal(args) -> str:
             'command': args['command'],
             'cwd': str(work_dir),
         })
-        return tool_text_response(ui_cmd_response)
+        return bounded_text_tool_response(ui_cmd_response)
     except Exception as e:
-        return tool_text_response(
+        return bounded_text_tool_response(
             f"Error running command in Jupyter terminal: {str(e)}",
             is_error=True,
         )
@@ -2086,6 +2272,18 @@ async def invoke_ui_tool(name: str, arguments: dict, timeout: float = CLAUDE_AGE
 async def custom_permission_handler(
     tool_name: str,
     input_data: dict,
+    context: dict,
+):
+    try:
+        return await _custom_permission_handler(tool_name, input_data, context)
+    except (UserInputCancelledError, UICommandCancelledError) as error:
+        log.debug("Permission request for %s cancelled: %s", tool_name, error)
+        return PermissionResultDeny(message="Request cancelled", interrupt=True)
+
+
+async def _custom_permission_handler(
+    tool_name: str,
+    input_data: dict,
     context: dict
 ):
     """Custom logic for tool permissions."""
@@ -2105,15 +2303,20 @@ async def custom_permission_handler(
     callback_id = str(uuid.uuid4())
 
     if tool_name == "EnterPlanMode":
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             title="Enter Plan Mode",
             message="Claude wants to enter plan mode to explore and design an implementation approach. In plan mode, Claude will explore the codebase thoroughly, identify existing patterns, design an implementation strategy, and present a plan for your approval. No code changes will be made until you approve the plan.",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Yes, enter plan mode",
             cancelLabel="No, start implementing now",
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == True:
             response.stream(MarkdownData(f"&#x2713; Entered plan mode"))
             return PermissionResultAllow()
@@ -2125,25 +2328,35 @@ async def custom_permission_handler(
             response.stream(MarkdownData(plan))
         else:
             log.error(f"No plan provided in ExitPlanMode tool call")
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message="Do you want to confirm the plan above?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Yes, approve plan",
             cancelLabel="No, continue planning",
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == True:
             await apply_permission_mode(get_current_claude_client(), DEFAULT_PERMISSION_MODE)
             return PermissionResultAllow(updated_input={"message": "Plan approved", "approved": True})
         else:
             return PermissionResultDeny(message="User did not confirm the plan", interrupt=True)
     elif tool_name == "AskUserQuestion":
-        response.stream(AskUserQuestionData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            AskUserQuestionData(
             identifier={"id": response.message_id, "callback_id": callback_id},
             questions=input_data['questions']
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == False or len(user_input['selectedAnswers']) == 0:
             return PermissionResultDeny(message="User did not choose any options", interrupt=True)
         else:
@@ -2157,14 +2370,18 @@ async def custom_permission_handler(
             })
     elif tool_name == "Bash":
         response.stream(MarkdownData(f"&#x2713; **{input_data.get('description', '')}**\n```shell\n{input_data.get('command', '')}\n```"))
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message=f"Approve Bash tool to execute the command above?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input['confirmed'] == False:
-            response.finish()
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
         log.debug(f"Allowing tool {tool_name} with input {input_data}")
@@ -2176,15 +2393,19 @@ async def custom_permission_handler(
         if tool_name in _approved_tools_for_response:
             return PermissionResultAllow()
         response.stream(MarkdownData(f"&#x2713; Calling tool '{tool_name}'...", detail={"title": "Parameters", "content": json.dumps(input_data)}))
-        response.stream(ConfirmationData(
+        pending_user_input = response.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             message=f"Are you sure you want to call this tool?",
             confirmArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": True}}},
             confirmSessionArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed_for_session": True}}},
             cancelArgs={"id": response.message_id, "data": { "callback_id": callback_id, "data": {"confirmed": False}}},
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(response, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            response, callback_id, pending_user_input
+        )
         if user_input.get('confirmed', None) == False:
-            response.finish()
             return PermissionResultDeny(message="User did not confirm the tool call", interrupt=True)
 
         if user_input.get('confirmed_for_session', None) == True:
@@ -2312,7 +2533,27 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
                 claude_settings.get('base_url', None)
             )
             messages = request.chat_history.copy()
-            chat_model.completions(messages, response=response, cancel_token=request.cancel_token)
+            completion_options = options.copy()
+            base_system_prompt = completion_options.get("system_prompt", "")
+            system_prompt_token_budget = completion_options.pop(
+                "system_prompt_token_budget",
+                None,
+            )
+            system_prompt = self._inject_rules_into_system_prompt(
+                base_system_prompt,
+                request,
+                max_tokens=system_prompt_token_budget,
+            )
+            if system_prompt:
+                completion_options["system_prompt"] = system_prompt
+            else:
+                completion_options.pop("system_prompt", None)
+            chat_model.completions(
+                messages,
+                response=response,
+                cancel_token=request.cancel_token,
+                options=completion_options,
+            )
         except Exception as e:
             log.error(f"Error while handling chat request!\n{e}")
             response.stream(MarkdownData(f"Oops! There was a problem handling chat request. Please try again with a different prompt."))

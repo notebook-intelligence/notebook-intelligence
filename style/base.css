@@ -2044,7 +2044,9 @@ svg.access-token-warning {
 }
 
 .server-status-indicator.not-connected,
-.server-status-indicator.failed-to-connect {
+.server-status-indicator.failed-to-connect,
+.server-status-indicator.failed-to-update-tool-list,
+.server-status-indicator.failed-to-update-prompt-list {
   background-color: var(--jp-error-color1);
 }
 

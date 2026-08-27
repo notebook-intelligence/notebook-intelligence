@@ -334,7 +334,9 @@ class AIServiceManager(Host):
 
     @property
     def default_chat_participant(self) -> ChatParticipant:
-        return self._default_chat_participant
+        # Partial construction (notably extension/test bootstrapping) may ask
+        # before update_models_from_config establishes the active default.
+        return getattr(self, "_default_chat_participant", None)
 
     @property
     def chat_model(self) -> ChatModel:
@@ -507,9 +509,32 @@ class AIServiceManager(Host):
             model_ids += [{"id": f"{provider.id}::{model.id}", "name": f"{provider.name} / {model.name}", "context_window": model.context_window} for model in provider.embedding_models]
         return model_ids
 
-    def get_chat_participant(self, prompt: str) -> ChatParticipant:
+    def _resolve_chat_participant(self, participant_id: str) -> Optional[ChatParticipant]:
+        """Resolve an exact participant id, including the active default.
+
+        The active default is also stored separately because model switches can
+        briefly rebuild ``chat_participants``. Only use that fallback when its
+        own id matches the requested participant so an unknown explicit
+        ``@participant`` never dispatches to the wrong handler.
+        """
+        participant = self.chat_participants.get(participant_id)
+        if participant is not None:
+            return participant
+
+        default_participant = self.default_chat_participant
+        if (
+            default_participant is not None
+            and getattr(default_participant, "id", None) == participant_id
+        ):
+            return default_participant
+        return None
+
+    def get_chat_participant(self, prompt: str) -> Optional[ChatParticipant]:
         prompt_parts = AIServiceManager.parse_prompt(prompt)
-        return self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
+        participant = self._resolve_chat_participant(prompt_parts.participant)
+        if participant is not None:
+            return participant
+        return self._resolve_chat_participant(DEFAULT_CHAT_PARTICIPANT_ID)
 
     async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         is_claude_code_mode = self.is_claude_code_mode
@@ -527,6 +552,52 @@ class AIServiceManager(Host):
         else:
             prompt_parts = AIServiceManager.parse_prompt(request.prompt)
 
+        participant = self._resolve_chat_participant(prompt_parts.participant)
+        if participant is None and is_claude_code_mode:
+            response.participant_id = CLAUDE_CODE_CHAT_PARTICIPANT_ID
+            log.warning(
+                "Claude Code mode is enabled but its chat participant is not available"
+            )
+            response.stream(MarkdownData(
+                "Claude Code mode is still starting. Please try again in a moment."
+            ))
+            response.finish()
+            return
+        if participant is None:
+            participant = self._resolve_chat_participant(
+                DEFAULT_CHAT_PARTICIPANT_ID
+            )
+            if participant is not None:
+                # A leading @ token can be a file mention rather than a
+                # participant id. Preserve that token alongside the already
+                # parsed input so a slash command is not duplicated in both
+                # request.command and request.prompt.
+                fallback_input = prompt_parts.input
+                stripped_prompt = request.prompt.lstrip()
+                if not is_claude_code_mode and stripped_prompt.startswith('@'):
+                    mention = stripped_prompt.split(maxsplit=1)[0]
+                    fallback_input = " ".join(
+                        part for part in (mention, prompt_parts.input) if part
+                    )
+                prompt_parts = PromptParts(
+                    input=fallback_input,
+                    participant=DEFAULT_CHAT_PARTICIPANT_ID,
+                    command=prompt_parts.command,
+                    mcp_server_name=prompt_parts.mcp_server_name,
+                    mcp_prompt_name=prompt_parts.mcp_prompt_name,
+                    mcp_arguments=prompt_parts.mcp_arguments,
+                )
+        if participant is None:
+            response.participant_id = DEFAULT_CHAT_PARTICIPANT_ID
+            log.error(
+                "No chat participant is available for request participant '%s'",
+                prompt_parts.participant,
+            )
+            response.stream(MarkdownData("No chat participant is available."))
+            response.finish()
+            return
+        response.participant_id = prompt_parts.participant
+
         # add MCP server prompt messages to chat history
         if prompt_parts.mcp_prompt_name != "":
             mcp_server_prompt_messages = request.host.get_mcp_server_prompt_value(prompt_parts.mcp_server_name, prompt_parts.mcp_prompt_name, prompt_parts.mcp_arguments)
@@ -537,12 +608,13 @@ class AIServiceManager(Host):
         else:
             request.chat_history.append({"role": "user", "content": prompt_parts.input})
     
-        participant = self.chat_participants.get(prompt_parts.participant, DEFAULT_CHAT_PARTICIPANT_ID)
         request.command = prompt_parts.command
         request.prompt = prompt_parts.input
-        response.participant_id  = prompt_parts.participant
-
-        turn = perf.get_turn(response.message_id)
+        # Diagnostics must never change dispatch behavior. A ChatResponse
+        # implementation without message_id (test doubles, third-party
+        # participants) still dispatches; it just gets no span.
+        _perf_message_id = getattr(response, "message_id", None)
+        turn = perf.get_turn(_perf_message_id) if _perf_message_id else None
         if turn is None:
             return await participant.handle_chat_request(request, response, options)
         provider = "acp" if is_acp_mode else ("claude" if is_claude_code_mode else "copilot")
@@ -552,6 +624,9 @@ class AIServiceManager(Host):
     async def get_completion_context(self, request: ContextRequest) -> CompletionContext:
         cancel_token = request.cancel_token
         context = CompletionContext([])
+
+        if request.participant is None:
+            return context
 
         allowed_context_providers = request.participant.allowed_context_providers
 

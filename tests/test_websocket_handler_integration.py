@@ -1,10 +1,17 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 import json
 from unittest.mock import Mock, patch, MagicMock
 from tornado.httputil import HTTPServerRequest
 from tornado.web import Application
 from notebook_intelligence.extension import WebsocketCopilotHandler
+from notebook_intelligence.api import ChatResponse
+from notebook_intelligence.claude import ClaudeCodeChatParticipant
 from notebook_intelligence.context_factory import RuleContextFactory
+from notebook_intelligence.prompts import Prompts
+from notebook_intelligence.rule_injector import RuleInjector
 from notebook_intelligence.ruleset import RuleContext
 
 
@@ -173,6 +180,116 @@ class TestWebsocketHandlerIntegration:
         chat_request = mock_ai_manager.handle_chat_request.call_args[0][0]
         assert chat_request.language == 'python'
         assert chat_request.kernel_name == 'python3'
+
+        options = mock_ai_manager.handle_chat_request.call_args.kwargs['options']
+        assert options['system_prompt'] == (
+            "You are an assistant that generates code for 'python' language. "
+            "You generate code between existing leading and trailing code "
+            "sections. Be concise and return only code as a response. Don't "
+            "include leading content or trailing content in your response, "
+            "they are provided only for context. You can reuse methods and "
+            "symbols defined in leading and trailing content."
+        )
+        assert options["system_prompt_token_budget"] > 0
+
+    def test_generate_code_existing_edit_reaches_anthropic_system_prompt(self):
+        """Exercise handler -> Claude participant -> Anthropic SDK wiring."""
+        manager = MagicMock()
+        manager.is_claude_code_mode = True
+        manager.nbi_config = SimpleNamespace(
+            claude_settings={
+                "chat_model": "claude-sonnet-test",
+                "api_key": "test-key",
+                "base_url": "https://example.test",
+            },
+            rules_enabled=False,
+        )
+        participant = ClaudeCodeChatParticipant.__new__(
+            ClaudeCodeChatParticipant
+        )
+        participant._rule_injector = RuleInjector()
+        sdk_client = MagicMock()
+
+        class Stream:
+            text_stream = iter(["updated = True"])
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        sdk_client.messages.stream.return_value = Stream()
+
+        async def dispatch(request, response, options=None):
+            request.host = manager
+            await participant.handle_chat_request(
+                request,
+                response,
+                options or {},
+            )
+
+        manager.handle_chat_request = dispatch
+        response = MagicMock(spec=ChatResponse)
+        context_factory = MagicMock(spec=RuleContextFactory)
+        context_factory.create.return_value = MagicMock(spec=RuleContext)
+
+        message = {
+            "id": "inline-existing",
+            "type": "generate-code",
+            "data": {
+                "chatId": "inline-chat",
+                "prompt": "set the flag",
+                "prefix": "before = True",
+                "suffix": "after = True",
+                "existingCode": "updated = False",
+                "language": "python",
+                "kernelName": "python3",
+                "filename": "script.py",
+            },
+        }
+
+        with patch(
+            "notebook_intelligence.extension.ai_service_manager",
+            manager,
+        ), patch(
+            "notebook_intelligence.extension.NotebookIntelligence.root_dir",
+            "/workspace",
+        ), patch(
+            "notebook_intelligence.extension.threading.Thread"
+        ) as thread_cls, patch(
+            "notebook_intelligence.extension.WebsocketCopilotResponseEmitter",
+            return_value=response,
+        ), patch(
+            "notebook_intelligence.claude._create_anthropic_client",
+            return_value=sdk_client,
+        ), patch(
+            "notebook_intelligence.extension.ThreadSafeWebSocketConnector"
+        ):
+            handler = WebsocketCopilotHandler(
+                self._create_mock_application(),
+                self._create_mock_request(),
+                context_factory=context_factory,
+            )
+            handler.on_message(json.dumps(message))
+            request_coro = thread_cls.call_args.kwargs["args"][0]
+            asyncio.run(request_coro)
+
+        stream_options = sdk_client.messages.stream.call_args.kwargs
+        assert stream_options["system"] == (
+            "You are an assistant that generates code for 'python' language. "
+            "You generate code between existing leading and trailing code "
+            "sections. Update the existing code section and return a modified "
+            "version. Don't just return the update, recreate the existing code "
+            "section with the update. Be concise and return only code as a "
+            "response. Don't include leading content or trailing content in "
+            "your response, they are provided only for context. You can reuse "
+            "methods and symbols defined in leading and trailing content."
+        )
+        assert stream_options["messages"][-1] == {
+            "role": "user",
+            "content": "Generate code for: set the flag",
+        }
     
     @patch('notebook_intelligence.extension.ai_service_manager')
     @patch('notebook_intelligence.extension.NotebookIntelligence')
@@ -634,10 +751,10 @@ class TestWebsocketHandlerIntegration:
             str(upload_root / "bad name.pdf"),
             str(upload_root / "bad‮name.pdf"),
         ]
-        for hazardous in hazardous_paths:
+        for index, hazardous in enumerate(hazardous_paths):
             mock_ai_manager.handle_chat_request.reset_mock()
             message = {
-                'id': 'test-message-id',
+                'id': f'test-message-id-{index}',
                 'type': 'chat-request',
                 'data': {
                     'chatId': 'test-chat-id',

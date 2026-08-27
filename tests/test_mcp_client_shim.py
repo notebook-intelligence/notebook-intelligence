@@ -193,6 +193,8 @@ def test_end_to_end_against_real_stdio_server(server_script_path):
         transport = _stdio_transport(server_script_path)
         async with Client(transport, client_info=_client_info()) as client:
             await client.ping()
+            assert client.supports_tools is True
+            assert client.supports_prompts is True
 
             tools = await client.list_tools()
             # mcp_manager.get_tools() reads tool.name / tool.description

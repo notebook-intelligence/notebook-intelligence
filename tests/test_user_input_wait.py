@@ -9,6 +9,7 @@ tracks the time it spends blocked on user input so the timeout can exclude it.
 import asyncio
 import time
 
+from notebook_intelligence import api as api_module
 from notebook_intelligence.api import ChatResponse
 
 
@@ -30,7 +31,8 @@ class TestUserInputWaitSeconds:
 
     def test_counts_a_wait_in_progress(self):
         resp = _Response()
-        resp._user_input_wait_started = time.time() - 5
+        resp._user_input_wait_count = 1
+        resp._user_input_wait_started = time.monotonic() - 5
         assert resp.user_input_wait_seconds >= 5
 
     def test_accumulates_completed_waits(self):
@@ -39,8 +41,45 @@ class TestUserInputWaitSeconds:
         # No wait in progress -> just the accumulated total.
         assert resp.user_input_wait_seconds == 12.0
         # A wait in progress adds on top of the accumulated total.
-        resp._user_input_wait_started = time.time() - 3
+        resp._user_input_wait_count = 1
+        resp._user_input_wait_started = time.monotonic() - 3
         assert resp.user_input_wait_seconds >= 15
+
+    def test_concurrent_waits_count_one_contiguous_interval(self, monkeypatch):
+        resp = _Response()
+        clock = {"now": 0.0}
+        monkeypatch.setattr(
+            api_module.time,
+            "monotonic",
+            lambda: clock["now"],
+        )
+
+        async def run():
+            first = resp.prepare_chat_user_input("first")
+            second = resp.prepare_chat_user_input("second")
+            first_task = asyncio.create_task(
+                resp.wait_for_chat_user_input(resp, "first", first)
+            )
+            second_task = asyncio.create_task(
+                resp.wait_for_chat_user_input(resp, "second", second)
+            )
+            await asyncio.sleep(0)
+            assert resp._user_input_wait_count == 2
+
+            clock["now"] = 5.0
+            resp.on_user_input({"callback_id": "first", "data": "first"})
+            assert await first_task == "first"
+            assert resp.user_input_wait_seconds == 5.0
+
+            clock["now"] = 8.0
+            resp.on_user_input({"callback_id": "second", "data": "second"})
+            assert await second_task == "second"
+
+        asyncio.run(run())
+
+        assert resp._user_input_wait_count == 0
+        assert resp._user_input_wait_started is None
+        assert resp.user_input_wait_seconds == 8.0
 
 
 class TestWaitForChatUserInput:

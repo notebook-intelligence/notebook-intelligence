@@ -17,7 +17,10 @@ import {
 } from '../api';
 import { CheckBoxItem } from './checkbox';
 import { PillItem } from './pill';
-import { mcpServerSettingsToEnabledState } from './mcp-util';
+import {
+  mcpServerSettingsToEnabledState,
+  mcpServerStatusTitle
+} from './mcp-util';
 import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
@@ -1119,7 +1122,7 @@ function SettingsPanelComponentMCPServers(props: any) {
                         ></CheckBoxItem>
                         <div
                           className={`server-status-indicator ${server.status}`}
-                          title={server.status}
+                          title={mcpServerStatusTitle(server.status)}
                         ></div>
                       </div>
                       {getMCPServerEnabled(server.id) && (

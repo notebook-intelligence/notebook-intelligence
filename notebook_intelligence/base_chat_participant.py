@@ -432,9 +432,18 @@ class BaseChatParticipant(ChatParticipant):
     def chat_prompt(self, model_provider: str, model_name: str) -> str:
         return Prompts.generic_chat_prompt(model_provider, model_name)
     
-    def _inject_rules_into_system_prompt(self, base_prompt: str, request: ChatRequest) -> str:
+    def _inject_rules_into_system_prompt(
+        self,
+        base_prompt: str,
+        request: ChatRequest,
+        max_tokens: int = None,
+    ) -> str:
         """Inject applicable rules into system prompt based on request context."""
-        return self._rule_injector.inject_rules(base_prompt, request)
+        if max_tokens is None:
+            return self._rule_injector.inject_rules(base_prompt, request)
+        return self._rule_injector.inject_rules(
+            base_prompt, request, max_tokens=max_tokens
+        )
 
     async def generate_code_cell(self, request: ChatRequest) -> str:
         chat_model = request.host.chat_model

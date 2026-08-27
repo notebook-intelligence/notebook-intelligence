@@ -198,7 +198,9 @@ class _NbiAcpClient(acp.Client):
         callback_id = f"acp-perm-{tool_call.tool_call_id}"
         title = getattr(tool_call, "title", None) or "Run this tool?"
         agent_label = self._owner.agent_spec.label
-        resp.stream(ConfirmationData(
+        pending_user_input = resp.stream_user_input_request(
+            callback_id,
+            ConfirmationData(
             title=f"{agent_label} tool call",
             message=(
                 f"Approve: {title}?\n\n"
@@ -211,8 +213,11 @@ class _NbiAcpClient(acp.Client):
                 "callback_id": callback_id, "data": {"confirmed": False}}},
             confirmLabel="Approve",
             cancelLabel="Reject",
-        ))
-        user_input = await ChatResponse.wait_for_chat_user_input(resp, callback_id)
+            ),
+        )
+        user_input = await ChatResponse.wait_for_chat_user_input(
+            resp, callback_id, pending_user_input
+        )
         if user_input.get("confirmed"):
             return acp.RequestPermissionResponse(
                 outcome=schema.AllowedOutcome(outcome="selected", option_id=allow.option_id)
