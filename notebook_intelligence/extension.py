@@ -430,6 +430,7 @@ STRING_OVERRIDE_SPEC = (
     ("inline_completion_model_provider", "NBI_INLINE_COMPLETION_MODEL_PROVIDER"),
     ("inline_completion_model_id", "NBI_INLINE_COMPLETION_MODEL_ID"),
     ("claude_chat_model", "NBI_CLAUDE_CHAT_MODEL"),
+    ("claude_inline_chat_model", "NBI_CLAUDE_INLINE_CHAT_MODEL"),
     ("claude_inline_completion_model", "NBI_CLAUDE_INLINE_COMPLETION_MODEL"),
     ("claude_api_key", "ANTHROPIC_API_KEY"),
     ("claude_base_url", "ANTHROPIC_BASE_URL"),

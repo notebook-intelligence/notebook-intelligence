@@ -22,6 +22,7 @@ INLINE_COMPLETION_MODEL_OVERRIDES = (
 )
 CLAUDE_SETTINGS_OVERRIDES = (
     ("claude_chat_model", "chat_model"),
+    ("claude_inline_chat_model", "inline_chat_model"),
     ("claude_inline_completion_model", "inline_completion_model"),
     ("claude_api_key", "api_key"),
     ("claude_base_url", "base_url"),

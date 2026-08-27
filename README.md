@@ -243,12 +243,15 @@ Per-user preferences (default on for the cell-output features) live in `config.j
 | `NBI_INLINE_COMPLETION_MODEL_PROVIDER` | General → Auto-complete model → Provider                                     |
 | `NBI_INLINE_COMPLETION_MODEL_ID`       | General → Auto-complete model → Model                                        |
 | `NBI_CLAUDE_CHAT_MODEL`                | Claude → Chat model                                                          |
+| `NBI_CLAUDE_INLINE_CHAT_MODEL`         | Claude → Chat model → Inline chat model                                      |
 | `NBI_CLAUDE_INLINE_COMPLETION_MODEL`   | Claude → Auto-complete model                                                 |
 | `ANTHROPIC_API_KEY`                    | Claude → API Key (input is locked + blanked; the SDK reads the env directly) |
 | `ANTHROPIC_BASE_URL`                   | Claude → Base URL                                                            |
 | `NBI_ACP_CHAT_MODEL`                   | ACP → Chat model                                                             |
 | `OPENAI_API_KEY`                       | ACP → API Key (input is locked + blanked; the agent reads the env directly)  |
 | `OPENAI_BASE_URL`                      | ACP → Base URL                                                               |
+
+Inline chat calls the Anthropic API directly while the other Claude modes go through the Claude Code CLI, so a deployment can need a different model id for each. It uses `inline_chat_model`, falling back to `chat_model` when that is unset.
 
 Provider IDs: `github-copilot`, `openai-compatible`, `litellm-compatible`, `ollama`, `none`. The `*_MODEL_ID` value is whatever the chosen provider exposes (e.g. `gpt-4o`, `llama3:latest`). Claude model IDs are the literal IDs from the Anthropic API (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`); empty string = "Default (recommended)"; `NBI_CLAUDE_INLINE_COMPLETION_MODEL` also accepts `none` (no inline completion in Claude mode) or `inherit` (use the General-tab Auto-complete model).
 

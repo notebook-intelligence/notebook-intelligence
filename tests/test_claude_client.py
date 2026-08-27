@@ -1455,3 +1455,117 @@ class TestAssembleClientQuery:
         from notebook_intelligence.claude import assemble_client_query
         query = assemble_client_query(["context line", "/enter-plan-mode"])
         assert query.startswith("/enter-plan-mode")
+
+
+class TestInlineChatModelSelection:
+    """``inline_chat_model`` picks the model for the inline (raw-SDK) path.
+
+    Inline chat calls the Anthropic API directly while every other Claude mode
+    hands ``chat_model`` to the Claude Code CLI. The CLI accepts model-id
+    conventions the raw API rejects, so a deployment can need a different id per
+    transport. ``inline_chat_model`` supplies the raw-API id; unset, the inline
+    path must keep using ``chat_model`` exactly as it always has.
+    """
+
+    def _resolve(self, monkeypatch, claude_settings):
+        """Run the inline handler and return the model id it constructed with."""
+        participant = _make_participant()
+        request = _make_chat_request("inline-chat")
+        request.host.nbi_config.claude_settings = claude_settings
+        request.chat_history = []
+
+        captured = {}
+
+        def _fake_chat_model(model_id, api_key=None, base_url=None):
+            captured["model_id"] = model_id
+            return MagicMock()
+
+        monkeypatch.setattr(claude_module, "ClaudeChatModel", _fake_chat_model)
+        asyncio.run(
+            participant.handle_inline_chat_request(request, Mock(spec=ChatResponse))
+        )
+        return captured["model_id"]
+
+    def test_inline_chat_model_overrides_chat_model(self, monkeypatch):
+        assert self._resolve(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+            "inline_chat_model": "claude-sonnet-raw",
+        }) == "claude-sonnet-raw"
+
+    def test_falls_back_to_chat_model_when_key_absent(self, monkeypatch):
+        # Backward compatibility: an existing config has no inline_chat_model
+        # and must behave exactly as it did before the key existed.
+        assert self._resolve(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+        }) == "claude-sonnet-agentic"
+
+    def test_falls_back_to_chat_model_when_empty(self, monkeypatch):
+        # The settings dialog writes "" for an unset model rather than omitting
+        # the key, so empty must fall through the same way a missing key does.
+        assert self._resolve(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+            "inline_chat_model": "",
+        }) == "claude-sonnet-agentic"
+
+    def test_both_unset_defers_to_model_default_resolution(self, monkeypatch):
+        # "" is ClaudeChatModel's signal to resolve its own default; the handler
+        # must not substitute anything of its own.
+        assert self._resolve(monkeypatch, {}) == ""
+
+    def test_whitespace_is_stripped(self, monkeypatch):
+        assert self._resolve(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+            "inline_chat_model": "  claude-sonnet-raw  ",
+        }) == "claude-sonnet-raw"
+
+    def test_falls_back_to_chat_model_when_whitespace_only(self, monkeypatch):
+        # A blank-but-present value must be treated as unset, not as a model id
+        # that happens to strip to "". Stripping only after the fallback chain
+        # would let it shadow chat_model and silently drop through to
+        # ClaudeChatModel's default resolution instead.
+        assert self._resolve(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+            "inline_chat_model": "   ",
+        }) == "claude-sonnet-agentic"
+
+
+class TestAgenticPathIgnoresInlineChatModel:
+    """The CLI subprocess must keep receiving ``chat_model``.
+
+    Regression guard for the reason this key exists: the agentic path passes its
+    model to the Claude Code CLI as ``--model``, and the CLI derives capability
+    grants from id conventions the raw API cannot parse. If ``inline_chat_model``
+    ever leaked into the client options, those grants would be silently lost.
+    """
+
+    def _options_model(self, monkeypatch, claude_settings):
+        participant = _make_participant()
+        participant._host.nbi_config.claude_settings = claude_settings
+        monkeypatch.setattr(
+            claude_module, "get_jupyter_root_dir", lambda: "/tmp"
+        )
+        monkeypatch.setattr(
+            claude_module, "build_claude_system_prompt",
+            lambda *a, **k: "system prompt"
+        )
+        monkeypatch.setattr(
+            claude_module, "resolve_claude_cli_path", lambda: None
+        )
+        return participant._create_client_options().model
+
+    def test_client_options_use_chat_model_not_inline(self, monkeypatch):
+        assert self._options_model(monkeypatch, {
+            "chat_model": "claude-sonnet-agentic",
+            "inline_chat_model": "claude-sonnet-raw",
+            "tools": [],
+        }) == "claude-sonnet-agentic"
+
+    def test_empty_chat_model_still_yields_none(self, monkeypatch):
+        # Unchanged behavior: an empty chat_model means "omit --model", and
+        # inline_chat_model must not fill that gap.
+        assert self._options_model(monkeypatch, {
+            "chat_model": "",
+            "inline_chat_model": "claude-sonnet-raw",
+            "tools": [],
+        }) is None
+

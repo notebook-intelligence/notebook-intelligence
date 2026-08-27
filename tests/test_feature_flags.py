@@ -2,6 +2,7 @@
 
 from notebook_intelligence.feature_flags import (
     CLAUDE_CODE_TOOLS_ID,
+    CLAUDE_SETTINGS_OVERRIDES,
     JUPYTER_UI_TOOLS_ID,
     POLICY_FORCE_OFF,
     POLICY_FORCE_ON,
@@ -210,3 +211,47 @@ class TestApplyStringOverrides:
             target, {"unrelated": "value"}, self._MAPPING
         )
         assert result is target
+
+
+class TestInlineChatModelOverride:
+    """`claude_inline_chat_model` pins inline chat independently of the chat model.
+
+    Each override writes one destination and only that one. Inline chat still
+    follows a chat-model pin when no inline model is set, but that fallback is
+    resolved per request in ``handle_inline_chat_request``, not stamped in
+    here — which is what keeps a deliberately provisioned ``inline_chat_model``
+    from being overwritten by a chat-model pin. The behavioral matrix over both
+    layers lives in ``test_claude_client.py``.
+    """
+
+    @staticmethod
+    def _resolved(stored, overrides):
+        return apply_string_overrides(stored, overrides, CLAUDE_SETTINGS_OVERRIDES)
+
+    def test_inline_pin_writes_only_the_inline_key(self):
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {"claude_inline_chat_model": "PINNED"},
+        ) == {"chat_model": "user-chat", "inline_chat_model": "PINNED"}
+
+    def test_chat_pin_writes_only_the_chat_key(self):
+        # The regression guard for this feature: a chat-model pin must leave a
+        # provisioned inline_chat_model alone, or the raw-API transport gets an
+        # id it cannot parse and every inline request 404s.
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {"claude_chat_model": "PINNED"},
+        ) == {"chat_model": "PINNED", "inline_chat_model": "user-inline"}
+
+    def test_both_pins_apply_to_their_own_destinations(self):
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {
+                "claude_chat_model": "PIN_CHAT",
+                "claude_inline_chat_model": "PIN_INLINE",
+            },
+        ) == {"chat_model": "PIN_CHAT", "inline_chat_model": "PIN_INLINE"}
+
+    def test_neither_pin_leaves_settings_untouched(self):
+        stored = {"chat_model": "user-chat", "inline_chat_model": "user-inline"}
+        assert self._resolved(stored, {}) == stored
