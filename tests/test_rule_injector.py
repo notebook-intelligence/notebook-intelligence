@@ -174,3 +174,63 @@ class TestRuleInjector:
         assert 'Prefer small changes' in result
         assert '# Test Rules' in result
         assert 'Add tests' in result
+
+
+class TestChatbookGuidelines:
+    def test_has_chatbook_guidelines_from_agents_md(self, tmp_path):
+        from notebook_intelligence.rule_injector import has_chatbook_guidelines
+
+        (tmp_path / 'AGENTS.md').write_text('# Keep cells short\n', encoding='utf-8')
+        host = Mock()
+        host.nbi_config.rules_enabled = True
+        host.get_rule_manager.return_value = None
+        with patch(
+            'notebook_intelligence.rule_injector.get_jupyter_root_dir',
+            return_value=str(tmp_path),
+        ):
+            assert has_chatbook_guidelines(host) is True
+
+    def test_has_chatbook_guidelines_false_when_rules_disabled(self, tmp_path):
+        from notebook_intelligence.rule_injector import has_chatbook_guidelines
+
+        (tmp_path / 'AGENTS.md').write_text('# Keep cells short\n', encoding='utf-8')
+        host = Mock()
+        host.nbi_config.rules_enabled = False
+        with patch(
+            'notebook_intelligence.rule_injector.get_jupyter_root_dir',
+            return_value=str(tmp_path),
+        ):
+            assert has_chatbook_guidelines(host) is False
+
+    def test_has_chatbook_guidelines_from_chatbook_rules(self, tmp_path):
+        from notebook_intelligence.rule_injector import has_chatbook_guidelines
+        from notebook_intelligence.rule_manager import RuleManager
+
+        rules_dir = tmp_path / 'rules'
+        (rules_dir / 'modes' / 'chatbook').mkdir(parents=True)
+        (rules_dir / 'modes' / 'chatbook' / '01.md').write_text(
+            'Use type hints.\n', encoding='utf-8'
+        )
+        host = Mock()
+        host.nbi_config.rules_enabled = True
+        host.get_rule_manager.return_value = RuleManager(str(rules_dir))
+        with patch(
+            'notebook_intelligence.rule_injector.get_jupyter_root_dir',
+            return_value=str(tmp_path / 'empty'),
+        ):
+            assert has_chatbook_guidelines(host) is True
+
+    def test_has_chatbook_guidelines_false_without_sources(self, tmp_path):
+        from notebook_intelligence.rule_injector import has_chatbook_guidelines
+        from notebook_intelligence.rule_manager import RuleManager
+
+        rules_dir = tmp_path / 'rules'
+        rules_dir.mkdir()
+        host = Mock()
+        host.nbi_config.rules_enabled = True
+        host.get_rule_manager.return_value = RuleManager(str(rules_dir))
+        with patch(
+            'notebook_intelligence.rule_injector.get_jupyter_root_dir',
+            return_value=str(tmp_path),
+        ):
+            assert has_chatbook_guidelines(host) is False

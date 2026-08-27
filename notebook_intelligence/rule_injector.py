@@ -14,6 +14,14 @@ _TOKEN_ENCODING = tiktoken.encoding_for_model("gpt-4o")
 _TRUNCATION_MARKER = "\n...[additional guidelines truncated]"
 
 
+def _rules_enabled(host) -> bool:
+    """``rules_enabled`` is the master switch for all injected guidance."""
+    if host is None:
+        return False
+    nbi_config = getattr(host, "nbi_config", None)
+    return bool(getattr(nbi_config, "rules_enabled", False))
+
+
 class RuleInjector:
     """Handles rule injection logic - easily mockable."""
 
@@ -39,7 +47,22 @@ class RuleInjector:
         max_tokens: int = None,
     ) -> str:
         """Inject applicable rules into system prompt based on request context."""
-        if not request.host.nbi_config.rules_enabled:
+        return self.inject_guidelines(
+            base_prompt,
+            host=getattr(request, "host", None),
+            rule_context=getattr(request, "rule_context", None),
+            max_tokens=max_tokens,
+        )
+
+    def inject_guidelines(
+        self,
+        base_prompt: str,
+        host=None,
+        rule_context=None,
+        max_tokens: int = None,
+    ) -> str:
+        """Inject AGENTS.md and applicable rules into a system prompt."""
+        if not _rules_enabled(host):
             return base_prompt
 
         sections = []
@@ -48,10 +71,10 @@ class RuleInjector:
         if agents_md:
             sections.append(f"# Repository Instructions (AGENTS.md)\n{agents_md}")
 
-        if request.rule_context:
-            rule_manager: RuleManager = request.host.get_rule_manager()
+        if rule_context and host is not None:
+            rule_manager: RuleManager = host.get_rule_manager()
             if rule_manager:
-                applicable_rules = rule_manager.get_applicable_rules(request.rule_context)
+                applicable_rules = rule_manager.get_applicable_rules(rule_context)
                 if applicable_rules:
                     formatted_rules = rule_manager.format_rules_for_llm(applicable_rules)
                     sections.append(formatted_rules)
@@ -78,3 +101,18 @@ class RuleInjector:
                 )
 
         return base_prompt + separator + guidelines
+
+
+def has_chatbook_guidelines(host) -> bool:
+    """True when Chatbook generation should include rules or AGENTS.md."""
+    if not _rules_enabled(host):
+        return False
+    if RuleInjector()._read_agents_md():
+        return True
+    rule_manager = host.get_rule_manager()
+    if not rule_manager:
+        return False
+    rule_manager.load_rules()
+    rules = list(rule_manager.ruleset.global_rules)
+    rules.extend(rule_manager.ruleset.mode_rules.get("chatbook") or [])
+    return any(rule.active for rule in rules)

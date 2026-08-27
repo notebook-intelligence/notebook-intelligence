@@ -2,6 +2,7 @@
 
 import '@testing-library/jest-dom';
 import { TextDecoder, TextEncoder } from 'util';
+import { webcrypto } from 'crypto';
 
 // jsdom doesn't expose TextDecoder/TextEncoder; the encoder helpers in
 // utils.ts use them.
@@ -10,6 +11,12 @@ if (typeof globalThis.TextDecoder === 'undefined') {
 }
 if (typeof globalThis.TextEncoder === 'undefined') {
   globalThis.TextEncoder = TextEncoder as typeof globalThis.TextEncoder;
+}
+if (!globalThis.crypto?.subtle) {
+  Object.defineProperty(globalThis, 'crypto', {
+    value: webcrypto,
+    configurable: true
+  });
 }
 
 // jsdom doesn't expose DragEvent; @lumino/dragdrop references it at module

@@ -14,6 +14,11 @@ import datetime as dt
 import logging
 from notebook_intelligence.api import BackendMessageType, CancelToken, ChatResponse, CompletionContext, MarkdownData
 from notebook_intelligence.config import _atomic_write_json
+from notebook_intelligence.inline_completion import (
+    chatbook_inline_prefix_hint,
+    copilot_inline_language,
+    is_chatbook_inline_language,
+)
 from notebook_intelligence.util import decrypt_with_password, encrypt_with_password, ThreadSafeWebSocketConnector
 
 from ._version import __version__ as NBI_VERSION
@@ -671,6 +676,9 @@ def inline_completions(model_id, prefix, suffix, language, filename, context: Co
     if cancel_token.is_cancel_requested:
         return ''
 
+    if is_chatbook_inline_language(language):
+        prompt += f"{NL}{chatbook_inline_prefix_hint()}"
+
     if context is not None:
         for item in context.items:
             context_file = f"Compare this snippet from {item.filePath if item.filePath is not None else 'undefined'}:{NL}{item.content}{NL}"
@@ -695,7 +703,7 @@ def inline_completions(model_id, prefix, suffix, language, filename, context: Co
                 'nwo': 'NotebookIntelligence',
                 'stream': True,
                 'extra': {
-                    'language': language,
+                    'language': copilot_inline_language(language),
                     'next_indent': 0,
                     'trim_by_indentation': True
                 }

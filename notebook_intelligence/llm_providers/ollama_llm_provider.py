@@ -5,6 +5,11 @@ from typing import Any
 from notebook_intelligence.api import ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, CancelToken, ChatResponse, CompletionContext
 import logging
 
+from notebook_intelligence.inline_completion import (
+    chatbook_inline_prefix_hint,
+    extract_inline_completion,
+    is_chatbook_inline_language,
+)
 from notebook_intelligence.util import extract_llm_generated_code
 
 log = logging.getLogger(__name__)
@@ -103,6 +108,8 @@ class OllamaInlineCompletionModel(InlineCompletionModel):
 
     def inline_completions(self, prefix, suffix, language, filename, context: CompletionContext, cancel_token: CancelToken) -> str:
         import ollama
+        if is_chatbook_inline_language(language):
+            prefix = chatbook_inline_prefix_hint() + prefix
         has_suffix = suffix.strip() != ""
         if has_suffix:
             prompt = self._prompt_template.format(prefix=prefix, suffix=suffix.strip())
@@ -131,6 +138,8 @@ class OllamaInlineCompletionModel(InlineCompletionModel):
 
             ollama_response = ollama.generate(**generate_args)
             code = ollama_response.response
+            if is_chatbook_inline_language(language):
+                return extract_inline_completion(code, language)
             code = extract_llm_generated_code(code)
 
             return code

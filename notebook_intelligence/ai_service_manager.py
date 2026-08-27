@@ -9,7 +9,7 @@ import threading
 from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
-from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, RegistrationError, TelemetryEvent, TelemetryListener, Tool, Toolset
+from notebook_intelligence.api import ButtonData, ChatModel, ChatbookContextProvider, ChatbookMentionProvider, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, RegistrationError, TelemetryEvent, TelemetryListener, Tool, Toolset
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
 from notebook_intelligence.github_copilot_chat_participant import GithubCopilotChatParticipant
@@ -48,6 +48,8 @@ class AIServiceManager(Host):
         self.llm_providers: Dict[str, LLMProvider] = {}
         self.chat_participants: Dict[str, ChatParticipant] = {}
         self.completion_context_providers: Dict[str, CompletionContextProvider] = {}
+        self.chatbook_context_providers: Dict[str, ChatbookContextProvider] = {}
+        self.chatbook_mention_providers: Dict[str, ChatbookMentionProvider] = {}
         self.telemetry_listeners: Dict[str, TelemetryListener] = {}
         self._extension_toolsets: Dict[str, list[Toolset]] = {}
         self._options = dict(options) if options is not None else {}
@@ -141,6 +143,7 @@ class AIServiceManager(Host):
         # Created lazily the first time ACP mode is active so the ACP SDK
         # import stays off the startup path (#378).
         self._acp_chat_participant = None
+        self._chatbook_acp_client = None
         self.register_llm_provider(GitHubCopilotLLMProvider())
         self.register_llm_provider(self._openai_compatible_llm_provider)
         self.register_llm_provider(self._litellm_compatible_llm_provider)
@@ -252,6 +255,22 @@ class AIServiceManager(Host):
         participant has never been created."""
         if self._acp_chat_participant is not None:
             self._acp_chat_participant.restart_client()
+        if self._chatbook_acp_client is not None:
+            self._chatbook_acp_client.shutdown()
+            self._chatbook_acp_client = None
+
+    def generate_chatbook_with_acp(
+        self, prompt: str, response: ChatResponse
+    ) -> Optional[str]:
+        """Run Chatbook generation through the active ACP agent."""
+        if not self.is_acp_mode:
+            return "ACP mode is not enabled"
+        if self._chatbook_acp_client is None:
+            from notebook_intelligence.acp_agent import AcpAgentClient
+            self._chatbook_acp_client = AcpAgentClient(
+                self, force_safe_mode=True
+            )
+        return self._chatbook_acp_client.query_isolated(prompt, response)
 
     def update_mcp_servers(self):
         self._mcp_manager.update_mcp_servers(self.nbi_config.mcp)
@@ -314,6 +333,44 @@ class AIServiceManager(Host):
         if provider.id in self.completion_context_providers:
             raise RegistrationError(f"Completion Context Provider ID '{provider.id}' is already in use!")
         self.completion_context_providers[provider.id] = provider
+
+    def register_chatbook_context_provider(
+        self, provider: ChatbookContextProvider
+    ) -> None:
+        if provider.id in self.chatbook_context_providers:
+            raise RegistrationError(
+                f"Chatbook Context Provider ID '{provider.id}' is already in use!"
+            )
+        self.chatbook_context_providers[provider.id] = provider
+
+    def register_chatbook_mention_provider(
+        self, provider: ChatbookMentionProvider
+    ) -> None:
+        provider_id = str(provider.id or '').strip()
+        if not provider_id or any(
+            char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
+            for char in provider_id
+        ):
+            raise RegistrationError(
+                "Chatbook Mention Provider IDs may only contain letters, "
+                "numbers, '.', '_', and '-'"
+            )
+        if provider_id in self.chatbook_mention_providers:
+            raise RegistrationError(
+                f"Chatbook Mention Provider ID '{provider_id}' is already in use!"
+            )
+        self.chatbook_mention_providers[provider_id] = provider
+
+    def get_chatbook_context_providers(self) -> list[ChatbookContextProvider]:
+        return list(self.chatbook_context_providers.values())
+
+    def get_chatbook_mention_providers(self) -> list[ChatbookMentionProvider]:
+        return list(self.chatbook_mention_providers.values())
+
+    def get_chatbook_mention_provider(
+        self, provider_id: str
+    ) -> Optional[ChatbookMentionProvider]:
+        return self.chatbook_mention_providers.get(provider_id)
 
     def register_telemetry_listener(self, listener: TelemetryListener) -> None:
         if listener.name in self.telemetry_listeners:

@@ -1087,6 +1087,24 @@ class TestClaudeChatModelStreaming:
         kwargs = model._client.messages.stream.call_args.kwargs
         assert kwargs["system"] == "return only replacement code"
 
+    def test_system_messages_use_anthropic_system_parameter(self):
+        model, _ = _make_chat_model(["ok"])
+        response = MagicMock()
+
+        model.completions(
+            messages=[
+                {"role": "system", "content": "Generate Python only."},
+                {"role": "user", "content": "Create a value."},
+            ],
+            response=response,
+        )
+
+        kwargs = model._client.messages.stream.call_args.kwargs
+        assert kwargs["system"] == "Generate Python only."
+        assert kwargs["messages"] == [
+            {"role": "user", "content": "Create a value."}
+        ]
+
     def test_empty_chunks_are_skipped(self):
         # The Anthropic stream can occasionally yield empty strings between
         # content blocks. Forwarding those wastes a websocket frame and

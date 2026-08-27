@@ -27,6 +27,33 @@
   border: 0;
 }
 
+.nbi-chatbook-execution-modes {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.nbi-chatbook-execution-mode {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 8px 0;
+  color: var(--jp-ui-font-color1);
+  font: 13px/1.4 var(--jp-ui-font-family);
+  cursor: pointer;
+}
+
+.nbi-chatbook-execution-mode input {
+  margin-top: 3px;
+}
+
+.nbi-chatbook-execution-mode-help {
+  display: block;
+  margin-top: 2px;
+  color: var(--jp-ui-font-color2);
+  font-weight: 400;
+}
+
 .drop-zone-overlay {
   position: absolute;
   inset: 0;
@@ -3531,4 +3558,208 @@ svg.access-token-warning {
 .nbi-tour-skip-link:focus-visible {
   color: var(--jp-ui-font-color1);
   outline: none;
+}
+
+.nbi-chatbook-confirm {
+  margin: 0 0 0 var(--jp-cell-prompt-width, 64px);
+  padding: 8px 10px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: var(--jp-border-radius);
+  background: var(--jp-layout-color2);
+}
+
+.nbi-chatbook-confirm-header {
+  margin-bottom: 6px;
+  color: var(--jp-ui-font-color1);
+  font: 13px/1.4 var(--jp-ui-font-family);
+}
+
+.nbi-chatbook-confirm-code {
+  margin: 0 0 8px;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--jp-border-radius);
+  background: var(--jp-layout-color1);
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-code-font-size);
+  white-space: pre-wrap;
+}
+
+.nbi-chatbook-confirm-reasons {
+  margin: 0 0 8px;
+  padding-left: 1.2em;
+  color: var(--jp-warn-color1, var(--jp-ui-font-color1));
+  font: 12px/1.4 var(--jp-ui-font-family);
+}
+
+.nbi-chatbook-confirm-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.nbi-chatbook-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nbi-chatbook-confirm-run,
+.nbi-chatbook-confirm-discard {
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding: 2px 10px;
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1.7;
+}
+
+.nbi-chatbook-confirm-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--jp-ui-font-color2);
+  font: 12px/1.4 var(--jp-ui-font-family);
+}
+
+.nbi-chatbook-confirm-settings-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--jp-content-link-color, var(--jp-brand-color1));
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nbi-chatbook-confirm-settings-link:hover,
+.nbi-chatbook-confirm-settings-link:focus-visible {
+  color: var(--jp-brand-color0, var(--jp-brand-color1));
+  outline: none;
+}
+
+.nbi-chatbook-generated-code {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-code-font-size);
+}
+
+.nbi-chatbook-toolbar-button .jp-ToolbarButtonComponent {
+  font-size: var(--jp-ui-font-size1);
+}
+
+.jp-Cell.nbi-chatbook-cell-prompt,
+.jp-Cell.nbi-chatbook-cell-code {
+  --nbi-chatbook-cell-mode-width: 36px;
+
+  /* Matches the height of the cell toolbar's buttons. */
+  --nbi-chatbook-cell-mode-height: 25px;
+
+  /*
+   * Distance from the input area's right edge. Keep this above zero: the input
+   * area clips its overflow, so a flush badge loses its right border.
+   */
+  --nbi-chatbook-cell-mode-right: 2px;
+  --nbi-chatbook-cell-mode-gap: 4px;
+
+  /*
+   * The toolbar's 25px-tall buttons sit in a 29px row, centered on the input
+   * row; this drop centers the shorter badge on the same line.
+   */
+  --nbi-chatbook-cell-mode-drop: 2px;
+
+  position: relative;
+}
+
+/*
+ * The cell toolbar is pinned to the right edge of the cell, where the mode
+ * badge also lives, so reserve room for the badge plus a gap.
+ */
+.jp-Cell.nbi-chatbook-cell-prompt .jp-cell-toolbar,
+.jp-Cell.nbi-chatbook-cell-code .jp-cell-toolbar {
+  right: calc(
+    var(--nbi-chatbook-cell-mode-right) + var(--nbi-chatbook-cell-mode-width) +
+      var(--nbi-chatbook-cell-mode-gap)
+  );
+}
+
+/*
+ * Sits in the input area alongside the cell toolbar. Leaving `top` unset keeps
+ * it at the same static offset the toolbar uses, so the two share a baseline
+ * without hard-coded offsets.
+ */
+.nbi-chatbook-cell-mode {
+  display: inline-flex;
+  position: absolute;
+  z-index: 7;
+  right: var(--nbi-chatbook-cell-mode-right);
+  box-sizing: border-box;
+  margin-top: var(--nbi-chatbook-cell-mode-drop);
+  align-items: center;
+  justify-content: center;
+  width: var(--nbi-chatbook-cell-mode-width);
+  height: var(--nbi-chatbook-cell-mode-height);
+  padding: 0;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: calc(var(--nbi-chatbook-cell-mode-height) / 2);
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font: 600 11px/1 var(--jp-ui-font-family);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.nbi-chatbook-cell-mode:hover,
+.nbi-chatbook-cell-mode:focus-visible {
+  background: var(--jp-layout-color3);
+  opacity: 1;
+}
+
+.nbi-chatbook-cell-code .nbi-chatbook-cell-mode {
+  color: var(--jp-brand-color1);
+  border-color: var(--jp-brand-color1);
+}
+
+.nbi-chatbook-mention-menu {
+  position: fixed;
+  z-index: 10000;
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: 4px;
+  background: var(--jp-layout-color1);
+  box-shadow: var(--jp-elevation-z6);
+}
+
+.nbi-chatbook-mention-option {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--jp-ui-font-color1);
+  font: var(--jp-ui-font-size1) var(--jp-ui-font-family);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nbi-chatbook-mention-option:hover,
+.nbi-chatbook-mention-option.active {
+  background: var(--jp-layout-color2);
 }

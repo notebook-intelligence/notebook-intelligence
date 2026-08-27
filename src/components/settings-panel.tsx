@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ReactWidget } from '@jupyterlab/apputils';
+import { ISignal, Signal } from '@lumino/signaling';
 import { VscWarning } from '../icons';
 import * as path from 'path';
 
@@ -25,6 +26,17 @@ import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
 import { writeTextToClipboard } from '../utils';
+import {
+  CHATBOOK_EXECUTION_MODES,
+  clampChatbookExecutionMode,
+  type ChatbookExecutionMode
+} from '../chatbook-core';
+import {
+  listChatbookBackendProfiles,
+  resolveChatbookBackendProfile,
+  sharedKernelSpecManager,
+  type INotebookKernelProfile
+} from '../notebook-kernels';
 
 const lockedTip = (locked: boolean): string =>
   locked ? 'Locked by your administrator' : '';
@@ -108,11 +120,22 @@ export class SettingsPanel extends ReactWidget {
   constructor(options: {
     onSave: () => void;
     onEditMCPConfigClicked: () => void;
+    initialTab?: string;
   }) {
     super();
 
     this._onSave = options.onSave;
     this._onEditMCPConfigClicked = options.onEditMCPConfigClicked;
+    this._activeTab = options.initialTab ?? 'general';
+  }
+
+  /**
+   * Deep link into a section. The signal covers a panel that is already
+   * mounted; `_activeTab` covers one that mounts right after this call.
+   */
+  selectTab(tab: string): void {
+    this._activeTab = tab;
+    this._tabRequested.emit(tab);
   }
 
   render(): JSX.Element {
@@ -120,12 +143,16 @@ export class SettingsPanel extends ReactWidget {
       <SettingsPanelComponent
         onSave={this._onSave}
         onEditMCPConfigClicked={this._onEditMCPConfigClicked}
+        initialTab={this._activeTab}
+        tabRequested={this._tabRequested}
       />
     );
   }
 
   private _onSave: () => void;
   private _onEditMCPConfigClicked: () => void;
+  private _activeTab: string;
+  private _tabRequested = new Signal<this, string>(this);
 }
 
 // Tab declaration. Adding a new tab is one entry here plus an icon
@@ -143,6 +170,7 @@ type TabVisibilityContext = {
   featurePolicies: import('../api').IFeaturePolicies;
   isInClaudeCodeMode: boolean;
   isClaudeCliAvailable: boolean;
+  chatbookEnabled: boolean;
 };
 
 const TABS: TabSpec[] = [
@@ -156,6 +184,12 @@ const TABS: TabSpec[] = [
         onEditMCPConfigClicked={props.onEditMCPConfigClicked}
       />
     )
+  },
+  {
+    id: 'chatbook',
+    label: 'Chatbook',
+    visible: ctx => ctx.chatbookEnabled,
+    render: () => <SettingsPanelComponentChatbook />
   },
   {
     id: 'claude',
@@ -226,7 +260,7 @@ const TABS: TabSpec[] = [
 ];
 
 function SettingsPanelComponent(props: any) {
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState(props.initialTab || 'general');
   const { featurePolicies } = useNbiPolicies();
   const [isInClaudeCodeMode, setIsInClaudeCodeMode] = useState(
     NBIAPI.config.isInClaudeCodeMode
@@ -234,11 +268,15 @@ function SettingsPanelComponent(props: any) {
   const [isClaudeCliAvailable, setIsClaudeCliAvailable] = useState(
     NBIAPI.config.isClaudeCliAvailable
   );
+  const [chatbookEnabled, setChatbookEnabled] = useState(
+    NBIAPI.config.chatbookEnabled
+  );
 
   useEffect(() => {
     const handler = () => {
       setIsInClaudeCodeMode(NBIAPI.config.isInClaudeCodeMode);
       setIsClaudeCliAvailable(NBIAPI.config.isClaudeCliAvailable);
+      setChatbookEnabled(NBIAPI.config.chatbookEnabled);
     };
     NBIAPI.configChanged.connect(handler);
     return () => {
@@ -246,10 +284,25 @@ function SettingsPanelComponent(props: any) {
     };
   }, []);
 
+  useEffect(() => {
+    const requested: ISignal<unknown, string> | undefined = props.tabRequested;
+    if (!requested) {
+      return;
+    }
+    const handler = (_sender: unknown, tab: string) => {
+      setActiveTab(tab);
+    };
+    requested.connect(handler);
+    return () => {
+      requested.disconnect(handler);
+    };
+  }, [props.tabRequested]);
+
   const ctx: TabVisibilityContext = {
     featurePolicies,
     isInClaudeCodeMode,
-    isClaudeCliAvailable
+    isClaudeCliAvailable,
+    chatbookEnabled
   };
   const visibleTabs = TABS.filter(t => t.visible(ctx));
   const activeTabSpec = visibleTabs.find(t => t.id === activeTab);
@@ -1179,6 +1232,210 @@ function SettingsPanelComponentMCPServers(props: any) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CHATBOOK_MODE_LABELS: Record<
+  ChatbookExecutionMode,
+  { title: string; description: string }
+> = {
+  'always-confirm': {
+    title: 'Always confirm',
+    description:
+      "Show the generated code and wait for Run or Don't run on every natural-language Run."
+  },
+  'confirm-if-risky': {
+    title: 'Confirm if risky',
+    description:
+      'Auto-run when a static scan looks clean. Confirm when it flags a risk or cannot parse the cell. The scan is a speed bump, not a security boundary — false negatives are inevitable.'
+  },
+  'auto-run': {
+    title: 'Auto-run',
+    description:
+      'Generate and execute immediately, same as a normal notebook cell. Inspect generated code afterward if you need to.'
+  }
+};
+
+function SettingsPanelComponentChatbook() {
+  const nbiConfig = NBIAPI.config;
+  const maxMode = nbiConfig.chatbookMaxExecutionMode;
+  const [executionMode, setExecutionMode] = useState<ChatbookExecutionMode>(
+    nbiConfig.chatbookExecutionMode
+  );
+  const [llmDangerScan, setLlmDangerScan] = useState(
+    nbiConfig.chatbookLlmDangerScan
+  );
+  const [backendKernel, setBackendKernel] = useState(
+    nbiConfig.chatbookBackendKernel
+  );
+  const [backendProfiles, setBackendProfiles] = useState<
+    INotebookKernelProfile[]
+  >([]);
+  const [restartHint, setRestartHint] = useState(false);
+
+  useEffect(() => {
+    const handler = () => {
+      setExecutionMode(NBIAPI.config.chatbookExecutionMode);
+      setLlmDangerScan(NBIAPI.config.chatbookLlmDangerScan);
+      setBackendKernel(NBIAPI.config.chatbookBackendKernel);
+    };
+    NBIAPI.configChanged.connect(handler);
+    return () => {
+      NBIAPI.configChanged.disconnect(handler);
+    };
+  }, []);
+
+  useEffect(() => {
+    const kernels = sharedKernelSpecManager();
+    void kernels.ready.then(() => {
+      const profiles = listChatbookBackendProfiles(kernels.specs?.kernelspecs);
+      setBackendProfiles(profiles);
+      if (!NBIAPI.config.chatbookBackendKernel && profiles.length) {
+        setBackendKernel(
+          resolveChatbookBackendProfile(kernels.specs?.kernelspecs).kernelName
+        );
+      }
+    });
+  }, []);
+
+  const save = (
+    nextMode: ChatbookExecutionMode,
+    nextLlm: boolean = llmDangerScan,
+    nextBackend: string = backendKernel
+  ) => {
+    const mode = clampChatbookExecutionMode(nextMode, maxMode);
+    setExecutionMode(mode);
+    setLlmDangerScan(nextLlm);
+    setBackendKernel(nextBackend);
+    NBIAPI.setConfig({
+      chatbook_execution_mode: mode,
+      chatbook_llm_danger_scan: nextLlm,
+      chatbook_backend_kernel: nextBackend
+    });
+  };
+
+  const selectedBackend =
+    backendProfiles.find(profile => profile.kernelName === backendKernel) ||
+    resolveChatbookBackendProfile(undefined, backendKernel);
+
+  return (
+    <div className="config-dialog">
+      <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Backend kernel</div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                Chatbook stays the notebook kernel, but generated code runs in
+                this Jupyter kernelspec. Language, syntax highlighting, and
+                export follow that kernel. Restart open Chatbook notebooks after
+                changing it.
+              </span>
+            </div>
+            <div className="model-config-section-row">
+              <div className="model-config-section-column">
+                <div id="nbi-chatbook-backend-kernel-label">
+                  Execution kernel
+                </div>
+                <select
+                  className="jp-mod-styled"
+                  aria-labelledby="nbi-chatbook-backend-kernel-label"
+                  value={backendKernel}
+                  onChange={event => {
+                    const next = event.target.value;
+                    setRestartHint(
+                      next !== NBIAPI.config.chatbookBackendKernel
+                    );
+                    save(executionMode, llmDangerScan, next);
+                  }}
+                >
+                  {backendKernel &&
+                    !backendProfiles.some(
+                      profile => profile.kernelName === backendKernel
+                    ) && (
+                      <option value={backendKernel}>
+                        {backendKernel} (not installed)
+                      </option>
+                    )}
+                  {backendProfiles.map(profile => (
+                    <option key={profile.kernelName} value={profile.kernelName}>
+                      {profile.displayName} ({profile.language})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {restartHint && (
+              <div className="model-config-section-row">
+                <span>
+                  Restart the Chatbook kernel in open notebooks so they pick up{' '}
+                  {selectedBackend.displayName}.
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="model-config-section">
+          <div className="model-config-section-header">
+            Natural-language execution
+          </div>
+          <div className="model-config-section-body">
+            <div className="model-config-section-row">
+              <span>
+                Chatbook generates {selectedBackend.language} and runs it in{' '}
+                {selectedBackend.displayName}. That process has the same
+                privileges as any Jupyter kernel: files, network, environment
+                variables, and package installs.
+              </span>
+            </div>
+            <fieldset className="nbi-chatbook-execution-modes">
+              <legend className="nbi-sr-only">Execution mode</legend>
+              {CHATBOOK_EXECUTION_MODES.map(mode => {
+                const spec = CHATBOOK_MODE_LABELS[mode];
+                const disabled =
+                  clampChatbookExecutionMode(mode, maxMode) !== mode;
+                return (
+                  <label
+                    key={mode}
+                    className="nbi-chatbook-execution-mode"
+                    title={
+                      disabled
+                        ? 'Locked by your administrator'
+                        : spec.description
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="chatbook-execution-mode"
+                      value={mode}
+                      checked={executionMode === mode}
+                      disabled={disabled}
+                      onChange={() => save(mode)}
+                    />
+                    <span>
+                      <strong>{spec.title}</strong>
+                      <span className="nbi-chatbook-execution-mode-help">
+                        {spec.description}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            {executionMode === 'confirm-if-risky' && (
+              <div className="model-config-section-row">
+                <CheckBoxItem
+                  label="Also classify with the chat model"
+                  title="Optional extra check. A static scan hit always wins; the model can only raise risk. Classifier failures confirm instead of auto-running."
+                  checked={llmDangerScan}
+                  onClick={() => save(executionMode, !llmDangerScan)}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

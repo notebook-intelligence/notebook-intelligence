@@ -45,7 +45,11 @@ import {
   IInlineCompleterFactory
 } from '@jupyterlab/completer';
 
-import { NotebookActions, NotebookPanel } from '@jupyterlab/notebook';
+import {
+  INotebookTracker,
+  NotebookActions,
+  NotebookPanel
+} from '@jupyterlab/notebook';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { FileEditorWidget } from '@jupyterlab/fileeditor';
 
@@ -130,6 +134,10 @@ import { ITerminalConnection } from '@jupyterlab/services/lib/terminal/terminal'
 import { ITerminalTracker } from '@jupyterlab/terminal';
 import { Token } from '@lumino/coreutils';
 import { NotebookGenerationToolbarExtension } from './notebook-generation-toolbar';
+import {
+  ChatbookToolbarExtension,
+  confirmConvertChatbookNotebook
+} from './chatbook-toolbar';
 import { attachTerminalDragDrop } from './terminal-drag';
 import {
   DEFAULT_NOTEBOOK_KERNEL,
@@ -140,6 +148,27 @@ import {
 } from './notebook-kernels';
 
 import { CommandIDs } from './command-ids';
+import {
+  CHATBOOK_KERNEL_NAME,
+  CHATBOOK_LANGUAGE,
+  attachChatbookNotebooks,
+  getChatbookBackendLanguage,
+  getChatbookCellMode,
+  getChatbookCellMeta,
+  isChatbookPromptInlineCompletion,
+  isChatbookSession,
+  nextChatbookNotebookMode,
+  patchCodeCellExecute,
+  registerChatbookLanguage,
+  summarizeCodeCell,
+  toggleActiveChatbookCellMode,
+  toggleAllChatbookCellModes
+} from './chatbook';
+import { detectChatbookMentionTrigger } from './chatbook-mentions';
+import {
+  captureInlineCompletionOrigin,
+  isInlineCompletionOriginCurrent
+} from './inline-completion-origin';
 
 const addInlinePromptEffect = StateEffect.define<{
   pos: number;
@@ -577,27 +606,54 @@ class NBIInlineCompletionProvider
     let language = ActiveDocumentWatcher.activeDocumentInfo.language;
 
     let editorType = 'file-editor';
+    let notebookPanel: NotebookPanel | null = null;
 
     if (context.widget instanceof NotebookPanel) {
       editorType = 'notebook';
-      const activeCell = context.widget.content.activeCell;
-      if (activeCell.model.sharedModel.cell_type === 'markdown') {
+      const panel = context.widget;
+      notebookPanel = panel;
+      const activeCell = panel.content.activeCell;
+      const activeMode = activeCell
+        ? getChatbookCellMode(getChatbookCellMeta(activeCell.model.metadata))
+        : 'prompt';
+      const chatbookPromptMode = isChatbookPromptInlineCompletion(
+        panel.sessionContext.session?.kernel?.name ||
+          panel.sessionContext.kernelPreference?.name,
+        activeMode
+      );
+      if (chatbookPromptMode) {
+        // Ghost text while an @mention is being picked would compete with the
+        // mention menu for Tab.
+        if (detectChatbookMentionTrigger(request.text, request.offset)) {
+          return Promise.resolve({ items: [] });
+        }
+        language = CHATBOOK_LANGUAGE;
+      } else if (
+        isChatbookSession(panel.sessionContext) &&
+        activeMode === 'code'
+      ) {
+        language = getChatbookBackendLanguage();
+      } else if (activeCell?.model.sharedModel.cell_type === 'markdown') {
         language = 'markdown';
       }
       let activeCellReached = false;
 
-      for (const cell of context.widget.content.widgets) {
+      for (const cell of panel.content.widgets) {
         const cellModel = cell.model.sharedModel;
         if (cell === activeCell) {
           activeCellReached = true;
         } else if (!activeCellReached) {
-          if (cellModel.cell_type === 'code') {
+          if (chatbookPromptMode) {
+            preContent += cellModel.source + '\n';
+          } else if (cellModel.cell_type === 'code') {
             preContent += cellModel.source + '\n';
           } else if (cellModel.cell_type === 'markdown') {
             preContent += markdownToComment(cellModel.source) + '\n';
           }
         } else {
-          if (cellModel.cell_type === 'code') {
+          if (chatbookPromptMode) {
+            postContent += cellModel.source + '\n';
+          } else if (cellModel.cell_type === 'code') {
             postContent += cellModel.source + '\n';
           } else if (cellModel.cell_type === 'markdown') {
             postContent += markdownToComment(cellModel.source) + '\n';
@@ -606,6 +662,7 @@ class NBIInlineCompletionProvider
       }
     }
 
+    const origin = captureInlineCompletionOrigin(notebookPanel, request.text);
     const nbiConfig = NBIAPI.config;
     const inlineCompletionsEnabled =
       nbiConfig.isInClaudeCodeMode ||
@@ -657,10 +714,6 @@ class NBIInlineCompletionProvider
               response.type === BackendMessageType.StreamMessage &&
               response.id === this._lastRequestInfo.messageId
             ) {
-              items.push({
-                insertText: response.data.completions
-              });
-
               const timeElapsed =
                 (new Date().getTime() -
                   this._lastRequestInfo.requestTime.getTime()) /
@@ -675,6 +728,12 @@ class NBIInlineCompletionProvider
                   timeElapsed
                 }
               });
+
+              if (isInlineCompletionOriginCurrent(origin)) {
+                items.push({
+                  insertText: response.data.completions
+                });
+              }
 
               resolve({ items });
             } else {
@@ -863,7 +922,8 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     IDefaultFileBrowser,
     IEditorLanguageRegistry,
     ICommandPalette,
-    IMainMenu
+    IMainMenu,
+    INotebookTracker
   ],
   // @jupyterlab/terminal nests its own @lumino/coreutils copy, so its
   // Token class is structurally identical but nominally distinct from
@@ -884,6 +944,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     languageRegistry: IEditorLanguageRegistry,
     palette: ICommandPalette,
     mainMenu: IMainMenu,
+    notebookTracker: INotebookTracker,
     statusBar: IStatusBar | null,
     launcher: ILauncher | null,
     terminalTracker: ITerminalTracker | null,
@@ -912,6 +973,19 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     };
 
     await NBIAPI.initialize();
+
+    if (NBIAPI.config.chatbookEnabled) {
+      registerChatbookLanguage(languageRegistry);
+      patchCodeCellExecute();
+      attachChatbookNotebooks(notebookTracker, {
+        languageRegistry,
+        onOpenSettings: () => {
+          void app.commands.execute(CommandIDs.openConfigurationDialog, {
+            tab: 'chatbook'
+          });
+        }
+      });
+    }
 
     if (terminalTracker) {
       attachTerminalDragDrop({
@@ -1086,6 +1160,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
         chatSidebarId: panel.id
       })
     );
+    if (NBIAPI.config.chatbookEnabled) {
+      app.docRegistry.addWidgetExtension(
+        'Notebook',
+        new ChatbookToolbarExtension(app)
+      );
+    }
 
     const updateSidebarIcon = () => {
       if (NBIAPI.getChatEnabled()) {
@@ -1279,69 +1359,226 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       execute: async args => {
         const contents = new ContentsManager();
         const kernels = new KernelSpecManager();
-        await kernels.ready;
-        let profile;
         try {
-          profile = findKernelProfile(kernels.specs?.kernelspecs, {
-            language: args.language as string | undefined,
-            kernelName: args.kernelName as string | undefined
+          await kernels.ready;
+          let profile;
+          try {
+            profile = findKernelProfile(kernels.specs?.kernelspecs, {
+              language: args.language as string | undefined,
+              kernelName: args.kernelName as string | undefined
+            });
+          } catch (error) {
+            if (error instanceof NotebookKernelNotFoundError) {
+              app.commands.execute('apputils:notify', {
+                message: error.message,
+                type: 'error',
+                options: { autoClose: true }
+              });
+            }
+            throw error;
+          }
+
+          const newNBFile = await contents.newUntitled({
+            ext: '.ipynb',
+            path: defaultBrowser?.model.path
           });
-        } catch (error) {
-          if (error instanceof NotebookKernelNotFoundError) {
-            app.commands.execute('apputils:notify', {
-              message: error.message,
-              type: 'error',
-              options: { autoClose: true }
+          const nbFileContent = structuredClone(emptyNotebookContent);
+          nbFileContent.metadata = {
+            kernelspec: {
+              language: profile.language,
+              name: profile.kernelName,
+              display_name: profile.displayName
+            },
+            language_info: {
+              name: profile.language
+            }
+          };
+
+          if (args.code) {
+            nbFileContent.cells.push({
+              cell_type: 'code',
+              metadata: { trusted: true },
+              source: [args.code as string],
+              outputs: []
             });
           }
-          throw error;
+
+          contents.save(newNBFile.path, {
+            content: nbFileContent,
+            format: 'json',
+            type: 'notebook'
+          });
+          docManager.openOrReveal(newNBFile.path);
+
+          await waitForFileToBeActive(newNBFile.path);
+
+          return newNBFile;
+        } finally {
+          kernels.dispose();
         }
+      }
+    });
 
-        const newNBFile = await contents.newUntitled({
-          ext: '.ipynb',
-          path: defaultBrowser?.model.path
+    app.commands.addCommand(CommandIDs.createChatbookNotebook, {
+      label: 'Chatbook',
+      caption: 'Create a notebook whose cells are natural-language prompts',
+      icon: () => sidebarIcon,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: async () => {
+        return app.commands.execute(CommandIDs.createNewNotebook, {
+          kernelName: CHATBOOK_KERNEL_NAME
         });
-        const nbFileContent = structuredClone(emptyNotebookContent);
-        nbFileContent.metadata = {
-          kernelspec: {
-            language: profile.language,
-            name: profile.kernelName,
-            display_name: profile.displayName
-          },
-          language_info: {
-            name: profile.language
-          }
-        };
+      }
+    });
 
-        if (args.code) {
-          nbFileContent.cells.push({
-            cell_type: 'code',
-            metadata: { trusted: true },
-            source: [args.code as string],
-            outputs: []
+    app.commands.addCommand(CommandIDs.showChatbookGeneratedCode, {
+      label: 'Show generated code',
+      caption: 'Show the hidden code generated for this Chatbook cell',
+      isEnabled: () => {
+        const current = app.shell.currentWidget;
+        if (!(current instanceof NotebookPanel)) {
+          return false;
+        }
+        if (
+          current.sessionContext.session?.kernel?.name !== CHATBOOK_KERNEL_NAME
+        ) {
+          return false;
+        }
+        const cell = current.content.activeCell;
+        if (!(cell instanceof CodeCell)) {
+          return false;
+        }
+        return Boolean(getChatbookCellMeta(cell.model.metadata).generatedCode);
+      },
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: async () => {
+        const current = app.shell.currentWidget;
+        if (!(current instanceof NotebookPanel)) {
+          return;
+        }
+        const cell = current.content.activeCell;
+        if (!(cell instanceof CodeCell)) {
+          return;
+        }
+        const code =
+          getChatbookCellMeta(cell.model.metadata).generatedCode || '';
+        const body = document.createElement('pre');
+        body.className = 'nbi-chatbook-generated-code';
+        body.textContent = code;
+        const dialog = new Dialog({
+          title: 'Generated code',
+          body: new (class extends Widget {
+            constructor() {
+              super({ node: body });
+            }
+          })(),
+          buttons: [Dialog.okButton({ label: 'Close' })]
+        });
+        await dialog.launch();
+      }
+    });
+
+    const currentChatbookNotebook = (): NotebookPanel | null => {
+      const current = app.shell.currentWidget;
+      if (!(current instanceof NotebookPanel)) {
+        return null;
+      }
+      return isChatbookSession(current.sessionContext) ? current : null;
+    };
+
+    app.commands.addCommand(CommandIDs.toggleChatbookCellMode, {
+      label: () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        const mode = cell
+          ? getChatbookCellMode(getChatbookCellMeta(cell.model.metadata))
+          : 'prompt';
+        return mode === 'code'
+          ? 'Switch cell to natural language'
+          : 'Switch cell to code';
+      },
+      caption:
+        'Switch the active Chatbook cell between natural language and code',
+      isEnabled: () =>
+        currentChatbookNotebook()?.content.activeCell?.model.type === 'code',
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: () => {
+        const panel = currentChatbookNotebook();
+        if (panel) {
+          toggleActiveChatbookCellMode(panel);
+        }
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.refreshChatbookEnglish, {
+      label: 'Refresh English representation',
+      caption: 'Regenerate the English representation of this code cell',
+      isEnabled: () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        return Boolean(
+          cell &&
+            cell.model.type === 'code' &&
+            getChatbookCellMode(getChatbookCellMeta(cell.model.metadata)) ===
+              'code'
+        );
+      },
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: async () => {
+        const cell = currentChatbookNotebook()?.content.activeCell;
+        if (cell?.model.type === 'code') {
+          await summarizeCodeCell(cell, cell.model.sharedModel.getSource(), {
+            notifyOnError: true,
+            force: true
           });
         }
+      }
+    });
 
-        contents.save(newNBFile.path, {
-          content: nbFileContent,
-          format: 'json',
-          type: 'notebook'
-        });
-        docManager.openOrReveal(newNBFile.path);
+    app.commands.addCommand(CommandIDs.toggleAllChatbookCellModes, {
+      label: () => {
+        const panel = currentChatbookNotebook();
+        return panel && nextChatbookNotebookMode(panel) === 'prompt'
+          ? 'Switch all cells to natural language'
+          : 'Switch all cells to code';
+      },
+      caption:
+        'Switch every cell of this Chatbook between its prompt and its code',
+      isEnabled: () => currentChatbookNotebook() !== null,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: () => {
+        const panel = currentChatbookNotebook();
+        if (!panel) {
+          return;
+        }
+        toggleAllChatbookCellModes(panel);
+      }
+    });
 
-        await waitForFileToBeActive(newNBFile.path);
-
-        return newNBFile;
+    app.commands.addCommand(CommandIDs.convertChatbookNotebook, {
+      label: 'Export as code notebook',
+      caption:
+        'Create a new notebook from this Chatbook using the configured backend kernel, leaving the original unchanged',
+      isEnabled: () => currentChatbookNotebook() !== null,
+      isVisible: () => NBIAPI.config.chatbookEnabled,
+      execute: async () => {
+        const panel = currentChatbookNotebook();
+        if (!panel) {
+          return;
+        }
+        await confirmConvertChatbookNotebook(app, panel);
       }
     });
 
     app.commands.addCommand(CommandIDs.listAvailableNotebookKernels, {
       execute: async () => {
         const kernels = new KernelSpecManager();
-        await kernels.ready;
-        return {
-          kernels: listKernelProfiles(kernels.specs?.kernelspecs)
-        };
+        try {
+          await kernels.ready;
+          return {
+            kernels: listKernelProfiles(kernels.specs?.kernelspecs)
+          };
+        } finally {
+          kernels.dispose();
+        }
       }
     });
 
@@ -1546,6 +1783,9 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       sync();
       NBIAPI.configChanged.connect(sync);
     };
+
+    // Chatbook is a real kernelspec, so JupyterLab already adds a Notebook
+    // launcher tile from kernel.json. Do not add a second tile here.
 
     syncLauncherEntry(
       CommandIDs.openClaudeCodeLauncher,
@@ -2023,8 +2263,12 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     app.commands.addCommand(CommandIDs.openConfigurationDialog, {
       label: 'Notebook Intelligence Settings',
       execute: args => {
+        const tab = typeof args?.tab === 'string' ? args.tab : undefined;
         if (settingsWidget.isDisposed) {
           settingsWidget = createNewSettingsWidget();
+        }
+        if (tab) {
+          settingsWidget.content.selectTab(tab);
         }
         if (!settingsWidget.isAttached) {
           app.shell.add(settingsWidget, 'main');
@@ -2046,6 +2290,30 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
 
     palette.addItem({
       command: CommandIDs.openConfigurationDialog,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.createChatbookNotebook,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.showChatbookGeneratedCode,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.toggleChatbookCellMode,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.refreshChatbookEnglish,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.toggleAllChatbookCellModes,
+      category: 'Notebook Intelligence'
+    });
+    palette.addItem({
+      command: CommandIDs.convertChatbookNotebook,
       category: 'Notebook Intelligence'
     });
     palette.addItem({
@@ -2651,6 +2919,15 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     copilotContextMenu.addItem({ command: CommandIDs.editorGenerateCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisCode });
     copilotContextMenu.addItem({ command: CommandIDs.editorFixThisCode });
+    copilotContextMenu.addItem({
+      command: CommandIDs.showChatbookGeneratedCode
+    });
+    copilotContextMenu.addItem({
+      command: CommandIDs.toggleChatbookCellMode
+    });
+    copilotContextMenu.addItem({
+      command: CommandIDs.refreshChatbookEnglish
+    });
     copilotContextMenu.addItem({ command: CommandIDs.editorExplainThisOutput });
     copilotContextMenu.addItem({
       command: CommandIDs.editorAskAboutThisOutput

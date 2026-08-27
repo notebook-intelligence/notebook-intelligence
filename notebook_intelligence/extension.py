@@ -84,6 +84,19 @@ from notebook_intelligence.built_in_toolsets import built_in_toolsets
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, get_claude_config_dir, get_jupyter_root_dir, set_jupyter_root_dir, is_builtin_tool_enabled_in_env, is_provider_enabled_in_env, VALID_CODING_AGENT_LAUNCHERS, compute_effective_disabled_launchers, validate_coding_agent_launcher_ids, resolve_claude_cli_path, resolve_opencode_cli_path, resolve_pi_cli_path, resolve_copilot_cli_path, resolve_codex_cli_path, safe_anchor_uri, has_dangerous_text_codepoints, split_csv
 from notebook_intelligence.context_factory import RuleContextFactory
 from notebook_intelligence.skillset import SKILL_NAME_REGEX
+from notebook_intelligence.chatbook_generate import (
+    classify_generated_code_danger,
+    generate_chatbook_code,
+    summarize_chatbook_code,
+)
+from notebook_intelligence.chatbook_kernel.execution import (
+    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+    clamp_execution_mode,
+    parse_execution_mode,
+)
+from notebook_intelligence.rule_injector import has_chatbook_guidelines
+from notebook_intelligence.chatbook_mentions import list_chatbook_mentions
+from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -93,6 +106,95 @@ thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
 def _token_count(text: str) -> int:
     return len(tiktoken_encoding.encode(text))
+
+
+def _resolve_chatbook_max_execution_mode(traitlet_value: str) -> str:
+    env = os.environ.get("NBI_CHATBOOK_MAX_EXECUTION_MODE", "").strip()
+    return parse_execution_mode(
+        env or traitlet_value, DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    )
+
+
+CHATBOOK_DISABLED_MESSAGE = "Chatbook is disabled by your administrator"
+CHATBOOK_KERNEL_NAME = "chatbook"
+
+
+def _set_chatbook_kernelspec_execution_cap(kernel_spec_manager, max_mode: str) -> None:
+    """Put the resolved admin cap in the Chatbook kernel's process env.
+
+    The wrapper kernel cannot read the server extension's traitlets directly.
+    Adding the resolved value to its live kernelspec makes env- and
+    traitlet-configured caps equivalent at the actual execution decision.
+    """
+    if kernel_spec_manager is None:
+        return
+    resolved = parse_execution_mode(max_mode, DEFAULT_CHATBOOK_MAX_EXECUTION_MODE)
+    kernel_spec_manager._nbi_chatbook_max_execution_mode = resolved
+    if getattr(kernel_spec_manager, "_nbi_chatbook_cap_wrapped", False):
+        return
+    orig_get = kernel_spec_manager.get_kernel_spec
+
+    def get_kernel_spec(kernel_name, *args, **kwargs):
+        spec = orig_get(kernel_name, *args, **kwargs)
+        if kernel_name == CHATBOOK_KERNEL_NAME:
+            env = dict(getattr(spec, "env", None) or {})
+            env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] = (
+                kernel_spec_manager._nbi_chatbook_max_execution_mode
+            )
+            spec.env = env
+        return spec
+
+    kernel_spec_manager.get_kernel_spec = get_kernel_spec
+    kernel_spec_manager._nbi_chatbook_cap_wrapped = True
+
+
+def _finish_if_chatbook_disabled(handler) -> bool:
+    """Return True after writing a 403 when the admin Chatbook gate is off."""
+    if getattr(handler, "chatbook_enabled", True):
+        return False
+    handler.set_status(403)
+    handler.finish(json.dumps({"error": CHATBOOK_DISABLED_MESSAGE}))
+    return True
+
+
+def _hide_chatbook_kernelspec(kernel_spec_manager) -> None:
+    """Drop Chatbook from Jupyter's live kernelspec manager.
+
+    The kernelspec stays on disk from the package data files; filtering the
+    running manager is what removes the launcher tile and kernel picker.
+    Idempotent so a second call (tests, reload) does not wrap twice.
+    """
+    if kernel_spec_manager is None:
+        return
+    if getattr(kernel_spec_manager, "_nbi_chatbook_hidden", False):
+        return
+    from jupyter_client.kernelspec import NoSuchKernel
+
+    orig_find = kernel_spec_manager.find_kernel_specs
+    orig_get = kernel_spec_manager.get_kernel_spec
+    orig_all = getattr(kernel_spec_manager, "get_all_specs", None)
+
+    def find_kernel_specs(*args, **kwargs):
+        specs = orig_find(*args, **kwargs)
+        specs.pop(CHATBOOK_KERNEL_NAME, None)
+        return specs
+
+    def get_kernel_spec(kernel_name, *args, **kwargs):
+        if kernel_name == CHATBOOK_KERNEL_NAME:
+            raise NoSuchKernel(kernel_name)
+        return orig_get(kernel_name, *args, **kwargs)
+
+    kernel_spec_manager.find_kernel_specs = find_kernel_specs
+    kernel_spec_manager.get_kernel_spec = get_kernel_spec
+    if orig_all is not None:
+
+        def get_all_specs(*args, **kwargs):
+            specs = orig_all(*args, **kwargs)
+            specs.pop(CHATBOOK_KERNEL_NAME, None)
+            return specs
+
+        kernel_spec_manager.get_all_specs = get_all_specs
+    kernel_spec_manager._nbi_chatbook_hidden = True
 
 
 def _truncate_context_content(content: str, token_budget: int) -> str:
@@ -578,6 +680,8 @@ class GetCapabilitiesHandler(APIHandler):
     additional_skipped_workspace_directories = []
     feature_policies = {}
     string_overrides = {}
+    chatbook_max_execution_mode = DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    chatbook_enabled = True
     # Resolved at extension init from NBI_TOUR_CONFIG_PATH (or the
     # tour_config_path traitlet). Empty string disables the override.
     tour_config_path = ""
@@ -693,6 +797,36 @@ class GetCapabilitiesHandler(APIHandler):
             "default_chat_mode": nbi_config.default_chat_mode,
             "chat_feedback_enabled": self.enable_chat_feedback,
             "chat_feedback_always_visible": self.enable_chat_feedback_always_visible,
+            # Dynamic providers run at generation time, so the frontend must
+            # not satisfy an execution from its local generated-code cache.
+            "chatbook_has_context_providers": bool(
+                ai_service_manager.get_chatbook_context_providers()
+            ),
+            # Rules and AGENTS.md are applied at generation time, so the
+            # frontend must not reuse locally cached Python for an unchanged
+            # prompt when guidelines can change independently.
+            "chatbook_has_guidelines": has_chatbook_guidelines(
+                ai_service_manager
+            ),
+            "chatbook_execution_mode": clamp_execution_mode(
+                nbi_config.chatbook_execution_mode,
+                getattr(
+                    self,
+                    "chatbook_max_execution_mode",
+                    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                ),
+            ),
+            "chatbook_llm_danger_scan": nbi_config.chatbook_llm_danger_scan,
+            "chatbook_backend_kernel": nbi_config.chatbook_backend_kernel,
+            "chatbook_max_execution_mode": parse_execution_mode(
+                getattr(
+                    self,
+                    "chatbook_max_execution_mode",
+                    DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                ),
+                DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+            ),
+            "chatbook_enabled": self.chatbook_enabled,
             # Single source of truth lives on each domain's base handler so
             # `_setup_handlers` only writes one site per flag.
             "allow_github_skill_import": SkillsBaseHandler.allow_github_skill_import,
@@ -738,9 +872,156 @@ class GetCapabilitiesHandler(APIHandler):
 
         self.finish(json.dumps(response))
 
+class ChatbookGenerateHandler(APIHandler):
+    """Generate either Python or an English representation for Chatbook."""
+
+    chatbook_enabled = True
+
+    @tornado.web.authenticated
+    async def post(self):
+        if _finish_if_chatbook_disabled(self):
+            return
+        try:
+            data = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError:
+            self.set_status(400)
+            self.finish(json.dumps({"error": "Invalid JSON body"}))
+            return
+        operation = (
+            data.get("operation", "generate")
+            if isinstance(data, dict)
+            else "generate"
+        )
+        prompt = data.get("prompt") if isinstance(data, dict) else None
+        code_source = data.get("code") if isinstance(data, dict) else None
+        required_value = (
+            code_source
+            if operation in {"summarize", "danger_scan"}
+            else prompt
+        )
+        if not str(required_value).strip():
+            self.set_status(400)
+            field = (
+                "code" if operation in {"summarize", "danger_scan"} else "prompt"
+            )
+            self.finish(json.dumps({"error": f"{field} is required"}))
+            return
+        notebook_context = None
+        notebook_path = ""
+        cell_id = ""
+        prompt_hash = ""
+        context_hash = ""
+        language = "python"
+        if isinstance(data, dict):
+            notebook_context = data.get("notebookContext") or data.get(
+                "notebook_context"
+            )
+            if not isinstance(notebook_context, dict):
+                notebook_context = None
+            notebook_path = str(
+                data.get("notebookPath") or data.get("notebook_path") or ""
+            )
+            cell_id = str(data.get("cellId") or data.get("cell_id") or "")
+            prompt_hash = str(
+                data.get("promptHash") or data.get("prompt_hash") or ""
+            )
+            context_hash = str(
+                data.get("contextHash") or data.get("context_hash") or ""
+            )
+            language = str(data.get("language") or "python")
+        try:
+            if operation == "summarize":
+                english = await tornado.ioloop.IOLoop.current().run_in_executor(
+                    None,
+                    lambda: summarize_chatbook_code(
+                        ai_service_manager, str(code_source), language
+                    ),
+                )
+                self.finish(json.dumps({"prompt": english}))
+                return
+            if operation == "danger_scan":
+                scan = await tornado.ioloop.IOLoop.current().run_in_executor(
+                    None,
+                    lambda: classify_generated_code_danger(
+                        ai_service_manager, str(code_source), language
+                    ),
+                )
+                self.finish(json.dumps(scan))
+                return
+            code = await tornado.ioloop.IOLoop.current().run_in_executor(
+                None,
+                lambda: generate_chatbook_code(
+                    ai_service_manager,
+                    prompt,
+                    notebook_context,
+                    notebook_path,
+                    cell_id,
+                    prompt_hash,
+                    context_hash,
+                    language,
+                ),
+            )
+        except ChatbookCodegenError as exc:
+            self.set_status(400)
+            self.finish(json.dumps({"error": str(exc)}))
+            return
+        except Exception as exc:
+            log.error("Chatbook generate failed: %s", exc)
+            self.set_status(500)
+            message = (
+                "Chatbook English generation failed"
+                if operation == "summarize"
+                else "Chatbook code generation failed"
+            )
+            self.finish(json.dumps({"error": message}))
+            return
+        self.finish(json.dumps({"generatedCode": code}))
+
+
+class ChatbookMentionsHandler(APIHandler):
+    """List built-in and extension-provided mentions for Chatbook NL cells."""
+
+    chatbook_enabled = True
+
+    @tornado.web.authenticated
+    async def get(self):
+        if _finish_if_chatbook_disabled(self):
+            return
+        parent = self.get_query_argument("parent", default="")
+        query = self.get_query_argument("query", default="")
+        notebook_path = self.get_query_argument("notebookPath", default="")
+        try:
+            limit = int(self.get_query_argument("limit", default="100"))
+        except ValueError:
+            limit = 100
+        skipped = []
+        nbi_config = getattr(ai_service_manager, "nbi_config", None)
+        if nbi_config is not None:
+            skipped = nbi_config.additional_skipped_workspace_directories
+        try:
+            response = await tornado.ioloop.IOLoop.current().run_in_executor(
+                None,
+                lambda: list_chatbook_mentions(
+                    parent=parent,
+                    query=query,
+                    limit=limit,
+                    skipped_directories=skipped,
+                    providers=ai_service_manager.get_chatbook_mention_providers(),
+                    notebook_path=notebook_path,
+                ),
+            )
+        except Exception as exc:
+            log.error("Chatbook mention listing failed: %s", exc)
+            self.set_status(500)
+            self.finish(json.dumps({"error": "Could not list workspace mentions"}))
+            return
+        self.finish(json.dumps(response))
+
+
 class ConfigHandler(APIHandler):
     feature_policies = {}
     string_overrides = {}
+    chatbook_max_execution_mode = DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
 
     @tornado.web.authenticated
     def post(self):
@@ -758,6 +1039,9 @@ class ConfigHandler(APIHandler):
             "enable_output_followup",
             "enable_output_toolbar",
             "refresh_open_files_on_disk_change",
+            "chatbook_execution_mode",
+            "chatbook_llm_danger_scan",
+            "chatbook_backend_kernel",
         ])
         # Top-level keys whose write is rejected outright when locked.
         locked_keys = set()
@@ -848,6 +1132,21 @@ class ConfigHandler(APIHandler):
                 has_acp_settings_change = (
                     value != (ai_service_manager.nbi_config.get("acp_settings") or {})
                 )
+            elif key == "chatbook_execution_mode":
+                value = clamp_execution_mode(
+                    value,
+                    getattr(
+                        self,
+                        "chatbook_max_execution_mode",
+                        DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+                    ),
+                )
+            elif key == "chatbook_llm_danger_scan":
+                value = bool(value)
+            elif key == "chatbook_backend_kernel":
+                value = str(value or "").strip()
+                if value == "chatbook":
+                    value = ""
             ai_service_manager.nbi_config.set(key, value)
             if key == "store_github_access_token":
                 if value:
@@ -3623,6 +3922,31 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    chatbook_max_execution_mode = Unicode(
+        default_value=DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+        help="""
+        Cap how freely a user can auto-run Chatbook-generated Python.
+        Users cannot choose a more permissive NL execution mode than this
+        value. Allowed: always-confirm, confirm-if-risky, auto-run
+        (default, no cap). Overridden by
+        NBI_CHATBOOK_MAX_EXECUTION_MODE.
+        """,
+        config=True,
+    )
+
+    enable_chatbook = Bool(
+        default_value=True,
+        help="""
+        Enable Chatbook (natural-language notebooks). Default True so users
+        need no extra env var. Set False (or NBI_ENABLE_CHATBOOK=false) to
+        hide the Chatbook kernelspec, Settings tab, launcher tile, and
+        generate/mention APIs. Overridden by the NBI_ENABLE_CHATBOOK env
+        var.
+        """,
+        allow_none=True,
+        config=True,
+    )
+
     upload_max_mb = Int(
         default_value=_DEFAULT_UPLOAD_MAX_MB,
         help="""
@@ -3738,6 +4062,15 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.string_overrides = string_overrides
         ConfigHandler.feature_policies = feature_policies
         ConfigHandler.string_overrides = string_overrides
+        max_mode = _resolve_chatbook_max_execution_mode(
+            getattr(self, "chatbook_max_execution_mode", DEFAULT_CHATBOOK_MAX_EXECUTION_MODE)
+        )
+        GetCapabilitiesHandler.chatbook_max_execution_mode = max_mode
+        ConfigHandler.chatbook_max_execution_mode = max_mode
+        _set_chatbook_kernelspec_execution_cap(
+            getattr(self.serverapp, "kernel_spec_manager", None),
+            max_mode,
+        )
 
     def initialize_handlers(self):
         NotebookIntelligence.root_dir = self.serverapp.root_dir
@@ -3814,6 +4147,8 @@ class NotebookIntelligence(ExtensionApp):
 
         base_url = web_app.settings["base_url"]
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
+        route_pattern_chatbook_generate = url_path_join(base_url, "notebook-intelligence", "chatbook", "generate")
+        route_pattern_chatbook_mentions = url_path_join(base_url, "notebook-intelligence", "chatbook", "mentions")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
@@ -3894,6 +4229,16 @@ class NotebookIntelligence(ExtensionApp):
         GetCapabilitiesHandler.enable_chat_feedback_always_visible = (
             self.enable_chat_feedback_always_visible
         )
+        chatbook_enabled = _resolve_bool_with_env(
+            "NBI_ENABLE_CHATBOOK", self.enable_chatbook
+        )
+        GetCapabilitiesHandler.chatbook_enabled = chatbook_enabled
+        ChatbookGenerateHandler.chatbook_enabled = chatbook_enabled
+        ChatbookMentionsHandler.chatbook_enabled = chatbook_enabled
+        if not chatbook_enabled:
+            _hide_chatbook_kernelspec(
+                getattr(self.serverapp, "kernel_spec_manager", None)
+            )
         # Tour copy overrides: env var wins if set, otherwise fall back to
         # the traitlet. Pre-resolve here so the handler doesn't have to
         # re-check os.environ on every call.
@@ -3960,6 +4305,8 @@ class NotebookIntelligence(ExtensionApp):
         self._publish_policies(feature_policies, string_overrides)
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),
+            (route_pattern_chatbook_generate, ChatbookGenerateHandler),
+            (route_pattern_chatbook_mentions, ChatbookMentionsHandler),
             (route_pattern_config, ConfigHandler),
             # Always register the relay: jupyter_ui_tools_external is runtime-mutable.
             # UIToolsHandler gates every request against the live setting, so changing

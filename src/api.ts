@@ -5,6 +5,13 @@ import { requestAPI } from './handler';
 import { URLExt } from '@jupyterlab/coreutils';
 import { Signal } from '@lumino/signaling';
 import {
+  clampChatbookExecutionMode,
+  DEFAULT_CHATBOOK_EXECUTION_MODE,
+  DEFAULT_CHATBOOK_MAX_EXECUTION_MODE,
+  parseChatbookExecutionMode,
+  type ChatbookExecutionMode
+} from './chatbook-core';
+import {
   GITHUB_COPILOT_PROVIDER_ID,
   IChatCompletionResponseEmitter,
   IChatParticipant,
@@ -471,6 +478,45 @@ export class NBIConfig {
 
   get chatFeedbackAlwaysVisible(): boolean {
     return this.capabilities.chat_feedback_always_visible === true;
+  }
+
+  get chatbookHasContextProviders(): boolean {
+    // Fail safe before the first capabilities response: skipping one cache hit
+    // is cheaper than bypassing an extension provider with stale code.
+    return this.capabilities.chatbook_has_context_providers !== false;
+  }
+
+  get chatbookHasGuidelines(): boolean {
+    return this.capabilities.chatbook_has_guidelines !== false;
+  }
+
+  get chatbookExecutionMode(): ChatbookExecutionMode {
+    return clampChatbookExecutionMode(
+      this.capabilities.chatbook_execution_mode ||
+        DEFAULT_CHATBOOK_EXECUTION_MODE,
+      this.chatbookMaxExecutionMode
+    );
+  }
+
+  get chatbookLlmDangerScan(): boolean {
+    return this.capabilities.chatbook_llm_danger_scan === true;
+  }
+
+  get chatbookBackendKernel(): string {
+    return String(this.capabilities.chatbook_backend_kernel || '').trim();
+  }
+
+  get chatbookMaxExecutionMode(): ChatbookExecutionMode {
+    return parseChatbookExecutionMode(
+      this.capabilities.chatbook_max_execution_mode,
+      DEFAULT_CHATBOOK_MAX_EXECUTION_MODE
+    );
+  }
+
+  get chatbookEnabled(): boolean {
+    // Default-on: a missing key (older backend) must not hide Chatbook.
+    // Admins turn it off with NBI_ENABLE_CHATBOOK=false.
+    return this.capabilities.chatbook_enabled !== false;
   }
 
   // Admin-supplied tour-copy overrides, served from the capabilities
@@ -1329,6 +1375,67 @@ export class NBIAPI {
           console.error(`Failed to reload MCP servers.\n${reason}`);
           reject(reason);
         });
+    });
+  }
+
+  static async generateChatbookCell(prompt: string): Promise<string> {
+    const data = await requestAPI<{ generatedCode?: string; error?: string }>(
+      'chatbook/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ prompt })
+      }
+    );
+    const code = (data?.generatedCode || '').trim();
+    if (!code) {
+      throw new Error(
+        data?.error || 'Chatbook code generation produced no cell'
+      );
+    }
+    return code;
+  }
+
+  static async summarizeChatbookCell(code: string): Promise<string> {
+    const data = await requestAPI<{ prompt?: string; error?: string }>(
+      'chatbook/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'summarize', code })
+      }
+    );
+    const prompt = (data?.prompt || '').trim();
+    if (!prompt) {
+      throw new Error(
+        data?.error || 'Chatbook summary produced no English representation'
+      );
+    }
+    return prompt;
+  }
+
+  static async listChatbookMentions(
+    parent = '',
+    query = '',
+    limit = 100,
+    notebookPath = '',
+    signal?: AbortSignal
+  ): Promise<{
+    items: Array<{
+      label: string;
+      value: string;
+      kind: 'root' | 'file' | 'dir';
+      hasChildren: boolean;
+    }>;
+    breadcrumbs: Array<{ label: string; value: string }>;
+  }> {
+    const params = [
+      `parent=${encodeURIComponent(parent)}`,
+      `query=${encodeURIComponent(query)}`,
+      `limit=${encodeURIComponent(String(limit))}`,
+      `notebookPath=${encodeURIComponent(notebookPath)}`
+    ].join('&');
+    return requestAPI(`chatbook/mentions?${params}`, {
+      method: 'GET',
+      signal
     });
   }
 

@@ -25,6 +25,12 @@ import logging
 from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, tool
 
 from notebook_intelligence.util import ThreadSafeWebSocketConnector, _emit, get_jupyter_root_dir, import_litellm, resolve_claude_cli_path, safe_jupyter_path, terminate_process_tree
+from notebook_intelligence.inline_completion import (
+    extract_inline_completion,
+    inline_completion_system_prompt,
+    inline_completion_user_prompt,
+    is_chatbook_inline_language,
+)
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
@@ -749,6 +755,94 @@ def tool_text_response(
         result["is_error"] = True
     return result
 
+
+def _sdk_tool_input_json_schema(input_schema: Any) -> dict[str, Any]:
+    """Convert an SdkMcpTool.input_schema to a JSON Schema object."""
+    if not isinstance(input_schema, dict):
+        return {"type": "object", "properties": {}}
+    if "type" in input_schema and "properties" in input_schema:
+        return input_schema
+    properties = {}
+    type_map = {str: "string", int: "integer", float: "number", bool: "boolean"}
+    for param_name, param_type in input_schema.items():
+        properties[param_name] = {"type": type_map.get(param_type, "string")}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties.keys()),
+    }
+
+
+def create_compatible_sdk_mcp_server(
+    name: str, version: str = "1.0.0", tools: Optional[list] = None
+):
+    """Build an in-process SDK MCP server that works on mcp 1.x and 2.0.
+
+    ``claude_agent_sdk.create_sdk_mcp_server`` registers tools with
+    ``@server.list_tools()`` / ``@server.call_tool()``. Those decorators
+    were removed in mcp 2.0, which crashes NBI at startup and leaves the
+    JupyterLab sidebar empty. mcp 1.x still uses the decorator API, so we
+    keep calling the SDK helper there.
+
+    mcp 2.0 path: a duck-typed server whose ``request_handlers`` match
+    what ``claude_agent_sdk._internal.query.Query._handle_sdk_mcp_request``
+    looks up (``ListToolsRequest`` / ``CallToolRequest`` keys, results
+    with ``.root.tools`` / ``.root.content``).
+    """
+    from mcp.server import Server
+
+    if hasattr(Server, "list_tools"):
+        return create_sdk_mcp_server(name=name, version=version, tools=tools)
+
+    from types import SimpleNamespace
+
+    from mcp.types import CallToolRequest, ListToolsRequest
+
+    tool_list = tools or []
+    tool_map = {tool_def.name: tool_def for tool_def in tool_list}
+
+    async def list_tools(_request):
+        listed = []
+        for tool_def in tool_list:
+            listed.append(
+                SimpleNamespace(
+                    name=tool_def.name,
+                    description=tool_def.description,
+                    inputSchema=_sdk_tool_input_json_schema(tool_def.input_schema),
+                )
+            )
+        return SimpleNamespace(root=SimpleNamespace(tools=listed))
+
+    async def call_tool(request):
+        tool_name = request.params.name
+        arguments = request.params.arguments or {}
+        if tool_name not in tool_map:
+            raise ValueError(f"Tool '{tool_name}' not found")
+        result = await tool_map[tool_name].handler(arguments)
+        content = []
+        for item in result.get("content", []):
+            if item.get("type") == "text":
+                content.append(SimpleNamespace(text=item["text"]))
+            elif item.get("type") == "image":
+                content.append(
+                    SimpleNamespace(data=item["data"], mimeType=item["mimeType"])
+                )
+        return SimpleNamespace(
+            root=SimpleNamespace(
+                content=content, is_error=bool(result.get("is_error", False))
+            )
+        )
+
+    server = SimpleNamespace(
+        name=name,
+        version=version,
+        request_handlers={
+            ListToolsRequest: list_tools,
+            CallToolRequest: call_tool,
+        },
+    )
+    return {"type": "sdk", "name": name, "instance": server}
+
 def model_info_from_id(model_id: str) -> dict:
     """Get model info, checking cached models first then falling back to defaults."""
     for model in _claude_models_cache:
@@ -1030,15 +1124,28 @@ class ClaudeChatModel(ChatModel):
             # don't burn an Anthropic request whose output has nowhere to go.
             response.finish()
             return
+        system_parts = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system" and message.get("content")
+        ]
+        anthropic_messages = [
+            message for message in messages if message.get("role") != "system"
+        ]
+        stream_options = {
+            "model": self._model_id,
+            "max_tokens": 10000,
+            "messages": anthropic_messages,
+        }
+        if system_parts:
+            stream_options["system"] = "\n\n".join(system_parts)
+        system_prompt = options.get("system_prompt")
+        if system_prompt:
+            existing = stream_options.get("system")
+            stream_options["system"] = (
+                f"{existing}\n\n{system_prompt}" if existing else system_prompt
+            )
         try:
-            stream_options: dict[str, Any] = {
-                "model": self._model_id,
-                "max_tokens": 10000,
-                "messages": messages,
-            }
-            system_prompt = options.get("system_prompt")
-            if system_prompt:
-                stream_options["system"] = system_prompt
             with self._client.messages.stream(**stream_options) as stream:
                 for chunk in stream.text_stream:
                     if cancel_token is not None and cancel_token.is_cancel_requested:
@@ -1134,12 +1241,15 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
         message = self._client.messages.create(
             model=self._model_id,
             max_tokens=CLAUDE_INLINE_COMPLETION_MAX_TOKENS,
-            system=f"""You are a code completion assistant. Your task is to generate intelligent autocomplete suggestions for the code at the cursor position for given language and active file type. This is not an interactive session, don't ask for clarifying questions, always generate a suggestion. Don't include any explanations for your response, just generate the code. Don't return any thinking or reasoning, just generate the code. You are given a code snippet with a prefix and a suffix. You need to generate a suggestion for the code that fits best in place of <CURSOR/>. You should return only the code that fits best in place of <CURSOR/>. You should provide multiline code if needed. Enclose the code in triple backticks, just return the code in language. You should not return any other text, just the code. DO NOT INCLUDE THE PREFIX OR SUFFIX IN THE RESPONSE. .ipynb files are Jupyter notebook files and for notebook files, you generate suggestions for a cell within the notebook. A cell can be a code cell with code or a markdown cell with markdown text. If the language is markdown, only return markdown text. If you need to install a Python package within a notebook cell code (for .ipynb files), use %pip install <package_name> instead of !pip install <package_name>. Follow the tags very carefully for proper spacing and indentations.""",
+            system=inline_completion_system_prompt(language),
             messages=[
-                {"role": "user", "content": f"""Generate a single suggestion that fits best in place of cursor. The code is below in between <CODE> tags and <CURSOR/> is the placeholder for the code to be filled in. Current language is {language} and the active file is {filename}.
-
-<CODE><PREFIX>{prefix}</PREFIX><CURSOR/><SUFFIX>{suffix}</SUFFIX></CODE>
-"""}]
+                {
+                    "role": "user",
+                    "content": inline_completion_user_prompt(
+                        prefix, suffix, language, filename
+                    ),
+                }
+            ],
         )
         code = ''
         for block in message.content:
@@ -1150,6 +1260,8 @@ class ClaudeCodeInlineCompletionModel(InlineCompletionModel):
 
         if cancel_token.is_cancel_requested:
             return ''
+        if is_chatbook_inline_language(language):
+            return extract_inline_completion(code, language)
         return self._extract_llm_generated_code(code)
 
 

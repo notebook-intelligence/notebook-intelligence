@@ -21,7 +21,9 @@ from notebook_intelligence.api import (
     RegistrationError,
     Signal,
     SignalImpl,
+    SimpleTool,
     Toolset,
+    tool,
 )
 
 
@@ -130,3 +132,18 @@ class TestSignalDisconnectIsTolerant:
 class TestRegistrationErrorIsExported:
     def test_registration_error_is_exception_subclass(self):
         assert issubclass(RegistrationError, Exception)
+
+
+class TestToolDecorator:
+    def test_builds_schema_from_function(self):
+        def add(x: int, y: int = 0) -> int:
+            """Add two numbers."""
+            return x + y
+
+        built = tool(add)
+        assert isinstance(built, SimpleTool)
+        assert built.name == "add"
+        assert built.description == "Add two numbers."
+        params = built.schema["function"]["parameters"]
+        assert "x" in params["properties"]
+        assert "y" in params["properties"]
