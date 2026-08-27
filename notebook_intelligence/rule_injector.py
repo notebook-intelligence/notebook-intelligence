@@ -14,6 +14,14 @@ _TOKEN_ENCODING = tiktoken.encoding_for_model("gpt-4o")
 _TRUNCATION_MARKER = "\n...[additional guidelines truncated]"
 
 
+def _rules_enabled(host) -> bool:
+    """``rules_enabled`` is the master switch for all injected guidance."""
+    if host is None:
+        return False
+    nbi_config = getattr(host, "nbi_config", None)
+    return bool(getattr(nbi_config, "rules_enabled", False))
+
+
 class RuleInjector:
     """Handles rule injection logic - easily mockable."""
 
@@ -54,6 +62,9 @@ class RuleInjector:
         max_tokens: int = None,
     ) -> str:
         """Inject AGENTS.md and applicable rules into a system prompt."""
+        if not _rules_enabled(host):
+            return base_prompt
+
         sections = []
 
         agents_md = self._read_agents_md()
@@ -62,9 +73,7 @@ class RuleInjector:
 
         if rule_context and host is not None:
             rule_manager: RuleManager = host.get_rule_manager()
-            nbi_config = getattr(host, "nbi_config", None)
-            rules_enabled = getattr(nbi_config, "rules_enabled", False) if nbi_config else False
-            if rule_manager and rules_enabled:
+            if rule_manager:
                 applicable_rules = rule_manager.get_applicable_rules(rule_context)
                 if applicable_rules:
                     formatted_rules = rule_manager.format_rules_for_llm(applicable_rules)
@@ -96,14 +105,10 @@ class RuleInjector:
 
 def has_chatbook_guidelines(host) -> bool:
     """True when Chatbook generation should include rules or AGENTS.md."""
-    injector = RuleInjector()
-    if injector._read_agents_md():
+    if not _rules_enabled(host):
+        return False
+    if RuleInjector()._read_agents_md():
         return True
-    if host is None:
-        return False
-    nbi_config = getattr(host, "nbi_config", None)
-    if not nbi_config or not getattr(nbi_config, "rules_enabled", False):
-        return False
     rule_manager = host.get_rule_manager()
     if not rule_manager:
         return False

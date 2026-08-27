@@ -182,13 +182,25 @@ class TestChatbookGuidelines:
 
         (tmp_path / 'AGENTS.md').write_text('# Keep cells short\n', encoding='utf-8')
         host = Mock()
-        host.nbi_config.rules_enabled = False
+        host.nbi_config.rules_enabled = True
         host.get_rule_manager.return_value = None
         with patch(
             'notebook_intelligence.rule_injector.get_jupyter_root_dir',
             return_value=str(tmp_path),
         ):
             assert has_chatbook_guidelines(host) is True
+
+    def test_has_chatbook_guidelines_false_when_rules_disabled(self, tmp_path):
+        from notebook_intelligence.rule_injector import has_chatbook_guidelines
+
+        (tmp_path / 'AGENTS.md').write_text('# Keep cells short\n', encoding='utf-8')
+        host = Mock()
+        host.nbi_config.rules_enabled = False
+        with patch(
+            'notebook_intelligence.rule_injector.get_jupyter_root_dir',
+            return_value=str(tmp_path),
+        ):
+            assert has_chatbook_guidelines(host) is False
 
     def test_has_chatbook_guidelines_from_chatbook_rules(self, tmp_path):
         from notebook_intelligence.rule_injector import has_chatbook_guidelines
