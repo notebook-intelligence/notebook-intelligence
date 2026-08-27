@@ -87,6 +87,12 @@ def _make_emitter(message_id="m-emit"):
     emitter.streamed_contents = []
     emitter.streamed_reasoning_contents = []
     emitter._io_loop = MagicMock()
+    # Lifecycle state added by #403: stream() now takes the lock and drops
+    # chunks after finish, and finish() is idempotent under it.
+    emitter._lifecycle_lock = threading.RLock()
+    emitter._finished = False
+    emitter._finishing = False
+    emitter._warned_after_finish = False
     emitter._perf_stream_cm = None
     emitter._perf_stream_span = None
     emitter._perf_chunk_count = 0
@@ -203,14 +209,25 @@ class TestRunRequestThreadTurnClose:
         handler._messageCallbackHandlers = {}
         return handler
 
+    @staticmethod
+    def _emitter(user_wait=0.0):
+        """The emitter is passed to _run_request_thread AND registered in the
+        handler dict; #403 pops the entry only when the two are identical."""
+        return SimpleNamespace(
+            user_input_wait_seconds=user_wait,
+            finish=lambda: None,
+            stream_transient_markdown=lambda *a, **k: None,
+        )
+
     def test_success_closes_turn_ok_copies_user_wait_and_logs_summary(self, caplog):
         from notebook_intelligence.extension import WebsocketCopilotHandler
 
         _enable_perf()
         perf.begin_turn("m-ok", "claude", time.time(), time.monotonic())
         handler = self._make_handler()
+        emitter = self._emitter(user_wait=2.5)
         handler._messageCallbackHandlers["m-ok"] = SimpleNamespace(
-            response_emitter=SimpleNamespace(user_input_wait_seconds=2.5),
+            response_emitter=emitter,
             cancel_token=SimpleNamespace(is_cancel_requested=False)
         )
 
@@ -218,7 +235,7 @@ class TestRunRequestThreadTurnClose:
             return None
 
         caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
-        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-ok")
+        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-ok", emitter)
 
         assert perf.get_turn("m-ok") is None
         assert "m-ok" not in handler._messageCallbackHandlers
@@ -234,8 +251,9 @@ class TestRunRequestThreadTurnClose:
         _enable_perf()
         perf.begin_turn("m-cancel", "claude", time.time(), time.monotonic())
         handler = self._make_handler()
+        emitter = self._emitter()
         handler._messageCallbackHandlers["m-cancel"] = SimpleNamespace(
-            response_emitter=SimpleNamespace(user_input_wait_seconds=0.0),
+            response_emitter=emitter,
             cancel_token=SimpleNamespace(is_cancel_requested=True),
         )
 
@@ -243,29 +261,39 @@ class TestRunRequestThreadTurnClose:
             return None
 
         caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
-        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-cancel")
+        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-cancel", emitter)
 
         assert perf.get_turn("m-cancel") is None
         assert "status=cancelled" in caplog.text
         snapshot = perf.report_snapshot()
         assert snapshot["turns"][-1]["status"] == "cancelled"
 
-    def test_exception_closes_turn_error_and_reraises(self, caplog):
+    def test_exception_closes_turn_error_and_reports_terminally(self, caplog):
+        # #403 made the worker swallow the exception and stream a terminal
+        # notice instead of re-raising, so the guarantee this pins is that
+        # the turn still closes as "error" rather than leaking or reading ok.
         from notebook_intelligence.extension import WebsocketCopilotHandler
 
         _enable_perf()
         perf.begin_turn("m-err", "claude", time.time(), time.monotonic())
         handler = self._make_handler()
+        notices = []
+        emitter = self._emitter()
+        emitter.stream_transient_markdown = lambda text: notices.append(text)
+        handler._messageCallbackHandlers["m-err"] = SimpleNamespace(
+            response_emitter=emitter,
+            cancel_token=SimpleNamespace(is_cancel_requested=False),
+        )
 
         async def _raise():
             raise RuntimeError("boom")
 
         caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
-        with pytest.raises(RuntimeError):
-            WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err")
+        WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err", emitter)
 
         assert perf.get_turn("m-err") is None
         assert "status=error" in caplog.text
+        assert len(notices) == 1
 
     def test_error_wins_over_cancelled_when_coroutine_also_raised(self, caplog):
         # A cancel token can be flagged on a turn that still ends up
@@ -276,8 +304,9 @@ class TestRunRequestThreadTurnClose:
         _enable_perf()
         perf.begin_turn("m-err-cancel", "claude", time.time(), time.monotonic())
         handler = self._make_handler()
+        emitter = self._emitter()
         handler._messageCallbackHandlers["m-err-cancel"] = SimpleNamespace(
-            response_emitter=SimpleNamespace(user_input_wait_seconds=0.0),
+            response_emitter=emitter,
             cancel_token=SimpleNamespace(is_cancel_requested=True),
         )
 
@@ -285,20 +314,21 @@ class TestRunRequestThreadTurnClose:
             raise RuntimeError("boom")
 
         caplog.set_level(logging.INFO, logger="notebook_intelligence.extension")
-        with pytest.raises(RuntimeError):
-            WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err-cancel")
+        WebsocketCopilotHandler._run_request_thread(handler, _raise(), "m-err-cancel", emitter)
 
         assert "status=error" in caplog.text
+        assert "status=cancelled" not in caplog.text
 
     def test_disabled_perf_skips_turn_bookkeeping_without_error(self):
         from notebook_intelligence.extension import WebsocketCopilotHandler
 
         handler = self._make_handler()
+        emitter = self._emitter()
 
         async def _noop():
             return None
 
-        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-off")
+        WebsocketCopilotHandler._run_request_thread(handler, _noop(), "m-off", emitter)
         assert perf.get_turn("m-off") is None
 
 

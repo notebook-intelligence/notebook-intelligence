@@ -10,6 +10,9 @@ Pins the four behavioral contracts that the hygiene PR changes:
   registrar collisions (see ``ai_service_manager.register_*``).
 """
 
+import copy
+import pickle
+
 import pytest
 
 from notebook_intelligence.api import (
@@ -17,6 +20,7 @@ from notebook_intelligence.api import (
     MCPServer,
     RegistrationError,
     Signal,
+    SignalImpl,
     Toolset,
 )
 
@@ -81,6 +85,46 @@ class TestSignalDisconnectIsTolerant:
         s.connect(listener)
         s.disconnect(listener)
         s.disconnect(listener)  # second one used to crash
+
+    def test_emit_snapshot_survives_listener_removal(self):
+        signal = SignalImpl()
+        received = []
+
+        def first_listener():
+            received.append("first")
+            signal.disconnect(first_listener)
+
+        def pending_request_listener():
+            received.append("pending")
+
+        signal.connect(first_listener)
+        signal.connect(pending_request_listener)
+
+        signal.emit()
+
+        assert received == ["first", "pending"]
+
+    def test_deepcopy_recreates_lock_without_cross_request_listeners(self):
+        signal = SignalImpl()
+
+        def listener():
+            pass
+
+        signal.connect(listener)
+
+        copied = copy.deepcopy(signal)
+
+        assert copied is not signal
+        assert copied._listeners_lock is not signal._listeners_lock
+        assert copied._listeners == []
+
+    def test_pickle_recreates_signal_lock(self):
+        signal = SignalImpl()
+
+        restored = pickle.loads(pickle.dumps(signal))
+
+        assert restored._listeners == []
+        assert restored._listeners_lock is not signal._listeners_lock
 
 
 class TestRegistrationErrorIsExported:

@@ -2,8 +2,10 @@
 
 import {
   mcpServerSettingsToEnabledState,
-  mcpServerSettingsToServerToolEnabledState
+  mcpServerSettingsToServerToolEnabledState,
+  mcpServerStatusTitle
 } from '../../src/components/mcp-util';
+import { MCPServerStatus } from '../../src/tokens';
 
 const SERVERS = [
   {
@@ -15,6 +17,29 @@ const SERVERS = [
     tools: [{ name: 'fetch' }, { name: 'search' }]
   }
 ];
+
+describe('mcpServerStatusTitle', () => {
+  it.each([
+    [
+      MCPServerStatus.FailedToConnect,
+      'Connection failed. Reload MCP servers to retry.'
+    ],
+    [
+      MCPServerStatus.FailedToUpdateToolList,
+      'Tool refresh failed. Reload MCP servers to retry.'
+    ],
+    [
+      MCPServerStatus.FailedToUpdatePromptList,
+      'Prompt refresh failed. Reload MCP servers to retry.'
+    ]
+  ])('explains failure status %s', (status, expected) => {
+    expect(mcpServerStatusTitle(status)).toBe(expected);
+  });
+
+  it('preserves non-failure status labels', () => {
+    expect(mcpServerStatusTitle(MCPServerStatus.Connected)).toBe('connected');
+  });
+});
 
 describe('mcpServerSettingsToServerToolEnabledState', () => {
   it('enables every tool when no settings exist for the server', () => {

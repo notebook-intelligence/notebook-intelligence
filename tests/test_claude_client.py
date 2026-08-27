@@ -143,6 +143,27 @@ class TestClientThreadEventLoop:
 
 
 class TestSendClaudeAgentRequestDeadThread:
+    def test_subscribes_before_publishing_request(self):
+        client = _make_client()
+        live_thread = Mock()
+        live_thread.is_alive.return_value = True
+        client._client_thread = live_thread
+
+        class ImmediateResponseQueue:
+            def put(self, event):
+                client._client_thread_signal.emit({
+                    "id": event["id"],
+                    "data": "done",
+                })
+
+        client._client_queue = ImmediateResponseQueue()
+
+        result = client._send_claude_agent_request(
+            ClaudeAgentEventType.Query, {}
+        )
+
+        assert result == {"data": "done", "success": True, "error": None}
+
     def test_bails_out_quickly_when_worker_thread_dead(self, monkeypatch):
         # Make the poll loop's sleep a no-op so a slow test host doesn't mask
         # the bug: the behavior we're guarding is structural (returns without
@@ -894,6 +915,86 @@ class TestHandleChatRequestErrorHandling:
         response.finish.assert_not_called()
         response.stream.assert_not_called()
 
+    def test_inline_chat_forwards_rule_enhanced_system_prompt(self, monkeypatch):
+        participant = _make_participant()
+        participant._rule_injector.inject_rules.return_value = (
+            "inline edit prompt\n\nworkspace rule"
+        )
+        request = _make_chat_request("inline-chat")
+        request.host.nbi_config.claude_settings = {
+            "chat_model": "claude-sonnet-test",
+            "api_key": "test-key",
+            "base_url": "https://example.test",
+        }
+        request.chat_history = [{"role": "user", "content": "change this"}]
+        request.cancel_token = MagicMock()
+        response = Mock(spec=ChatResponse)
+        chat_model = MagicMock()
+        monkeypatch.setattr(
+            claude_module,
+            "ClaudeChatModel",
+            MagicMock(return_value=chat_model),
+        )
+        options = {"system_prompt": "inline edit prompt", "other": "value"}
+
+        asyncio.run(
+            participant.handle_inline_chat_request(request, response, options)
+        )
+
+        participant._rule_injector.inject_rules.assert_called_once_with(
+            "inline edit prompt",
+            request,
+        )
+        chat_model.completions.assert_called_once_with(
+            request.chat_history,
+            response=response,
+            cancel_token=request.cancel_token,
+            options={
+                "system_prompt": "inline edit prompt\n\nworkspace rule",
+                "other": "value",
+            },
+        )
+        assert options == {
+            "system_prompt": "inline edit prompt",
+            "other": "value",
+        }
+
+    def test_inline_chat_applies_system_prompt_token_budget(self, monkeypatch):
+        participant = _make_participant()
+        participant._rule_injector.inject_rules.return_value = "bounded prompt"
+        request = _make_chat_request("inline-chat")
+        request.host.nbi_config.claude_settings = {
+            "chat_model": "claude-sonnet-test",
+        }
+        request.chat_history = [{"role": "user", "content": "change this"}]
+        request.cancel_token = MagicMock()
+        response = Mock(spec=ChatResponse)
+        chat_model = MagicMock()
+        monkeypatch.setattr(
+            claude_module,
+            "ClaudeChatModel",
+            MagicMock(return_value=chat_model),
+        )
+
+        asyncio.run(
+            participant.handle_inline_chat_request(
+                request,
+                response,
+                {
+                    "system_prompt": "inline edit prompt",
+                    "system_prompt_token_budget": 500,
+                },
+            )
+        )
+
+        participant._rule_injector.inject_rules.assert_called_once_with(
+            "inline edit prompt",
+            request,
+            max_tokens=500,
+        )
+        completion_options = chat_model.completions.call_args.kwargs["options"]
+        assert completion_options == {"system_prompt": "bounded prompt"}
+
 
 class _FakeMessageStream:
     """Stand-in for the Anthropic SDK's MessageStreamManager.
@@ -970,7 +1071,21 @@ class TestClaudeChatModelStreaming:
         assert kwargs["model"] == "claude-sonnet-test"
         assert kwargs["messages"] == [{"role": "user", "content": "x"}]
         assert kwargs["max_tokens"] == 10000
+        assert "system" not in kwargs
         model._client.messages.create.assert_not_called()
+
+    def test_system_prompt_is_forwarded_to_anthropic_stream(self):
+        model, _ = _make_chat_model(["updated code"])
+        response = MagicMock()
+
+        model.completions(
+            messages=[{"role": "user", "content": "change this"}],
+            response=response,
+            options={"system_prompt": "return only replacement code"},
+        )
+
+        kwargs = model._client.messages.stream.call_args.kwargs
+        assert kwargs["system"] == "return only replacement code"
 
     def test_empty_chunks_are_skipped(self):
         # The Anthropic stream can occasionally yield empty strings between
