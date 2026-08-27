@@ -373,3 +373,51 @@ class TestNBIConfigPolicyResolution:
         # Identity check guarantees no needless allocation in the common case.
         assert config.chat_model is config.user_config['chat_model']
 
+
+
+class TestClaudeSettingsInlineChatModelPin:
+    """The read path must apply the clamp, not merely define it.
+
+    ``clamp_inline_chat_model`` is unit-tested in ``test_feature_flags.py``.
+    This pins that ``NBIConfig.claude_settings`` actually calls it, so deleting
+    the call cannot silently reopen the chat-model pin bypass.
+    """
+
+    def _config(self, mock_nbi_config, stored, overrides):
+        config = mock_nbi_config
+        config.user_config = {"claude_settings": dict(stored)}
+        config.env_config = {}
+        config.set_feature_policies({}, overrides)
+        return config
+
+    def test_chat_pin_blanks_a_stored_inline_model(self, mock_nbi_config):
+        config = self._config(
+            mock_nbi_config,
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {"claude_chat_model": "pinned"},
+        )
+        resolved = config.claude_settings
+        assert resolved["chat_model"] == "pinned"
+        assert resolved["inline_chat_model"] == ""
+
+    def test_inline_pin_survives_a_chat_pin(self, mock_nbi_config):
+        # The case the feature exists for: two pins, two different models.
+        config = self._config(
+            mock_nbi_config,
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {
+                "claude_chat_model": "pinned",
+                "claude_inline_chat_model": "pinned-inline",
+            },
+        )
+        resolved = config.claude_settings
+        assert resolved["chat_model"] == "pinned"
+        assert resolved["inline_chat_model"] == "pinned-inline"
+
+    def test_no_pins_leaves_the_stored_inline_model(self, mock_nbi_config):
+        config = self._config(
+            mock_nbi_config,
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {},
+        )
+        assert config.claude_settings["inline_chat_model"] == "user-inline"

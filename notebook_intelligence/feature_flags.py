@@ -94,6 +94,30 @@ def apply_string_overrides(target: dict, overrides: dict, mapping: tuple) -> dic
     return result
 
 
+def clamp_inline_chat_model(claude_settings: dict, overrides: dict) -> dict:
+    """Keep an ``NBI_CLAUDE_CHAT_MODEL`` pin governing inline chat.
+
+    Before ``inline_chat_model`` existed both transports read ``chat_model``,
+    so pinning the chat model governed inline chat as well. Decoupling the keys
+    would otherwise let a stored ``inline_chat_model`` override the pin, and the
+    settings dialog would render that control enabled directly beneath the one
+    the pin disables.
+
+    Blanking rather than stamping the pinned id keeps the resolution chain
+    intact: "" falls through to ``chat_model``, which already holds the pinned
+    value, so nothing concrete is persisted that could outlive the pin. An admin
+    who needs a different raw-API id sets ``NBI_CLAUDE_INLINE_CHAT_MODEL``,
+    which takes precedence and leaves this clamp inert.
+    """
+    if not overrides.get("claude_chat_model"):
+        return claude_settings
+    if overrides.get("claude_inline_chat_model"):
+        return claude_settings
+    result = dict(claude_settings)
+    result["inline_chat_model"] = ""
+    return result
+
+
 def apply_member_policy(members: list, item: str, policy: str) -> list:
     """Return a copy of ``members`` with ``item`` added/removed per ``policy``.
 

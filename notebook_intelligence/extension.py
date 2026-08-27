@@ -43,6 +43,7 @@ from notebook_intelligence.feature_flags import (
     apply_claude_policies,
     apply_acp_policies,
     apply_string_overrides,
+    clamp_inline_chat_model,
     is_external_ui_tools_active,
     is_force_off,
     is_locked,
@@ -526,10 +527,17 @@ def _build_setting_locks_response(string_overrides: dict) -> dict:
     fields (chat_model, claude_settings, ...). This dict only carries the
     locked flag so the frontend knows which inputs to disable.
     """
-    return {
+    locks = {
         name: {"locked": bool(string_overrides.get(name))}
         for name in SETTING_LOCK_NAMES
     }
+    # A chat-model pin governs inline chat too (clamp_inline_chat_model), so the
+    # inline control must render disabled even though its own env var is unset.
+    # Otherwise the dialog offers an enabled bypass directly beneath the lock it
+    # would bypass.
+    if string_overrides.get("claude_chat_model"):
+        locks["claude_inline_chat_model"]["locked"] = True
+    return locks
 
 
 def _scrub_credentials_for_wire(
@@ -825,6 +833,7 @@ class ConfigHandler(APIHandler):
                 value = apply_string_overrides(
                     value, self.string_overrides, CLAUDE_SETTINGS_OVERRIDES
                 )
+                value = clamp_inline_chat_model(value, self.string_overrides)
                 # ANTHROPIC_API_KEY is a credential; don't persist it to
                 # config.json. The SDK reads it from process env directly when
                 # claude_settings.api_key is empty.

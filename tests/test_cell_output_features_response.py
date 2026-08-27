@@ -281,3 +281,27 @@ class TestScrubCredentialsForWire:
             settings, {"acp_api_key": "sk-env"}, "acp_api_key"
         )
         assert scrubbed["api_key"] == ""
+
+
+class TestInlineChatModelLockDisplay:
+    """A chat-model pin must disable the inline control, not just clamp it.
+
+    The clamp forces the value server-side either way; this flag is what stops
+    the dialog rendering an enabled inline select directly beneath the Chat
+    model select the same pin disables.
+    """
+
+    def test_chat_pin_locks_the_inline_control(self):
+        locks = _build_setting_locks_response({"claude_chat_model": "pinned"})
+        assert locks["claude_chat_model"]["locked"] is True
+        assert locks["claude_inline_chat_model"]["locked"] is True
+
+    def test_inline_pin_alone_does_not_lock_the_chat_control(self):
+        locks = _build_setting_locks_response({"claude_inline_chat_model": "pinned"})
+        assert locks["claude_inline_chat_model"]["locked"] is True
+        assert locks["claude_chat_model"]["locked"] is False
+
+    def test_no_pins_leaves_both_unlocked(self):
+        locks = _build_setting_locks_response({})
+        assert locks["claude_chat_model"]["locked"] is False
+        assert locks["claude_inline_chat_model"]["locked"] is False

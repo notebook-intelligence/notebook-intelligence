@@ -17,6 +17,7 @@ from notebook_intelligence.feature_flags import (
     apply_acp_policies,
     apply_claude_policies,
     apply_string_overrides,
+    clamp_inline_chat_model,
 )
 
 log = logging.getLogger(__name__)
@@ -170,9 +171,10 @@ class NBIConfig:
         resolved = apply_claude_policies(
             self.get('claude_settings', {}), self._feature_policies
         )
-        return apply_string_overrides(
+        resolved = apply_string_overrides(
             resolved, self._string_overrides, CLAUDE_SETTINGS_OVERRIDES
         )
+        return clamp_inline_chat_model(resolved, self._string_overrides)
 
     @property
     def acp_settings(self):
