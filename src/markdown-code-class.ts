@@ -18,10 +18,26 @@
 // target it directly instead of via `:not(pre) > code`, which broke once
 // `PreTag="div"` put a wrapper div between a highlighted block's `<code>`
 // and the outer `<pre>`.
+//
+// Empty content is the one case that trailing-newline shape can't
+// distinguish: mdast-util-to-hast's code handler only appends the
+// trailing `\n` when there's a value to append it to, so an empty code
+// node comes through with no text child at all — react-markdown then
+// passes `children` as `undefined`, not `''` or `'\n'`. `String(undefined)`
+// is the literal 9-character string `"undefined"`, so a naive length
+// check on the stringified value still misclassifies it; `children` has
+// to be null-checked before stringifying. A literal ` ```\n``` ` fence
+// hits this directly. It's also reachable mid-stream, but only for the
+// single-character window right after the opening ` ``` ` and before any
+// language character arrives — from the first language character onward,
+// `className` is already set and the `code` component's SyntaxHighlighter
+// branch takes over, so this function isn't called at all for that input.
 export function resolveCodeClassName(
   children: unknown,
   className?: string
 ): string | undefined {
-  const isTrulyInline = !String(children).includes('\n');
+  const content =
+    children === null || children === undefined ? '' : String(children);
+  const isTrulyInline = content.length > 0 && !content.includes('\n');
   return isTrulyInline ? `inline-code ${className || ''}`.trim() : className;
 }

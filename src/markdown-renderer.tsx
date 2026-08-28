@@ -68,7 +68,10 @@ export function MarkdownRenderer({
         ),
         code({ node, inline, className, children, getApp, ...props }: any) {
           const match = /language-(\w+)/.exec(className || '');
-          const codeString = String(children).replace(/\n$/, '');
+          const codeString =
+            children === null || children === undefined
+              ? ''
+              : String(children).replace(/\n$/, '');
           const language = match ? match[1] : 'text';
 
           const handleCopyClick = () => {
@@ -119,54 +122,58 @@ export function MarkdownRenderer({
                 <div className="code-block-header-language">
                   <span>{language}</span>
                 </div>
-                <button
-                  type="button"
-                  className="code-block-header-button"
-                  onClick={() => handleCopyClick()}
-                  aria-label="Copy code to clipboard"
-                >
-                  <VscCopy size={16} aria-hidden="true" />
-                  <span>Copy</span>
-                </button>
-                <button
-                  type="button"
-                  className="code-block-header-button"
-                  onClick={() => handleInsertAtCursorClick()}
-                  aria-label="Insert code at cursor"
-                  title="Insert at cursor"
-                >
-                  <VscInsert size={16} aria-hidden="true" />
-                </button>
-                {isNotebook && (
-                  <button
-                    type="button"
-                    className="code-block-header-button"
-                    onClick={() => handleAddCodeAsNewCell()}
-                    aria-label="Add code as new cell"
-                    title="Add as new cell"
-                  >
-                    <VscAdd size={16} aria-hidden="true" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="code-block-header-button"
-                  onClick={() => handleCreateNewFileClick()}
-                  aria-label="Create new file from code"
-                  title="New file"
-                >
-                  <VscNewFile size={16} aria-hidden="true" />
-                </button>
-                {language === 'python' && (
-                  <button
-                    type="button"
-                    className="code-block-header-button"
-                    onClick={() => handleCreateNewNotebookClick()}
-                    aria-label="Create new notebook from code"
-                    title="New notebook"
-                  >
-                    <VscNotebook size={16} aria-hidden="true" />
-                  </button>
+                {codeString !== '' && (
+                  <>
+                    <button
+                      type="button"
+                      className="code-block-header-button"
+                      onClick={() => handleCopyClick()}
+                      aria-label="Copy code to clipboard"
+                    >
+                      <VscCopy size={16} aria-hidden="true" />
+                      <span>Copy</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="code-block-header-button"
+                      onClick={() => handleInsertAtCursorClick()}
+                      aria-label="Insert code at cursor"
+                      title="Insert at cursor"
+                    >
+                      <VscInsert size={16} aria-hidden="true" />
+                    </button>
+                    {isNotebook && (
+                      <button
+                        type="button"
+                        className="code-block-header-button"
+                        onClick={() => handleAddCodeAsNewCell()}
+                        aria-label="Add code as new cell"
+                        title="Add as new cell"
+                      >
+                        <VscAdd size={16} aria-hidden="true" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="code-block-header-button"
+                      onClick={() => handleCreateNewFileClick()}
+                      aria-label="Create new file from code"
+                      title="New file"
+                    >
+                      <VscNewFile size={16} aria-hidden="true" />
+                    </button>
+                    {language === 'python' && (
+                      <button
+                        type="button"
+                        className="code-block-header-button"
+                        onClick={() => handleCreateNewNotebookClick()}
+                        aria-label="Create new notebook from code"
+                        title="New notebook"
+                      >
+                        <VscNotebook size={16} aria-hidden="true" />
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
               <SyntaxHighlighter
