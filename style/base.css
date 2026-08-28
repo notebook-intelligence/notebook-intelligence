@@ -1818,6 +1818,20 @@ button.send-button:disabled:active:not(.send-button-stop) {
   display: none;
 }
 
+/* Disclosure for a setting nested under another one in the settings dialog
+   (Inline chat model under Chat model). Reuses .expandable-content only for
+   its triangle toggling; the body deliberately does not use
+   .expandable-content-text, whose scrolling tinted box is sized for prose
+   rather than a form control. */
+.expandable-content.nbi-sub-setting .nbi-sub-setting-body {
+  display: none;
+}
+
+.expandable-content.nbi-sub-setting.expanded .nbi-sub-setting-body {
+  display: block;
+  padding-left: 14px;
+}
+
 .access-token-config-header {
   display: flex;
   align-items: center;

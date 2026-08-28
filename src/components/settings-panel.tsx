@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ReactWidget } from '@jupyterlab/apputils';
-import { VscWarning } from '../icons';
+import { VscTriangleDown, VscTriangleRight, VscWarning } from '../icons';
 import * as path from 'path';
 
 import copySvgstr from '../../style/icons/copy.svg';
@@ -1217,6 +1217,18 @@ function SettingsPanelComponentClaude(props: any) {
   const [chatModel, setChatModel] = useState(
     nbiConfig.claudeSettings.chat_model ?? ClaudeModelType.Default
   );
+  // Optional override for the inline chat popover, which calls the Anthropic
+  // API directly rather than going through the Claude Code CLI. Empty means
+  // "fall back to chat_model", which is what the backend resolves.
+  const [inlineChatModel, setInlineChatModel] = useState(
+    nbiConfig.claudeSettings.inline_chat_model ?? ClaudeModelType.Default
+  );
+  // Collapsed by default — it is an override on the Chat model above and most
+  // users never set it — but opened when one is already configured, so a
+  // non-default model is never hidden behind a closed disclosure.
+  const [inlineChatModelExpanded, setInlineChatModelExpanded] = useState(
+    inlineChatModel !== ClaudeModelType.Default
+  );
   const [inlineCompletionModel, setInlineCompletionModel] = useState(
     nbiConfig.claudeSettings.inline_completion_model ?? ClaudeModelType.Default
   );
@@ -1274,6 +1286,7 @@ function SettingsPanelComponentClaude(props: any) {
       claude_settings: {
         enabled: claudeEnabled,
         chat_model: chatModel,
+        inline_chat_model: inlineChatModel,
         inline_completion_model: inlineCompletionModel,
         api_key: apiKey,
         base_url: baseUrl,
@@ -1290,6 +1303,7 @@ function SettingsPanelComponentClaude(props: any) {
   }, [
     claudeEnabled,
     chatModel,
+    inlineChatModel,
     inlineCompletionModel,
     apiKey,
     baseUrl,
@@ -1402,6 +1416,73 @@ function SettingsPanelComponentClaude(props: any) {
                       Locked by your administrator
                     </span>
                   )}
+                </div>
+                {/* Nested under Chat model because it overrides that value,
+                    and collapsed because most users never set it. Pinned by
+                    NBI_CLAUDE_INLINE_CHAT_MODEL. */}
+                <div
+                  className={`expandable-content nbi-sub-setting${
+                    inlineChatModelExpanded ? ' expanded' : ''
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="expandable-content-title"
+                    onClick={() =>
+                      setInlineChatModelExpanded(expanded => !expanded)
+                    }
+                    aria-expanded={inlineChatModelExpanded}
+                    aria-controls="nbi-claude-inline-chat-model-body"
+                  >
+                    <VscTriangleRight
+                      className="collapsed-icon"
+                      aria-hidden="true"
+                    />
+                    <VscTriangleDown
+                      className="expanded-icon"
+                      aria-hidden="true"
+                    />{' '}
+                    Inline chat model
+                  </button>
+                  <div
+                    id="nbi-claude-inline-chat-model-body"
+                    className="nbi-sub-setting-body"
+                  >
+                    <div
+                      title={lockedTip(
+                        settingLocks.claude_inline_chat_model.locked
+                      )}
+                    >
+                      <select
+                        className="jp-mod-styled"
+                        aria-label="Inline chat model"
+                        disabled={settingLocks.claude_inline_chat_model.locked}
+                        value={inlineChatModel}
+                        onChange={event =>
+                          setInlineChatModel(event.target.value)
+                        }
+                      >
+                        <option value={ClaudeModelType.Default}>
+                          Inherit from chat model
+                        </option>
+                        {/* Same placeholder rule as the Chat model dropdown. */}
+                        {inlineChatModel !== ClaudeModelType.Default &&
+                          !claudeModels.some(m => m.id === inlineChatModel) && (
+                            <option
+                              key={inlineChatModel}
+                              value={inlineChatModel}
+                            >
+                              {inlineChatModel}
+                            </option>
+                          )}
+                        {claudeModels.map(model => (
+                          <option key={model.id} value={model.id}>
+                            {model.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="model-config-section-column">

@@ -2,6 +2,8 @@
 
 from notebook_intelligence.feature_flags import (
     CLAUDE_CODE_TOOLS_ID,
+    clamp_inline_chat_model,
+    CLAUDE_SETTINGS_OVERRIDES,
     JUPYTER_UI_TOOLS_ID,
     POLICY_FORCE_OFF,
     POLICY_FORCE_ON,
@@ -210,3 +212,100 @@ class TestApplyStringOverrides:
             target, {"unrelated": "value"}, self._MAPPING
         )
         assert result is target
+
+
+class TestInlineChatModelOverride:
+    """`claude_inline_chat_model` pins inline chat independently of the chat model.
+
+    Each override writes one destination and only that one. Inline chat still
+    follows a chat-model pin when no inline model is set, but that fallback is
+    resolved per request in ``handle_inline_chat_request``, not stamped in
+    here — which is what keeps a deliberately provisioned ``inline_chat_model``
+    from being overwritten by a chat-model pin. The behavioral matrix over both
+    layers lives in ``test_claude_client.py``.
+    """
+
+    @staticmethod
+    def _resolved(stored, overrides):
+        return apply_string_overrides(stored, overrides, CLAUDE_SETTINGS_OVERRIDES)
+
+    def test_inline_pin_writes_only_the_inline_key(self):
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {"claude_inline_chat_model": "PINNED"},
+        ) == {"chat_model": "user-chat", "inline_chat_model": "PINNED"}
+
+    def test_chat_pin_writes_only_the_chat_key(self):
+        # The mapping itself never writes across destinations. A chat pin still
+        # governs inline chat, but through clamp_inline_chat_model rather than
+        # by stamping the pinned id here - see TestClampInlineChatModel.
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {"claude_chat_model": "PINNED"},
+        ) == {"chat_model": "PINNED", "inline_chat_model": "user-inline"}
+
+    def test_both_pins_apply_to_their_own_destinations(self):
+        assert self._resolved(
+            {"chat_model": "user-chat", "inline_chat_model": "user-inline"},
+            {
+                "claude_chat_model": "PIN_CHAT",
+                "claude_inline_chat_model": "PIN_INLINE",
+            },
+        ) == {"chat_model": "PIN_CHAT", "inline_chat_model": "PIN_INLINE"}
+
+    def test_neither_pin_leaves_settings_untouched(self):
+        stored = {"chat_model": "user-chat", "inline_chat_model": "user-inline"}
+        assert self._resolved(stored, {}) == stored
+
+
+class TestClampInlineChatModel:
+    """A chat-model pin keeps governing inline chat after the keys split.
+
+    Before ``inline_chat_model`` existed, both transports read ``chat_model``,
+    so ``NBI_CLAUDE_CHAT_MODEL`` governed inline chat as a side effect. The
+    clamp preserves that guarantee by blanking the inline key rather than
+    stamping the pinned id into it: "" falls through to ``chat_model``, which
+    already holds the pin, so nothing concrete is persisted that could outlive
+    it. An admin needing a different raw-API id sets the inline env var, which
+    takes precedence and makes the clamp inert.
+    """
+
+    def test_chat_pin_blanks_a_stored_inline_model(self):
+        assert clamp_inline_chat_model(
+            {"chat_model": "pinned", "inline_chat_model": "user-inline"},
+            {"claude_chat_model": "pinned"},
+        ) == {"chat_model": "pinned", "inline_chat_model": ""}
+
+    def test_inline_pin_makes_the_clamp_inert(self):
+        # The case the feature exists for: an admin pinning both keys must get
+        # two different models, not one clamped onto the other.
+        settings = {"chat_model": "pinned", "inline_chat_model": "pinned-inline"}
+        assert clamp_inline_chat_model(
+            settings,
+            {"claude_chat_model": "pinned", "claude_inline_chat_model": "pinned-inline"},
+        ) == settings
+
+    def test_no_chat_pin_is_inert(self):
+        settings = {"chat_model": "user-chat", "inline_chat_model": "user-inline"}
+        assert clamp_inline_chat_model(settings, {}) == settings
+
+    def test_inline_pin_alone_is_inert(self):
+        settings = {"chat_model": "user-chat", "inline_chat_model": "pinned-inline"}
+        assert clamp_inline_chat_model(
+            settings, {"claude_inline_chat_model": "pinned-inline"}
+        ) == settings
+
+    def test_other_keys_are_untouched(self):
+        result = clamp_inline_chat_model(
+            {"chat_model": "pinned", "inline_chat_model": "x", "api_key": "k",
+             "tools": ["a"], "enabled": True},
+            {"claude_chat_model": "pinned"},
+        )
+        assert result["api_key"] == "k"
+        assert result["tools"] == ["a"]
+        assert result["enabled"] is True
+
+    def test_the_input_is_not_mutated(self):
+        settings = {"chat_model": "pinned", "inline_chat_model": "user-inline"}
+        clamp_inline_chat_model(settings, {"claude_chat_model": "pinned"})
+        assert settings["inline_chat_model"] == "user-inline"

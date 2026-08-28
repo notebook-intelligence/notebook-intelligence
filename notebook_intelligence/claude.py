@@ -2526,7 +2526,9 @@ class ClaudeCodeChatParticipant(BaseChatParticipant):
     async def handle_inline_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         try:
             claude_settings = request.host.nbi_config.claude_settings
-            chat_model_id = claude_settings.get('chat_model', '').strip()
+            # Inline chat calls the Anthropic API directly; the agentic paths hand
+            # chat_model to the Claude Code CLI, which accepts ids the API does not.
+            chat_model_id = claude_settings.get('inline_chat_model', '').strip() or claude_settings.get('chat_model', '').strip()
             chat_model = ClaudeChatModel(
                 chat_model_id,
                 claude_settings.get('api_key', None),

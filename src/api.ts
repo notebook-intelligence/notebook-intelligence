@@ -297,6 +297,7 @@ export type SettingLockName =
   | 'inline_completion_model_provider'
   | 'inline_completion_model_id'
   | 'claude_chat_model'
+  | 'claude_inline_chat_model'
   | 'claude_inline_completion_model'
   | 'claude_api_key'
   | 'claude_base_url'
@@ -588,6 +589,7 @@ export class NBIConfig {
       'inline_completion_model_provider',
       'inline_completion_model_id',
       'claude_chat_model',
+      'claude_inline_chat_model',
       'claude_inline_completion_model',
       'claude_api_key',
       'claude_base_url',
