@@ -680,3 +680,83 @@ class TestAggregateResponsesTerminalErrors:
         ]
         result = gh_copilot._aggregate_responses_streaming(_FakeSSEClient(events))
         assert result["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == '{"a": 1}'
+
+
+class TestChatCompletionsOmitsStop:
+    """No model receives a `stop` sequence on the chat-completions path (#397).
+
+    `stop: ['<END>']` was sent unconditionally until GPT-5 rejected it, at which
+    point the two shipping ids were excluded by literal comparison. Every later
+    GPT-5 family model inherited the bug: `gpt-5.4` is sent `stop` and the API
+    answers 400, making chat unusable for that model.
+
+    The id cannot decide this. `gpt-5.4` refuses the parameter while
+    `gpt-5.4-mini` accepts it, so a prefix test would be another reactive guess.
+    These pin the parameter's absence rather than any particular exclusion rule,
+    so reintroducing a model-keyed allowlist fails here.
+    """
+
+    def _post_json_for(self, model_id):
+        request_mock = MagicMock(status_code=200)
+        sse = _FakeSSEClient([_FakeEvent("[DONE]")])
+        with patch.object(gh_copilot, "generate_copilot_headers", return_value={}), \
+             patch("notebook_intelligence.github_copilot.requests.post",
+                   return_value=request_mock) as post, \
+             patch("notebook_intelligence.github_copilot.sseclient.SSEClient",
+                   return_value=sse):
+            gh_copilot.chat(model_id, [{"role": "user", "content": "hi"}])
+        # Anchor the endpoint. The /responses body never carries a 'stop' key at
+        # all, so without this the absence assertion below would pass vacuously
+        # if any of these ids were ever routed there.
+        assert post.call_args.args[0].endswith("/chat/completions")
+        return post.call_args.kwargs["json"]
+
+    @pytest.mark.parametrize("model_id", [
+        "gpt-5.4",       # the reported failure: was sent stop, answered 400
+        "gpt-5.4-mini",  # accepts stop, but has no need of it either
+        "gpt-5",         # was already excluded by literal comparison
+        "gpt-5-mini",    # was already excluded by literal comparison
+        "gpt-4.1",       # pre-reasoning model that used to receive stop
+        "gpt-4o",        # pre-reasoning model that used to receive stop
+    ])
+    def test_stop_is_never_sent(self, model_id):
+        assert "stop" not in self._post_json_for(model_id)
+
+    def test_required_body_fields_survive(self):
+        """Guards against a deletion that takes a neighbouring key with it.
+
+        Deliberately limited to what the endpoint actually requires. Pinning the
+        full parameter set would freeze `temperature`, `top_p`, and `n`, which
+        are the same reasoning-model-hostile knobs as `stop`; if one of them
+        draws the next 400, the correct fix is to drop it, and that fix should
+        not have to fight a test written here.
+        """
+        body = self._post_json_for("gpt-4.1")
+        assert body["model"] == "gpt-4.1"
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["stream"] is True
+
+
+class TestInlineCompletionKeepsStop:
+    """The FIM proxy endpoint keeps its stop sequences.
+
+    Separate endpoint, separate contract: there `<END>` and the code fence
+    genuinely bound a fill-in-the-middle completion, and the reasoning models
+    that reject `stop` are not served from it. This pins that the #397 fix did
+    not over-reach into a path where the parameter is load-bearing.
+    """
+
+    def test_inline_completions_still_send_stop_sequences(self):
+        # A 200 with an empty SSE body: this test asserts on the request, and a
+        # non-200 shape would quietly model inline_completions' unrelated
+        # missing status check rather than the stop sequences under test.
+        resp_mock = MagicMock(status_code=200, content=b"")
+        cancel_token = MagicMock(is_cancel_requested=False)
+        with patch.dict(gh_copilot.github_auth, {"token": "t"}, clear=False), \
+             patch("notebook_intelligence.github_copilot.requests.post",
+                   return_value=resp_mock) as post:
+            gh_copilot.inline_completions(
+                "gpt-4o-copilot", "prefix", "suffix", "python", "f.py",
+                None, cancel_token,
+            )
+        assert post.call_args.kwargs["json"]["stop"] == ["<END>", "```"]

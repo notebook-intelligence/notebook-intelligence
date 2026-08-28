@@ -1095,8 +1095,13 @@ def completions(model_id, messages, tools = None, response: ChatResponse = None,
             'stream': True
         }
 
-        if not (model_id == 'gpt-5' or model_id == 'gpt-5-mini'):
-            data['stop'] = ['<END>']
+        # No 'stop' sequence here. The '<END>' sentinel is an artifact of the
+        # inline-completion proxy above, where it bounds a FIM completion;
+        # nothing in the chat path asks a model to emit it or parses it back,
+        # so it could only ever fire by accident. Some models reject the
+        # parameter with a 400 and the model id does not predict which (#397),
+        # while the models API exposes no parameter-support data to key off,
+        # so an exclusion list can only ever be maintained reactively.
 
         if 'tool_choice' in options:
             data['tool_choice'] = options['tool_choice']
