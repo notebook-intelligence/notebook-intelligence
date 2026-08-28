@@ -19,9 +19,11 @@ This guide covers deploying Notebook Intelligence at scale — JupyterHub, KubeS
 - [Air-gap deployment](#air-gap-deployment)
 - [HIPAA / sensitive-data preset](#hipaa--sensitive-data-preset)
 - [Restricting features for managed deployments](#restricting-features-for-managed-deployments)
+- [Serving the Jupyter UI tools to an external agent](#serving-the-jupyter-ui-tools-to-an-external-agent-398)
 - [Multi-tenancy and per-team scoping](#multi-tenancy-and-per-team-scoping)
 - [Managed Claude Skills token](#managed-claude-skills-token)
 - [Telemetry events](#telemetry-events)
+- [Performance diagnostics](#performance-diagnostics)
 - [Configuration readiness](#configuration-readiness)
 - [HTTP API surface](#http-api-surface)
 - [Failure modes](#failure-modes)
@@ -121,6 +123,8 @@ The full surface, in one table.
 | `NBI_PI_CLI_PATH`                                | str  | unset                       | env                                | Absolute path to the Pi CLI. When unset, NBI looks up `pi` on `PATH`. Gates the Pi launcher tile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `NBI_GITHUB_COPILOT_CLI_PATH`                    | str  | unset                       | env                                | Absolute path to the GitHub Copilot CLI. When unset, NBI looks up `copilot` on `PATH`. Gates the GitHub Copilot launcher tile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `NBI_CODEX_CLI_PATH`                             | str  | unset                       | env                                | Absolute path to the OpenAI Codex CLI. When unset, NBI looks up `codex` on `PATH`. Gates the Codex launcher tile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `NBI_CLAUDE_INLINE_COMPLETION_MAX_TOKENS`        | int  | `1024`                      | env                                | Output cap for Claude-mode auto-complete suggestions. Clamped to `[1, 4096]`; a value outside that range is pulled to the nearest bound rather than rejected. The default was lowered from 10,000 in 5.3.0 because a suggestion is at most a few dozen lines and the old ceiling let a rambling response generate for seconds before the extraction regex discarded most of it.                                                                                                                                                                                                                                                                                                                                                                   |
+| `NBI_ACP_AGENT_COMMAND`                          | str  | unset                       | env                                | Overrides the adapter command NBI launches for the selected ACP agent type (shell-split). Unset uses the agent's registered default command. See [Gating the experimental ACP agent](#gating-the-experimental-acp-agent-378).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `NBI_GHE_SUBDOMAIN`                              | str  | `""`                        | env                                | GitHub Enterprise subdomain for GitHub Copilot users on a GHE tenant. Empty selects github.com.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `NBI_GITHUB_ENTERPRISE_HOSTS`                    | csv  | `""`                        | env                                | Comma-separated hostnames the plugin marketplace detector treats as GitHub. Cookie-domain shape: bare token (`github.acme.com`) matches exactly; leading-dot token (`.acme.com`) matches any subdomain of `acme.com`. Independent of `NBI_GHE_SUBDOMAIN`, which only configures the Copilot OAuth tenant. Required so `allow_github_plugin_import = False` actually gates GHE marketplace adds and so the `GITHUB_TOKEN` / `gh auth token` chain injects on GHE sources.                                                                                                                                                                                                                                                                          |
 | `NBI_LOG_LEVEL`                                  | str  | `INFO`                      | env                                | Python logging level for the `notebook_intelligence` logger.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -590,6 +594,43 @@ Known limitations:
 - NBI gates the agent through the approval posture above and through its per-tool confirmation, but it does not enforce a tool allowlist inside the agent the way Claude's tool policies do. The agent owns its own tool loop and NBI only mediates the approvals the agent chooses to request.
 - The pin relies on codex honoring the command-line `-c approval_policy` override above any configuration it loads. NBI does not parse or strip codex's own config; if a future codex version applies a higher-precedence per-project setting, that assumption would need revisiting. Keep `NBI_ACP_MODE_POLICY=force-off` where these constraints are not acceptable.
 
+### Serving the Jupyter UI tools to an external agent (#398)
+
+NBI's Jupyter-UI tools (create and edit notebooks, run cells, open files, drive the terminal) are normally served by an MCP server NBI registers with the Claude SDK in-process. Managed and enterprise Claude Code configurations can forbid dynamically configured MCP servers, which makes those tools unavailable in exactly the deployments most likely to have that restriction.
+
+For that case NBI ships a standalone stdio MCP server that exposes the same tools and relays each call to the running Jupyter Server over HTTP, so it can be declared in a static MCP config like any other server:
+
+```json
+{
+  "mcpServers": {
+    "nbi": {
+      "command": "python",
+      "args": ["-m", "notebook_intelligence.mcp_ui_proxy"]
+    }
+  }
+}
+```
+
+The CLI-visible tool prefix (`mcp__<key>__*`) comes from the config entry's key, not from the server's own handshake name, so name the entry `nbi` unless you have a reason not to.
+
+Set `jupyter_ui_tools_external` in the Claude settings to switch Claude mode from the in-process tools to the relay. Leave it unset and nothing changes.
+
+**The relay endpoint** is `/notebook-intelligence/ui-tools`: `GET` returns the tool manifest, `POST {"name", "arguments"}` invokes a tool against the active chat turn's UI bridge. It is a normal authenticated NBI route, so the caller needs the Jupyter token like any other. The proxy also sends a per-process bridge secret in an `X-NBI-UI-Tools-Token` header; the relay uses that **only** to exempt the request from the XSRF check, never as an identity, so it is not a second way in.
+
+**Configuration.** All of these are optional: the proxy discovers the server URL and token from the Jupyter runtime file when it is launched by a process that has them.
+
+| Env var                     | Default                          | Purpose                                                                                                                         |
+| --------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `NBI_UI_TOOLS_URL`          | discovered                       | Full endpoint URL. Set it when discovery cannot find the server (several servers running, or a non-standard runtime directory). |
+| `NBI_UI_TOOLS_TOKEN`        | `JUPYTER_TOKEN`, then discovered | Jupyter auth token for the `Authorization` header.                                                                              |
+| `NBI_UI_TOOLS_SECRET`       | unset                            | The bridge secret described above. NBI sets this itself when it spawns the proxy.                                               |
+| `NBI_UI_TOOLS_HTTP_TIMEOUT` | none                             | Per-request timeout in seconds. Unset by default so a long-running cell or command is not cut off; the backend bounds the call. |
+| `NBI_UI_TOOLS_SERVER_NAME`  | `nbi`                            | MCP handshake name. Cosmetic: it does not affect the tool prefix.                                                               |
+
+The proxy reaches the backend directly and never through an ambient `HTTP_PROXY` / `HTTPS_PROXY`, so the token stays on the local connection regardless of `NO_PROXY`.
+
+**What this does not change.** The tools still act as the Jupyter user, on the workspace the server is serving, and each call still runs against the live chat turn's UI bridge. Moving them behind the relay is about how an agent is allowed to declare the server, not about widening what the tools can reach.
+
 ### Disabling terminal drag-drop file attach
 
 ```python
@@ -759,10 +800,10 @@ All routes live under `/notebook-intelligence/`. All require Jupyter authenticat
 | `/notebook-intelligence/copilot`                            | WS              | Streaming chat / inline-completion WebSocket.                                                                                                                                                                                                                                                       |
 | `/notebook-intelligence/rules`                              | GET             | List discovered rules.                                                                                                                                                                                                                                                                              |
 | `/notebook-intelligence/rules/<id>/toggle`                  | PUT             | Toggle a rule's `active` field.                                                                                                                                                                                                                                                                     |
+| `/notebook-intelligence/rules/reload`                       | POST            | Manually reload all rules.                                                                                                                                                                                                                                                                          |
 | `/notebook-intelligence/perf/report`                        | GET             | Perf diagnostics: ring-buffer turn timelines + aggregates. 404 unless perf diagnostics is enabled.                                                                                                                                                                                                  |
 | `/notebook-intelligence/perf/probe`                         | POST            | Perf diagnostics: run the environment probe (`{"network": bool}`; the network leg also requires `NBI_PERF_PROBE_NETWORK` not `off`). 404 unless enabled.                                                                                                                                            |
 | `/notebook-intelligence/readiness`                          | GET/POST        | Configuration readiness preflight. GET runs the checks that bill nothing; POST with `{"live": true}` adds one real completion (refused when `NBI_READINESS_LIVE_CHECK=off`; 429 if one is already running). Not gated on perf diagnostics. See [Configuration readiness](#configuration-readiness). |
-| `/notebook-intelligence/rules/reload`                       | POST            | Manually reload all rules.                                                                                                                                                                                                                                                                          |
 | `/notebook-intelligence/skills`                             | GET/POST        | List or create skills.                                                                                                                                                                                                                                                                              |
 | `/notebook-intelligence/skills/context`                     | GET             | Skill context info for the active workspace.                                                                                                                                                                                                                                                        |
 | `/notebook-intelligence/skills/import/preview`              | POST            | Preview a GitHub-hosted skill before installing.                                                                                                                                                                                                                                                    |
@@ -776,6 +817,7 @@ All routes live under `/notebook-intelligence/`. All require Jupyter authenticat
 | `/notebook-intelligence/upload-file`                        | POST            | Upload a file to attach as chat context (size and retention governed by `upload_max_mb` / `upload_retention_hours`).                                                                                                                                                                                |
 | `/notebook-intelligence/claude-sessions`                    | GET             | List Claude Code sessions for the working directory.                                                                                                                                                                                                                                                |
 | `/notebook-intelligence/claude-sessions/resume`             | POST            | Resume a Claude session.                                                                                                                                                                                                                                                                            |
+| `/notebook-intelligence/ui-tools`                           | GET/POST        | Jupyter-UI tool manifest (GET) and invocation (POST) for an external stdio MCP proxy. See [Serving the Jupyter UI tools to an external agent](#serving-the-jupyter-ui-tools-to-an-external-agent-398).                                                                                              |
 | `/notebook-intelligence/acp-sessions`                       | GET             | List the ACP agent's stored sessions for the working directory (via the agent's `session/list`).                                                                                                                                                                                                    |
 | `/notebook-intelligence/acp-sessions/resume`                | POST            | Resume an ACP session (via the agent's `session/load`).                                                                                                                                                                                                                                             |
 | `/notebook-intelligence/claude-mcp`                         | GET/POST        | List or add Claude-mode MCP servers. Gated by `claude_mcp_management_policy`.                                                                                                                                                                                                                       |
@@ -817,6 +859,9 @@ NBI is tested against the JupyterLab and `jupyter_server` versions declared in [
 
 | NBI version | JupyterLab | jupyter_server | Python    |
 | ----------- | ---------- | -------------- | --------- |
+| 5.4.x       | 4.x        | 2.x            | 3.10+     |
+| 5.3.x       | 4.x        | 2.x            | 3.10+     |
+| 5.2.x       | 4.x        | 2.x            | 3.10+     |
 | 5.1.x       | 4.x        | 2.x            | 3.10+     |
 | 5.0.x       | 4.x        | 2.x            | 3.10+     |
 | 4.8.x       | 4.x        | 2.x            | 3.10+     |
@@ -826,18 +871,18 @@ NBI is tested against the JupyterLab and `jupyter_server` versions declared in [
 | 4.4.x       | 4.x        | 2.x            | 3.10–3.12 |
 | 4.3.x       | 4.x        | 2.x            | 3.10–3.12 |
 
-Upper bounds for `litellm`, `claude-agent-sdk`, `anthropic`, and `mcp` are not pinned in `pyproject.toml`. For production deployments, pin these in your image build:
+`mcp` is capped at `<2` in `pyproject.toml` (2.x moved the FastMCP server out of the SDK, so `mcp.server.fastmcp.tools` no longer resolves and the server extension fails to load). `litellm`, `claude-agent-sdk`, and `anthropic` carry lower bounds only. For production deployments, pin all of them in your image build:
 
 ```bash
 pip install \
-  "notebook-intelligence==5.1.*" \
+  "notebook-intelligence==5.4.*" \
   "litellm==1.83.*" \
   "claude-agent-sdk==0.x.*" \
   "anthropic==0.x.*" \
-  "mcp==1.27.*"
+  "mcp==1.28.*"
 ```
 
-Substitute the versions you've validated. As of 5.0.0 NBI uses the official `mcp` Python SDK (the prior `fastmcp` dependency was removed); see the [5.0.0 changelog migration note](../CHANGELOG.md#migration-note) if your image previously pinned `fastmcp`. The NBI test suite is currently TypeScript-only (`jlpm test`); end-to-end Python testing is a future work item.
+Substitute the versions you've validated. As of 5.0.0 NBI uses the official `mcp` Python SDK (the prior `fastmcp` dependency was removed); see the [5.0.0 changelog migration note](../CHANGELOG.md#migration-note) if your image previously pinned `fastmcp`. NBI ships both a Python suite (`pip install -e ".[test]"` then `pytest tests/`, around 1,400 tests) and a TypeScript suite (`jlpm test`); CI runs both on every push.
 
 ---
 

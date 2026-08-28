@@ -126,6 +126,14 @@ The agent's shell-execute tools (`execute_command` and the embedded terminal) au
 
 If you're debugging a credential helper and need the raw value, set `NBI_DISABLE_OUTPUT_SCRUB=1` in the JupyterLab process env and restart. Keep it off in normal use; the redaction is the only line of defense between an LLM-driven command and your secrets going to the model provider.
 
+## The model loses track of earlier messages in a long chat
+
+Ask-mode requests are fitted to 80% of the active model's context window, so a long conversation is pruned rather than sent whole and rejected. Complete prior turns are dropped oldest-first; the system prompt, your workspace rules, any inline-edit source, and your newest message are kept. When something is dropped the reply carries a short context note saying so, so an unexplained gap in the model's memory is usually a different problem.
+
+Pruning only happens when NBI knows the window. GitHub Copilot models report theirs through the models API. **OpenAI-compatible and LiteLLM-compatible providers do not**, so NBI uses whatever **Context window** you set on the model in Settings, and if you leave it blank it passes history through untouched rather than pruning against a guessed number. If a self-hosted or gateway-fronted model starts failing on context length in long chats, setting that value is the fix.
+
+Agent-mode tool loops are not budgeted; this applies to ask mode and the built-in generation commands.
+
 ## Inline completion is too aggressive or too quiet
 
 Tune the debounce delay in NBI Settings → Inline completion. Lower delays mean more requests, which means higher cost on paid providers. The default balances responsiveness against cost.

@@ -17,6 +17,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
   - [Chat interface](#chat-interface)
   - [Cell output actions](#cell-output-actions)
   - [Notebook toolbar generation](#notebook-toolbar-generation)
+  - [Multi-language and kernel-aware notebooks](#multi-language-and-kernel-aware-notebooks)
   - [Reload open files when changed on disk](#reload-open-files-when-changed-on-disk)
 - [Configuration](#configuration)
   - [Configuration files](#configuration-files)
@@ -87,6 +88,9 @@ Configure via the NBI Settings dialog (gear icon in the chat panel, or _Settings
 - **Chat Agent setting sources** — user, project, or both, mirroring [Claude Code's settings](https://code.claude.com/docs/en/settings).
 - **Chat Agent tools** — which tool sets to activate. _Claude Code tools_ are always on. _Jupyter UI tools_ are NBI's own (authoring notebooks, running cells, etc.).
 - **API key** and **Base URL** — point at Anthropic or a self-hosted endpoint.
+- **Show turn usage**: off by default. When on, each completed turn ends with a one-line italic footer giving the turn's duration and token counts. A `$` cost figure appears only when NBI is running against a direct Anthropic API key on Anthropic's own endpoint: the SDK prices from the CLI's built-in public list rates, which are not the marginal cost on a subscription login and not the rate on a custom `base_url`, so NBI omits a number it cannot stand behind rather than showing a misleading one.
+
+**Model defaults.** With no model selected, the chat model resolves to the newest Sonnet (`claude-sonnet-5` today) and auto-complete to the newest Haiku, both matched against the model list fetched from the configured endpoint rather than a hardcoded ID. If a configured ID no longer exists, NBI falls back within the same tier by version rather than alphabetically, so `claude-sonnet-99` resolves to the newest Sonnet. The fetched list is cached per endpoint, so changing **Base URL** does not reuse the previous endpoint's models. Auto-complete responses are capped at 1024 tokens, since a suggestion is at most a few dozen lines; `NBI_CLAUDE_INLINE_COMPLETION_MAX_TOKENS` overrides the cap and is clamped to `[1, 4096]`.
 
 If the Claude Code CLI is on `PATH`, NBI launches it automatically. To override the location, set the `NBI_CLAUDE_CLI_PATH` environment variable before starting JupyterLab.
 
@@ -180,6 +184,12 @@ Each is per-user toggleable from Settings (saved as `enable_explain_error`, `ena
 
 Active notebooks show a sparkle icon on the toolbar. Click it to open a popover that scopes the generation request to that specific notebook — handy for multi-notebook sessions where you don't want the chat sidebar to compete for context.
 
+### Multi-language and kernel-aware notebooks
+
+Notebook creation, cell insertion, and inline generation follow the notebook you are actually in rather than assuming Python. NBI resolves the active notebook's kernel and language and carries both through the chat context, the built-in tools, and ruleset scoping, so generated code matches the target notebook, and a rule scoped to `languages: ['r']` or `kernel_names: ['ir']` applies where you would expect (including in inline generation, which previously did not receive the kernel).
+
+When the agent needs a notebook in a language the current context has not established, it calls a `list-available-notebook-kernels` tool and picks from the kernelspecs that are actually installed instead of guessing a name. Asking for a kernel that is not installed now fails with a clear error rather than silently producing a Python notebook.
+
 ### Reload open files when changed on disk
 
 NBI reloads open document tabs when their files change on disk, so edits an AI agent makes via its Read/Write tools appear in the editor without a manual refresh. Tabs with unsaved local edits are skipped so user work is never clobbered. Toggle via the **NBI Settings dialog → External changes → "Refresh open files when changed on disk"** (default on).
@@ -255,6 +265,8 @@ Per-user preferences (default on for the cell-output features) live in `config.j
 
 Inline chat calls the Anthropic API directly while the other Claude modes go through the Claude Code CLI, so a deployment can need a different model id for each. It uses `inline_chat_model`, falling back to `chat_model` when that is unset. `NBI_CLAUDE_CHAT_MODEL` therefore governs both surfaces: while it is set, a stored `inline_chat_model` is ignored and its control is disabled. Set `NBI_CLAUDE_INLINE_CHAT_MODEL` as well to pin inline chat to a different model — it takes precedence and re-enables nothing, so both surfaces stay administrator-controlled.
 
+`NBI_ACP_AGENT_COMMAND` (not a settings lock) overrides the adapter command NBI launches for the selected ACP agent type; the value is shell-split. Leave it unset to use the agent's registered default command.
+
 Provider IDs: `github-copilot`, `openai-compatible`, `litellm-compatible`, `ollama`, `none`. The `*_MODEL_ID` value is whatever the chosen provider exposes (e.g. `gpt-4o`, `llama3:latest`). Claude model IDs are the literal IDs from the Anthropic API (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`); empty string = "Default (recommended)"; `NBI_CLAUDE_INLINE_COMPLETION_MODEL` also accepts `none` (no inline completion in Claude mode) or `inherit` (use the General-tab Auto-complete model).
 
 **Upload tunables** govern the shared upload endpoint used by both chat-sidebar file attachments and terminal drag-drop:
@@ -300,7 +312,7 @@ In multi-tenant deployments, `nbi-command-execute` and `nbi-file-edit` are effec
 
 ## Model Context Protocol (MCP) support
 
-NBI integrates with [MCP](https://modelcontextprotocol.io) servers. It supports both stdio and Streamable HTTP transports. **MCP server tools are supported; resources and prompts are not yet supported.**
+NBI integrates with [MCP](https://modelcontextprotocol.io) servers. It supports both stdio and Streamable HTTP transports. **Tools and prompts are supported; resources are not.** A server's prompts appear in the chat input's slash-command autocomplete as `/mcp:<server>:<prompt>`.
 
 Add MCP servers by editing `~/.jupyter/nbi/mcp.json`. An environment-wide base file at `<env-prefix>/share/jupyter/nbi/mcp.json` is also supported.
 
@@ -434,6 +446,8 @@ NBI Settings opens on a **Status** card that answers one question: is this deplo
 It runs on open and costs nothing: it resolves your provider and model, checks the model list is reachable and that your selected model is one the endpoint actually serves, and for the agent modes checks that the CLI answers `--version` and that credentials are present. A missing key is a warning rather than an error, because the Claude CLI and ACP agents can hold their own subscription logins that NBI cannot see.
 
 **Test the endpoint** sends one short request to your configured model, after asking first. It is the only way to catch two failures nothing cheaper can see: a gateway that returns 200s but buffers instead of streaming, and a proxy that strips the `tools` field so agent mode silently never calls a tool. No model output is kept, so the result is safe to paste into a support ticket.
+
+That button is the only readiness check that bills anything, so it has an off switch: `NBI_READINESS_LIVE_CHECK=off` (traitlet `readiness_live_check_allowed`, default on) refuses it while leaving every other check available. One live test runs at a time per server; a second concurrent request gets a 429 rather than spending tokens.
 
 ## Performance diagnostics
 

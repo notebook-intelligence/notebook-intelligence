@@ -165,7 +165,14 @@ TypeScript unit tests:
 jlpm test
 ```
 
-There is no Python test suite at the moment. Manual end-to-end verification is documented per change in pull request descriptions.
+Python tests (the `test` extra pulls in pytest, `pytest-timeout`, `psutil`, and `pyyaml`):
+
+```bash
+pip install -e ".[test]"
+pytest tests/ -q
+```
+
+CI runs both suites on every push, in that order. Every test is capped at 30 seconds by `pytest-timeout`, so a hung subprocess or pipe fails the run instead of stalling the job.
 
 ## Linting
 
