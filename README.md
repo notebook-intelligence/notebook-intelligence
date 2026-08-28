@@ -29,6 +29,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 - [Claude MCP Servers](#claude-mcp-servers)
 - [Claude Plugins](#claude-plugins)
 - [Chat feedback](#chat-feedback)
+- [Performance diagnostics](#performance-diagnostics)
 - [Documentation](#documentation)
 - [Further reading](#further-reading)
 - [Roadmap](#roadmap)
@@ -422,12 +423,36 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 
 <img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
 
+## Performance diagnostics
+
+An opt-in mode for answering "where did this turn's time go," aimed at deployments where NBI feels slower than it should: internal LLM gateways, network home directories, TLS-intercepting proxies. Off by default, and when off the cost is a single boolean check per instrumentation site.
+
+**Turning it on.** NBI Settings, **Performance** tab, **Enabled**. It takes effect immediately with no restart.
+
+**Reading a turn.** Every chat turn records a phase timeline (rule and context preparation, agent connect and spawn, time to first token, streaming with stall events, tool calls, time spent waiting on you) plus token counts and the SDK-reported API duration. The table shows the recent turns, one row each, with a **Verdict** column naming the phase that dominated. The comparison that matters most is **Active** against **API ms**: close together means the time is in the gateway or the model, far apart means it is local. Expanding a row shows that turn's spans as proportional bars with their attributes. Each turn is also summarized as one `perf turn ...` INFO line in the Jupyter server log, so headless installs get the same signal with no UI.
+
+**Reading the environment.** **Run probe** measures the machine instead of a turn: filesystem latency and throughput for the config and `~/.claude` directories with filesystem type and mount options, interpreter and CLI cold-start cost, and process and host contention. Results are grouped and banded, so a slow network filesystem or a throttled container is called out in a sentence rather than left in a JSON blob. An opt-in network check adds connections to your configured endpoint to time DNS, TCP, and TLS and to capture the presented certificate chain, which is what makes TLS interception visible. It asks for confirmation first and names the host it will contact.
+
+**Privacy.** Recorded: durations, counts, byte sizes, status enums, token counts, and tool, server, model, and provider names. Never recorded: prompt or response text, file contents, absolute paths, environment variable values, API keys, exception messages, or hostnames. This is enforced by a fixed per-attribute allowlist rather than by convention, and the default `redacted` detail level additionally hashes file basenames and model, tool, and server names.
+
+**Collecting across sessions.** Turns can optionally be appended as JSON Lines to `<nbi-dir>/perf/`, with size- and age-capped retention. On network home directories, point the log at local scratch with `NBI_PERF_LOG_DIR`.
+
+Full guide, including the span and event reference, the probe thresholds, worked diagnoses for a slow gateway, a slow home directory, and an intercepting proxy, and the JSONL schema: [`docs/performance-diagnostics.md`](docs/performance-diagnostics.md).
+
+| Environment variable          | Effect                                                                                                         |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `NBI_PERF_DIAGNOSTICS`        | Locks the enabled state on or off (value lock; the UI shows the toggle as locked).                             |
+| `NBI_PERF_DIAGNOSTICS_POLICY` | `user-choice` (default), `force-off`, or `force-on` (fleet-wide collection with redacted attributes enforced). |
+| `NBI_PERF_PROBE_NETWORK`      | `off` disables just the probe's network check while leaving the rest available.                                |
+| `NBI_PERF_LOG_DIR`            | Redirects the JSONL perf log directory.                                                                        |
+
 ## Documentation
 
 - [`docs/admin-guide.md`](docs/admin-guide.md) — deployment, env vars, security model, air-gap, multi-tenancy.
 - [`docs/skills.md`](docs/skills.md) — Claude Skills management and the org-manifest reconciler.
 - [`docs/rulesets.md`](docs/rulesets.md) — ruleset frontmatter and discovery.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems with copy-pasteable fixes.
+- [`docs/performance-diagnostics.md`](docs/performance-diagnostics.md): turn timelines, the environment probe, and how to read both.
 - [`PRIVACY.md`](PRIVACY.md) — what NBI sends to which provider, and the egress allowlist.
 - [`SECURITY.md`](SECURITY.md) — how to report a vulnerability.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.

@@ -31,6 +31,13 @@ ACP_SETTINGS_OVERRIDES = (
     ("acp_api_key", "api_key"),
     ("acp_base_url", "base_url"),
 )
+PERF_DIAGNOSTICS_OVERRIDES = (
+    ("perf_log_dir", "log_dir"),
+)
+
+# Tokens accepted by the perf_diagnostics bool value-lock (NBI_PERF_DIAGNOSTICS),
+# same set _resolve_bool_with_env in extension.py accepts.
+_BOOL_TRUE_TOKENS = {"true", "1", "yes", "on"}
 
 
 def resolve_feature_flag(policy: str, user_setting: bool) -> Tuple[bool, bool]:
@@ -182,3 +189,36 @@ def apply_claude_policies(claude_settings: dict, policies: dict) -> dict:
     result["setting_sources"] = sources
 
     return result
+
+
+def apply_perf_policies(perf_settings: dict, policies: dict) -> dict:
+    """Apply admin policies to a ``perf_diagnostics`` dict.
+
+    ``perf_diagnostics`` (from ``NBI_PERF_DIAGNOSTICS_POLICY``) clamps
+    ``enabled``. Force-on additionally locks ``attr_detail`` to "redacted"
+    so an admin who mandates diagnostics can't be undermined by a stale
+    "full" value already sitting in the user's stored settings -- mirrors
+    the same force applied at runtime by ``perf.configure``.
+    """
+    result = dict(perf_settings or {})
+    policy = policies.get("perf_diagnostics", POLICY_USER_CHOICE)
+    if policy == POLICY_FORCE_ON:
+        result["enabled"] = True
+        result["attr_detail"] = "redacted"
+    elif policy == POLICY_FORCE_OFF:
+        result["enabled"] = False
+    return result
+
+
+def apply_bool_value_lock(current: bool, raw_override: str) -> bool:
+    """Resolve a boolean value-presence-lock env var already captured in
+    ``string_overrides`` (e.g. ``NBI_PERF_DIAGNOSTICS``).
+
+    Unlike ``apply_string_overrides``, the destination field is a bool, not
+    a string, so it can't reuse that helper's verbatim-copy semantics.
+    ``raw_override`` empty/missing leaves ``current`` untouched.
+    """
+    raw = (raw_override or "").strip().lower()
+    if not raw:
+        return current
+    return raw in _BOOL_TRUE_TOKENS

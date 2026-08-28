@@ -9,6 +9,7 @@ import threading
 from typing import Dict, Optional
 import logging
 from notebook_intelligence import github_copilot
+from notebook_intelligence import perf
 from notebook_intelligence.api import ButtonData, ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, ChatParticipant, ChatRequest, ChatResponse, CompletionContext, ContextRequest, Host, CompletionContextProvider, MCPPrompt, MCPServer, MarkdownData, NotebookIntelligenceExtension, RegistrationError, TelemetryEvent, TelemetryListener, Tool, Toolset
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.config import NBIConfig
@@ -609,7 +610,16 @@ class AIServiceManager(Host):
     
         request.command = prompt_parts.command
         request.prompt = prompt_parts.input
-        return await participant.handle_chat_request(request, response, options)
+        # Diagnostics must never change dispatch behavior. A ChatResponse
+        # implementation without message_id (test doubles, third-party
+        # participants) still dispatches; it just gets no span.
+        _perf_message_id = getattr(response, "message_id", None)
+        turn = perf.get_turn(_perf_message_id) if _perf_message_id else None
+        if turn is None:
+            return await participant.handle_chat_request(request, response, options)
+        provider = "acp" if is_acp_mode else ("claude" if is_claude_code_mode else "copilot")
+        with turn.span("dispatch", provider=provider):
+            return await participant.handle_chat_request(request, response, options)
 
     async def get_completion_context(self, request: ContextRequest) -> CompletionContext:
         cancel_token = request.cancel_token

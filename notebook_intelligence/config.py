@@ -14,8 +14,11 @@ from notebook_intelligence.feature_flags import (
     CHAT_MODEL_OVERRIDES,
     CLAUDE_SETTINGS_OVERRIDES,
     INLINE_COMPLETION_MODEL_OVERRIDES,
+    PERF_DIAGNOSTICS_OVERRIDES,
     apply_acp_policies,
+    apply_bool_value_lock,
     apply_claude_policies,
+    apply_perf_policies,
     apply_string_overrides,
 )
 
@@ -182,6 +185,28 @@ class NBIConfig:
         return apply_string_overrides(
             resolved, self._string_overrides, ACP_SETTINGS_OVERRIDES
         )
+
+    @property
+    def perf_diagnostics(self):
+        default = {
+            "enabled": False,
+            "log_to_file": False,
+            "log_dir": "",
+            "attr_detail": "redacted",
+            "ring_buffer_turns": 50,
+        }
+        resolved = apply_perf_policies(
+            self.get('perf_diagnostics', default), self._feature_policies
+        )
+        resolved = apply_string_overrides(
+            resolved, self._string_overrides, PERF_DIAGNOSTICS_OVERRIDES
+        )
+        resolved = dict(resolved)
+        resolved['enabled'] = apply_bool_value_lock(
+            bool(resolved.get('enabled', False)),
+            self._string_overrides.get('perf_diagnostics_enabled', ''),
+        )
+        return resolved
 
     @property
     def chat_model(self):

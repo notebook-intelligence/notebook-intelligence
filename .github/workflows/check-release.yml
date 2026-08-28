@@ -1,9 +1,9 @@
 name: Check Release
 on:
   push:
-    branches: ["main"]
+    branches: ['main']
   pull_request:
-    branches: ["*"]
+    branches: ['*']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -25,7 +25,6 @@ jobs:
       - name: Check Release
         uses: jupyter-server/jupyter_releaser/.github/actions/check-release@v2
         with:
-
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Distributions

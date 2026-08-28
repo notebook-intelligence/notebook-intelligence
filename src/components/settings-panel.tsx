@@ -24,6 +24,7 @@ import {
 import { SettingsPanelComponentSkills } from './skills-panel';
 import { SettingsPanelComponentClaudeMCP } from './claude-mcp-panel';
 import { SettingsPanelComponentPlugins } from './plugins-panel';
+import { SettingsPanelComponentPerf } from './perf-panel';
 import { writeTextToClipboard } from '../utils';
 
 const lockedTip = (locked: boolean): string =>
@@ -222,6 +223,19 @@ const TABS: TabSpec[] = [
     label: 'Skills',
     visible: ctx => ctx.featurePolicies.skills_management.enabled,
     render: () => <SettingsPanelComponentSkills />
+  },
+  {
+    id: 'perf',
+    label: 'Performance',
+    // Not gated on `enabled`, which is the user's own toggle and is off by
+    // default: gating on it would hide the tab that contains the toggle.
+    // Hidden only under force-off, where both perf endpoints 404 and there
+    // is nothing on the tab a user can do.
+    visible: ctx => {
+      const policy = ctx.featurePolicies.perf_diagnostics;
+      return !(policy?.locked === true && policy?.enabled === false);
+    },
+    render: () => <SettingsPanelComponentPerf />
   }
 ];
 

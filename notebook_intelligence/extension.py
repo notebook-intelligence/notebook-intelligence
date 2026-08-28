@@ -6,12 +6,14 @@ import base64
 import hmac
 from dataclasses import asdict, dataclass
 import json
+from urllib.parse import urlsplit
 from os import path
 import datetime as dt
 import os
 import shutil
 import tempfile
 import time
+import contextlib
 from typing import Optional, Union
 import uuid
 import threading
@@ -28,6 +30,8 @@ from tornado import websocket
 from traitlets import Bool, Enum as TraitletEnum, Int, List, Unicode
 from notebook_intelligence.api import CancelToken, ChatMode, ChatResponse, ChatRequest, ContextRequest, ContextRequestType, RequestDataType, RequestToolSelection, ResponseStreamData, ResponseStreamDataType, BackendMessageType, SignalImpl, UICommandCancelledError, UserInputCancelledError
 from notebook_intelligence.ai_service_manager import AIServiceManager
+from notebook_intelligence import perf
+from notebook_intelligence import perf_probe
 from notebook_intelligence.cell_output import coerce_payload as _coerce_output_context, format_output_context as _format_output_context
 from notebook_intelligence.feature_flags import (
     CHAT_MODEL_OVERRIDES,
@@ -35,6 +39,7 @@ from notebook_intelligence.feature_flags import (
     CLAUDE_SETTINGS_OVERRIDES,
     ACP_SETTINGS_OVERRIDES,
     INLINE_COMPLETION_MODEL_OVERRIDES,
+    PERF_DIAGNOSTICS_OVERRIDES,
     JUPYTER_UI_TOOLS_ID,
     POLICY_FORCE_OFF,
     POLICY_FORCE_ON,
@@ -42,6 +47,8 @@ from notebook_intelligence.feature_flags import (
     VALID_POLICIES,
     apply_claude_policies,
     apply_acp_policies,
+    apply_bool_value_lock,
+    apply_perf_policies,
     apply_string_overrides,
     is_external_ui_tools_active,
     is_force_off,
@@ -87,6 +94,59 @@ from notebook_intelligence.skillset import SKILL_NAME_REGEX
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
+
+
+class _NullPerfSpan:
+    """Stand-in for a perf span when no turn is open, so call sites can call
+    ``set_attr`` unconditionally instead of branching on ``turn is None``."""
+    __slots__ = ()
+
+    def set_attr(self, key, value):
+        pass
+
+
+@contextlib.contextmanager
+def _perf_span(turn, name, **attrs):
+    if turn is None:
+        yield _NullPerfSpan()
+        return
+    with turn.span(name, **attrs) as span:
+        yield span
+
+
+def _stream_chunk_byte_estimate(data) -> int:
+    """Cheap best-effort size estimate for one stream() chunk, used only for
+    the perf "bytes" counter.
+
+    Deliberately avoids ``asdict`` + ``json.dumps``: that pair ran on every
+    chunk of the hot streaming path purely to count bytes, double-serializing
+    content the caller is about to serialize again for the websocket write.
+    Reads the content out directly instead. Dicts are raw LLM chunks and are
+    OpenAI-shaped (``choices[0].delta.content``, the same accessor
+    ``_collect_streamed_content`` below uses), never a flat ``content`` key;
+    everything else is a ResponseStreamData dataclass. Anything that does not
+    match, or a non-string content, counts as 0 rather than paying for a real
+    serialization.
+    """
+    if isinstance(data, dict):
+        choices = data.get("choices") or []
+        if not choices:
+            return 0
+        first = choices[0]
+        delta = first.get("delta") or {} if isinstance(first, dict) else {}
+        content = delta.get("content")
+    else:
+        content = getattr(data, "content", None)
+    if not isinstance(content, str):
+        return 0
+    # Encoded length, not len(): the attribute is called "bytes" and is
+    # documented as a byte size, and a character count undercounts CJK and
+    # emoji by three to four times. The encode is on the hot path but only
+    # when diagnostics are on, and it is still far cheaper than the
+    # asdict + json.dumps this replaced.
+    return len(content.encode("utf-8", errors="ignore"))
+
+
 tiktoken_encoding = tiktoken.encoding_for_model('gpt-4o')
 thread_safe_websocket_connector: ThreadSafeWebSocketConnector = None
 
@@ -348,6 +408,11 @@ FEATURE_POLICY_SPEC = (
         "acp_full_access_policy",
     ),
     (
+        "perf_diagnostics",
+        "NBI_PERF_DIAGNOSTICS_POLICY",
+        "perf_diagnostics_policy",
+    ),
+    (
         "claude_continue_conversation",
         "NBI_CLAUDE_CONTINUE_CONVERSATION_POLICY",
         "claude_continue_conversation_policy",
@@ -436,6 +501,8 @@ STRING_OVERRIDE_SPEC = (
     ("acp_chat_model", "NBI_ACP_CHAT_MODEL"),
     ("acp_api_key", "OPENAI_API_KEY"),
     ("acp_base_url", "OPENAI_BASE_URL"),
+    ("perf_diagnostics_enabled", "NBI_PERF_DIAGNOSTICS"),
+    ("perf_log_dir", "NBI_PERF_LOG_DIR"),
 )
 SETTING_LOCK_NAMES = tuple(name for name, _ in STRING_OVERRIDE_SPEC)
 
@@ -449,6 +516,7 @@ def _build_feature_policies_response(policies: dict, nbi_config) -> dict:
     """
     claude_settings = nbi_config.claude_settings or {}
     acp_settings = nbi_config.acp_settings or {}
+    perf_settings = nbi_config.perf_diagnostics or {}
     tools = claude_settings.get("tools") or []
     sources = claude_settings.get("setting_sources") or []
 
@@ -463,6 +531,7 @@ def _build_feature_policies_response(policies: dict, nbi_config) -> dict:
         # so the agent asks before risky actions unless an admin opts in
         # (#378).
         "acp_full_access": bool(acp_settings.get("full_access", False)),
+        "perf_diagnostics": bool(perf_settings.get("enabled", False)),
         "claude_continue_conversation": bool(
             claude_settings.get("continue_conversation", False)
         ),
@@ -578,6 +647,7 @@ class GetCapabilitiesHandler(APIHandler):
     additional_skipped_workspace_directories = []
     feature_policies = {}
     string_overrides = {}
+    perf_probe_network_allowed = True
     # Resolved at extension init from NBI_TOUR_CONFIG_PATH (or the
     # tour_config_path traitlet). Empty string disables the override.
     tour_config_path = ""
@@ -671,6 +741,9 @@ class GetCapabilitiesHandler(APIHandler):
             "acp_settings": _scrub_credentials_for_wire(
                 nbi_config.acp_settings, self.string_overrides, "acp_api_key"
             ),
+            # The perf panel seeds its controls from this; without it the
+            # panel renders defaults and a save clobbers stored settings.
+            "perf_diagnostics": nbi_config.perf_diagnostics,
             # The agent types selectable in ACP mode (settings dropdown).
             "acp_agents": [
                 {"id": spec.id, "label": spec.label}
@@ -708,6 +781,8 @@ class GetCapabilitiesHandler(APIHandler):
                 self.feature_policies, nbi_config
             ),
             "setting_locks": _build_setting_locks_response(self.string_overrides),
+            "perf_probe_network_allowed": self.perf_probe_network_allowed,
+            "perf_probe_target": _perf_probe_target(),
             # Starting mode for the permission-mode selector: managed
             # settings' permissions.defaultMode when present and valid,
             # else "default". Bypass never starts armed regardless of
@@ -754,6 +829,7 @@ class ConfigHandler(APIHandler):
             "mcp_server_settings",
             "claude_settings",
             "acp_settings",
+            "perf_diagnostics",
             "enable_explain_error",
             "enable_output_followup",
             "enable_output_toolbar",
@@ -848,6 +924,20 @@ class ConfigHandler(APIHandler):
                 has_acp_settings_change = (
                     value != (ai_service_manager.nbi_config.get("acp_settings") or {})
                 )
+            elif key == "perf_diagnostics":
+                value = apply_perf_policies(value, self.feature_policies)
+                value = apply_string_overrides(
+                    value, self.string_overrides, PERF_DIAGNOSTICS_OVERRIDES
+                )
+                # Mirror the bool value-presence-lock config.py's
+                # perf_diagnostics property applies on read: without this, a
+                # scripted POST could persist enabled:true to config.json
+                # even while NBI_PERF_DIAGNOSTICS locks it off.
+                value = dict(value)
+                value['enabled'] = apply_bool_value_lock(
+                    bool(value.get('enabled', False)),
+                    self.string_overrides.get('perf_diagnostics_enabled', ''),
+                )
             ai_service_manager.nbi_config.set(key, value)
             if key == "store_github_access_token":
                 if value:
@@ -904,6 +994,10 @@ class ConfigHandler(APIHandler):
                 has_acp_settings_change = True
 
         ai_service_manager.nbi_config.save()
+        perf.configure(
+            ai_service_manager.nbi_config.perf_diagnostics,
+            self.feature_policies.get("perf_diagnostics"),
+        )
         if (
             has_model_change
             or has_claude_settings_change
@@ -2202,6 +2296,24 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
         # write back to the IOLoop's thread fixes it.
         self._io_loop = tornado.ioloop.IOLoop.current()
 
+        # Perf diagnostics: the "stream" span is opened on the first stream()
+        # call and manually kept open across every subsequent call for this
+        # turn, then closed once in finish() -- a single with-block can't
+        # span multiple call-site invocations.
+        self._perf_stream_cm = None
+        self._perf_stream_span = None
+        self._perf_chunk_count = 0
+        self._perf_byte_count = 0
+        # Resolved once here rather than per chunk. perf.get_turn takes the
+        # global registry lock, and stream() is the hottest path in the
+        # product: one contended mutex per streamed token, against every
+        # concurrent turn's opens and closes, is not a price this feature
+        # should charge. The emitter is constructed after begin_turn and the
+        # handle stays valid for the whole turn, so holding it is also what
+        # keeps finish() able to close the stream span if diagnostics are
+        # switched off mid-turn.
+        self._perf_turn = perf.get_turn(self.messageId)
+
     def _send_async(self, message: dict) -> None:
         def _write_if_open(pending_message: dict) -> None:
             if getattr(self.websocket_handler, "ws_connection", None) is None:
@@ -2274,6 +2386,29 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
             self._stream_unlocked(data)
 
     def _stream_unlocked(self, data: Union[ResponseStreamData, dict]):
+        turn = self._perf_turn
+        if turn is not None:
+            # Locally generated ProgressData ("Thinking...") is streamed
+            # before the agent even connects, and can recur mid-turn as
+            # agent status updates; marking first_token on it made the
+            # headline TTFT metric read ~0 on every turn and pulled the
+            # connect phase inside the stream span. Progress chunks are
+            # excluded from every perf signal here (span open, first_token,
+            # chunk/byte counters): only substantive content opens the
+            # stream window or counts toward it.
+            _is_progress = (
+                not isinstance(data, dict)
+                and getattr(data, "data_type", None) == ResponseStreamDataType.Progress
+            )
+            if not _is_progress:
+                if self._perf_stream_cm is None:
+                    self._perf_stream_cm = turn.span("stream")
+                    self._perf_stream_span = self._perf_stream_cm.__enter__()
+                    turn.event("first_token")
+                if self._perf_stream_span is not None:
+                    self._perf_chunk_count += 1
+                    self._perf_byte_count += _stream_chunk_byte_estimate(data)
+
         data_type = ResponseStreamDataType.LLMRaw if type(data) is dict else data.data_type
 
         if data_type == ResponseStreamDataType.Markdown:
@@ -2547,42 +2682,68 @@ class WebsocketCopilotResponseEmitter(ChatResponse):
             finally:
                 self._finishing = False
 
+        turn = self._perf_turn
+        if turn is not None:
+            if self._perf_stream_cm is not None:
+                # Only the final counts matter, so write them once here
+                # rather than on every stream() call.
+                if self._perf_stream_span is not None:
+                    self._perf_stream_span.set_attr("chunk_count", self._perf_chunk_count)
+                    self._perf_stream_span.set_attr("bytes", self._perf_byte_count)
+                self._perf_stream_cm.__exit__(None, None, None)
+                self._perf_stream_cm = None
+                self._perf_stream_span = None
+            turn.event("egress", count=self._perf_chunk_count, bytes=self._perf_byte_count)
+
     async def run_ui_command(self, command: str, args: dict = {}) -> dict:
-        callback_id = str(uuid.uuid4())
-        with self._lifecycle_lock:
-            if self._finished:
-                error = (
-                    f"Cannot run UI command '{command}' after response "
-                    f"{self.messageId} finished"
-                )
-                log.warning(
-                    "Rejecting UI command: %s",
-                    error,
-                )
-                raise UICommandCancelledError(error)
-            pending = self.prepare_run_ui_command_response(callback_id)
-            try:
-                if not pending.done():
-                    self._send_async({
-                        "id": self.messageId,
-                        "participant": self.participant_id,
-                        "type": BackendMessageType.RunUICommand,
-                        "data": {
-                            "callback_id": callback_id,
-                            "commandId": command,
-                            "args": args
-                        }
-                    })
-            except Exception:
-                with self._run_ui_command_state_lock:
-                    self._pending_ui_commands.pop(callback_id, None)
-                pending.cancel()
-                raise
-        response = await ChatResponse.wait_for_run_ui_command_response(
-            self,
-            callback_id,
-            pending,
+        # The ui_command span wraps the whole operation rather than only the
+        # await. #403 moved waiter registration ahead of dispatch, so the
+        # span now covers registration, the websocket write, and the wait,
+        # which is what "time this turn spent in a UI round trip" should mean.
+        # It lives here rather than in ChatResponse.wait_for_run_ui_command_response
+        # because the command name is known here and that method is shared.
+        _perf_turn = self._perf_turn
+        _perf_cm = (
+            _perf_turn.span("ui_command", command=command)
+            if _perf_turn is not None
+            else contextlib.nullcontext()
         )
+        with _perf_cm:
+            callback_id = str(uuid.uuid4())
+            with self._lifecycle_lock:
+                if self._finished:
+                    error = (
+                        f"Cannot run UI command '{command}' after response "
+                        f"{self.messageId} finished"
+                    )
+                    log.warning(
+                        "Rejecting UI command: %s",
+                        error,
+                    )
+                    raise UICommandCancelledError(error)
+                pending = self.prepare_run_ui_command_response(callback_id)
+                try:
+                    if not pending.done():
+                        self._send_async({
+                            "id": self.messageId,
+                            "participant": self.participant_id,
+                            "type": BackendMessageType.RunUICommand,
+                            "data": {
+                                "callback_id": callback_id,
+                                "commandId": command,
+                                "args": args
+                            }
+                        })
+                except Exception:
+                    with self._run_ui_command_state_lock:
+                        self._pending_ui_commands.pop(callback_id, None)
+                    pending.cancel()
+                    raise
+            response = await ChatResponse.wait_for_run_ui_command_response(
+                self,
+                callback_id,
+                pending,
+            )
         return response
 
 class CancelTokenImpl(CancelToken):
@@ -2669,6 +2830,68 @@ class UIToolsHandler(APIHandler):
         super().on_connection_close()
 
 
+def _perf_probe_target() -> str:
+    """The endpoint the probe's network check would contact, as
+    ``scheme://host[:port]``, for the confirm dialog to name.
+
+    Scheme and host only. The raw configured URL can carry a path, a query,
+    or embedded credentials, and hostname+port is used rather than netloc
+    because netloc preserves userinfo and would re-leak a credential
+    embedded in a gateway URL.
+    """
+    try:
+        target = perf_probe._resolve_target_base_url(ai_service_manager.nbi_config)
+        parsed = urlsplit(target)
+        hostport = (parsed.hostname or "") + (f":{parsed.port}" if parsed.port else "")
+        return f"{parsed.scheme}://{hostport}" if parsed.scheme and hostport else ""
+    except Exception:
+        return ""
+
+
+class PerfReportHandler(APIHandler):
+    """Serves the in-memory perf diagnostics ring buffer. 404s whenever
+    perf diagnostics is off, so the endpoint's mere presence doesn't leak
+    that the feature exists to callers who aren't allowed to use it."""
+
+    @tornado.web.authenticated
+    async def get(self):
+        if not perf.enabled():
+            raise tornado.web.HTTPError(404)
+        # No probe_target here. The report document is the thing users copy
+        # into support tickets, and both the README and the diagnostics guide
+        # promise it contains no hostname. The probe target the confirm
+        # dialog needs is served on the capabilities response instead, which
+        # already carries the configured base URL because the settings UI has
+        # to render it.
+        self.finish(json.dumps(perf.report_snapshot()))
+
+
+class PerfProbeHandler(APIHandler):
+    """Runs the on-demand connectivity/latency probe battery. Gated the
+    same way as PerfReportHandler; network checks are additionally gated
+    by perf_probe_network_allowed so a locked-down deployment can allow
+    local diagnostics without allowing outbound probes."""
+
+    perf_probe_network_allowed = True
+
+    @tornado.web.authenticated
+    async def post(self):
+        if not perf.enabled():
+            raise tornado.web.HTTPError(404)
+        try:
+            data = json.loads(self.request.body or b"{}")
+        except json.JSONDecodeError as exc:
+            self.set_status(400)
+            self.finish(json.dumps({"error": f"Invalid JSON: {exc}"}))
+            return
+        include_network = bool(data.get("network", False)) and self.perf_probe_network_allowed
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, perf_probe.run_probe, include_network, ai_service_manager.nbi_config
+        )
+        self.finish(json.dumps(result))
+
+
 @dataclass
 class MessageCallbackHandlers:
     response_emitter: WebsocketCopilotResponseEmitter
@@ -2729,11 +2952,17 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
         client are routed to the emitter by messageId, and the client
         stops sending those once the response stream ends.
         """
+        status = "ok"
         try:
             asyncio.run(coro)
         except (UICommandCancelledError, UserInputCancelledError) as error:
+            # Cancellation is a normal outcome, not a failure. Recording it as
+            # "cancelled" keeps a 2s cancelled stub of a 60s turn from landing
+            # in the percentiles as a fast success.
+            status = "cancelled"
             log.debug("Request %s cancelled: %s", message_id, error)
         except Exception:
+            status = "error"
             log.exception("Unhandled error while processing request %s", message_id)
             try:
                 response_emitter.stream_transient_markdown(
@@ -2745,19 +2974,85 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                     "Failed to stream terminal notice for request %s",
                     message_id,
                 )
+        except BaseException:
+            # Not caught above (asyncio.CancelledError, KeyboardInterrupt).
+            # Record the outcome, then let it propagate as before.
+            status = "error"
+            raise
         finally:
             try:
                 if response_emitter is not None:
                     response_emitter.finish()
             except Exception:
                 log.exception("Failed to finalize request %s", message_id)
+            # Read before popping: the perf close needs the emitter's
+            # user-wait total and the cancel token. Upstream pops
+            # conditionally so a concurrent cancellation that already
+            # replaced the entry is not clobbered.
             handlers = self._messageCallbackHandlers.get(message_id)
             if (
                 handlers is not None
                 and handlers.response_emitter is response_emitter
             ):
                 self._messageCallbackHandlers.pop(message_id, None)
+            else:
+                handlers = None
+            try:
+                # take_turn, not get_turn: diagnostics may have been switched
+                # off while this turn was running, and a close that came back
+                # empty would strand the handle in the registry forever.
+                turn = perf.take_turn(message_id)
+                if turn is not None:
+                    if handlers is not None:
+                        turn.add_user_wait(handlers.response_emitter.user_input_wait_seconds)
+                        # Cancellation unwinds the coroutine normally, so it looks
+                        # like "ok" here; a 2s cancelled stub of a 60s turn must
+                        # not pollute the percentiles as a fast success.
+                        if status == "ok" and handlers.cancel_token.is_cancel_requested:
+                            status = "cancelled"
+                    doc = turn.close(status)
+                    if doc is not None:
+                        span_ms: dict = {}
+                        for sp in doc["spans"]:
+                            key = sp["name"]
+                            if key.startswith("tool:"):
+                                key = "tools"
+                            span_ms[key] = span_ms.get(key, 0.0) + sp.get("dur_ms", 0.0)
+                        stalls = sum(
+                            1 for ev in doc["events"] if ev.get("name") == "stall"
+                        )
+                        # first_token is an event mark, not a span; its offset from
+                        # turn start is the latency users actually feel.
+                        first_token_ms = next(
+                            (
+                                ev["t_ms"]
+                                for ev in doc["events"]
+                                if ev.get("name") == "first_token"
+                            ),
+                            0.0,
+                        )
+                        log.info(
+                            "perf turn message_id=%s mode=%s status=%s total=%.1fs active=%.1fs "
+                            "context_prep=%.1fs connect=%.1fs first_token=%.1fs stream=%.1fs "
+                            "tools=%.1fs api=%.1fs stalls=%d dropped_spans=%d",
+                            doc["message_id"],
+                            doc["mode"],
+                            status,
+                            doc["total_ms"] / 1000.0,
+                            doc["active_ms"] / 1000.0,
+                            span_ms.get("context_prep", 0.0) / 1000.0,
+                            span_ms.get("connect", 0.0) / 1000.0,
+                            first_token_ms / 1000.0,
+                            span_ms.get("stream", 0.0) / 1000.0,
+                            span_ms.get("tools", 0.0) / 1000.0,
+                            (doc["sdk"].get("duration_api_ms") or 0.0) / 1000.0,
+                            stalls,
+                            doc["dropped_spans"],
+                        )
 
+            except Exception:
+                # Diagnostics must never mask the request's real outcome.
+                log.warning("perf turn close failed", exc_info=True)
     @ws_authenticated
     def open(self):
         # Audit log of accepted upgrades so a security incident can be
@@ -2796,6 +3091,8 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
                 )
             return
         if messageType == RequestDataType.ChatRequest:
+            _perf_ingress_wall = time.time()
+            _perf_ingress_mono = time.monotonic()
             data = msg['data']
             chatId = data['chatId']
             prompt = data['prompt']
@@ -2823,262 +3120,284 @@ class WebsocketCopilotHandler(WebSocketMixin, websocket.WebSocketHandler, Jupyte
             # like the Claude SDK client, so they share Claude's context
             # framing and per-turn history slicing below.
             is_agent_session_mode = is_claude_code_mode or ai_service_manager.is_acp_mode
-            chat_history = self.chat_history.get_history(chatId)
-            chat_history_initial_size = len(chat_history)
 
-            current_directory = data.get('currentDirectory')
-            if (is_agent_session_mode or chat_mode.id == 'agent') and current_directory is not None:
-                current_directory_file_msg = f"{NBI_CONTEXT_PREFIX} '{current_directory}'"
-                if filename != '':
-                    current_directory_file_msg += f" and current file is: '{filename}'"
-                if language:
-                    current_directory_file_msg += (
-                        f" and active programming language is: '{language}'"
-                    )
-                if kernel_name:
-                    current_directory_file_msg += (
-                        f" with active kernel name: '{kernel_name}'"
-                    )
-                if kernel_display_name:
-                    current_directory_file_msg += (
-                        f" ({kernel_display_name})"
-                    )
-                chat_history.append({"role": "user", "content": current_directory_file_msg})
+            perf_mode = "acp" if ai_service_manager.is_acp_mode else ("claude" if is_claude_code_mode else "copilot")
+            turn = perf.begin_turn(messageId, perf_mode, _perf_ingress_wall, _perf_ingress_mono)
+            # Covers all per-turn prep on this thread (attachment decoding,
+            # history slicing, rule/skill discovery), which is the actual
+            # filesystem cost; wrapping only the rule-context constructor
+            # measured a dataclass and always read ~0.
+            _ctx_prep_cm = _perf_span(turn, "context_prep")
+            _ctx_prep_span = _ctx_prep_cm.__enter__()
+            try:
+                chat_history = self.chat_history.get_history(chatId)
+                chat_history_initial_size = len(chat_history)
 
-            token_limit = _resolve_context_token_limit(ai_service_manager)
-            remaining_token_budget = int(0.8 * token_limit)
-
-            # Resolve once; reused for sandbox containment and for
-            # workspace-relative @-mention path computation below.
-            workspace_root = os.path.realpath(NotebookIntelligence.root_dir)
-
-            for context in additionalContext:
-                if remaining_token_budget <= 0:
-                    break
-
-                output_context = _coerce_output_context(context.get("outputContext"))
-                if output_context is not None:
-                    # Estimate cost without re-encoding the whole formatted
-                    # message: per-bundle token counts are precomputed by the
-                    # client (and capped by `coerce_payload`'s size limits);
-                    # `cellSource` we count once. ~50-token allowance for the
-                    # wrapper text is comfortably above the actual envelope.
-                    bundle_tokens = sum(
-                        b.get("sizeTokens", 0)
-                        for b in output_context.get("mimeBundles", [])
-                    )
-                    cell_source = output_context.get("cellSource", "")
-                    cell_source_tokens = _token_count(cell_source) if cell_source else 0
-                    estimated_tokens = bundle_tokens + cell_source_tokens + 50
-                    if estimated_tokens > remaining_token_budget:
-                        log.info(
-                            "Skipping output context: estimated %d tokens exceeds remaining budget %d",
-                            estimated_tokens,
-                            remaining_token_budget,
+                current_directory = data.get('currentDirectory')
+                if (is_agent_session_mode or chat_mode.id == 'agent') and current_directory is not None:
+                    current_directory_file_msg = f"{NBI_CONTEXT_PREFIX} '{current_directory}'"
+                    if filename != '':
+                        current_directory_file_msg += f" and current file is: '{filename}'"
+                    if language:
+                        current_directory_file_msg += (
+                            f" and active programming language is: '{language}'"
                         )
+                    if kernel_name:
+                        current_directory_file_msg += (
+                            f" with active kernel name: '{kernel_name}'"
+                        )
+                    if kernel_display_name:
+                        current_directory_file_msg += (
+                            f" ({kernel_display_name})"
+                        )
+                    chat_history.append({"role": "user", "content": current_directory_file_msg})
+
+                token_limit = _resolve_context_token_limit(ai_service_manager)
+                remaining_token_budget = int(0.8 * token_limit)
+
+                # Resolve once; reused for sandbox containment and for
+                # workspace-relative @-mention path computation below.
+                workspace_root = os.path.realpath(NotebookIntelligence.root_dir)
+
+                for context in additionalContext:
+                    if remaining_token_budget <= 0:
+                        break
+
+                    output_context = _coerce_output_context(context.get("outputContext"))
+                    if output_context is not None:
+                        # Estimate cost without re-encoding the whole formatted
+                        # message: per-bundle token counts are precomputed by the
+                        # client (and capped by `coerce_payload`'s size limits);
+                        # `cellSource` we count once. ~50-token allowance for the
+                        # wrapper text is comfortably above the actual envelope.
+                        bundle_tokens = sum(
+                            b.get("sizeTokens", 0)
+                            for b in output_context.get("mimeBundles", [])
+                        )
+                        cell_source = output_context.get("cellSource", "")
+                        cell_source_tokens = _token_count(cell_source) if cell_source else 0
+                        estimated_tokens = bundle_tokens + cell_source_tokens + 50
+                        if estimated_tokens > remaining_token_budget:
+                            log.info(
+                                "Skipping output context: estimated %d tokens exceeds remaining budget %d",
+                                estimated_tokens,
+                                remaining_token_budget,
+                            )
+                            continue
+                        supports_vision = _resolve_supports_vision(ai_service_manager)
+                        context_message = _format_output_context(output_context, supports_vision=supports_vision)
+                        remaining_token_budget -= estimated_tokens
+                        chat_history.append({"role": "user", "content": context_message})
                         continue
-                    supports_vision = _resolve_supports_vision(ai_service_manager)
-                    context_message = _format_output_context(output_context, supports_vision=supports_vision)
-                    remaining_token_budget -= estimated_tokens
-                    chat_history.append({"role": "user", "content": context_message})
-                    continue
 
-                is_upload = context.get("isUpload", False)
-                is_image = context.get("isImage", False)
-                file_path = context["filePath"]
-                if is_upload:
-                    resolved_upload_path = _resolve_upload_path(file_path)
-                    if resolved_upload_path is None:
-                        log.warning(
-                            "Rejecting out-of-upload-dir context path: %r",
-                            context["filePath"],
-                        )
-                        continue
-                    file_path = resolved_upload_path
-                else:
-                    # Workspace-relative paths arrive verbatim from the
-                    # frontend (file browser drag, @-mention picker, ...).
-                    # path.join silently passes through absolute paths and
-                    # doesn't normalize ``..`` traversal, so sandbox the
-                    # resolved path against root_dir before reading.
-                    joined = path.join(NotebookIntelligence.root_dir, file_path)
-                    resolved = os.path.realpath(joined)
-                    try:
-                        in_workspace = (
-                            os.path.commonpath([resolved, workspace_root])
-                            == workspace_root
-                        )
-                    except ValueError:
-                        in_workspace = False
-                    if not in_workspace:
-                        log.warning(
-                            "Rejecting out-of-workspace context path: %r",
-                            context["filePath"],
-                        )
-                        continue
-                    file_path = resolved
-                context_filename = path.basename(file_path)
-
-                if is_image:
-                    if is_agent_session_mode:
-                        # Agent CLIs take text prompts only; pass the file
-                        # path so the agent can read the image itself.
-                        chat_history.append({
-                            "role": "user",
-                            "content": f"The user pasted an image. It is saved at this path: '{file_path}'. Please read and analyze it."
-                        })
+                    is_upload = context.get("isUpload", False)
+                    is_image = context.get("isImage", False)
+                    file_path = context["filePath"]
+                    if is_upload:
+                        resolved_upload_path = _resolve_upload_path(file_path)
+                        if resolved_upload_path is None:
+                            log.warning(
+                                "Rejecting out-of-upload-dir context path: %r",
+                                context["filePath"],
+                            )
+                            continue
+                        file_path = resolved_upload_path
                     else:
-                        # Use OpenAI vision format for non-Claude-Code providers
-                        mime_type = context.get("mimeType", "image/png")
+                        # Workspace-relative paths arrive verbatim from the
+                        # frontend (file browser drag, @-mention picker, ...).
+                        # path.join silently passes through absolute paths and
+                        # doesn't normalize ``..`` traversal, so sandbox the
+                        # resolved path against root_dir before reading.
+                        joined = path.join(NotebookIntelligence.root_dir, file_path)
+                        resolved = os.path.realpath(joined)
                         try:
-                            with open(file_path, "rb") as img_f:
-                                b64_data = base64.b64encode(img_f.read()).decode("utf-8")
+                            in_workspace = (
+                                os.path.commonpath([resolved, workspace_root])
+                                == workspace_root
+                            )
+                        except ValueError:
+                            in_workspace = False
+                        if not in_workspace:
+                            log.warning(
+                                "Rejecting out-of-workspace context path: %r",
+                                context["filePath"],
+                            )
+                            continue
+                        file_path = resolved
+                    context_filename = path.basename(file_path)
+
+                    if is_image:
+                        if is_agent_session_mode:
+                            # Agent CLIs take text prompts only; pass the file
+                            # path so the agent can read the image itself.
                             chat_history.append({
                                 "role": "user",
-                                "content": [
-                                    {"type": "text", "text": f"The user pasted an image '{context_filename}':"},
-                                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}}
-                                ]
+                                "content": f"The user pasted an image. It is saved at this path: '{file_path}'. Please read and analyze it."
                             })
-                        except Exception as e:
-                            log.warning(f"Failed to read pasted image '{file_path}': {e}")
-                    continue
-
-                if is_agent_session_mode:
-                    # Hand the agent an @-mention rather than the file's
-                    # contents: an agent's own read tool handles partial
-                    # reads, notebook cell structure, and binary formats
-                    # natively, and avoids the 80% context-window truncation
-                    # the content-injection path would otherwise apply.
-                    if is_upload:
-                        mention_path = file_path
-                    else:
-                        try:
-                            mention_path = path.relpath(file_path, workspace_root)
-                        except ValueError:
-                            mention_path = file_path
-                    # Defense in depth: the path already passed the
-                    # workspace sandbox above, but a filename containing
-                    # newlines, NEL/LS/PS, bidi-override controls, or
-                    # other text-rendering hazards would split or visually
-                    # impersonate the prose envelope once it reaches the
-                    # agent. Reuse the same codepoint set safe_anchor_uri
-                    # uses for the same threat profile.
-                    if has_dangerous_text_codepoints(mention_path):
-                        log.warning(
-                            "Rejecting attachment with disallowed-codepoint "
-                            "filename (prompt-injection hardening): %r",
-                            context["filePath"],
-                        )
+                        else:
+                            # Use OpenAI vision format for non-Claude-Code providers
+                            mime_type = context.get("mimeType", "image/png")
+                            try:
+                                with open(file_path, "rb") as img_f:
+                                    b64_data = base64.b64encode(img_f.read()).decode("utf-8")
+                                chat_history.append({
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": f"The user pasted an image '{context_filename}':"},
+                                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}}
+                                    ]
+                                })
+                            except Exception as e:
+                                log.warning(f"Failed to read pasted image '{file_path}': {e}")
                         continue
-                    # Preserve the pointer prose the legacy path emits so
-                    # the agent still has a cursor for "this cell" /
-                    # "this code" deictic references; the @-mention alone
-                    # gives the agent the file but not the focus.
-                    # - currentCellContents fires when a notebook cell is
-                    #   active with no text selection (cellOutputAsText
-                    #   already bundles execute_result, stream, AND error
-                    #   traceback into the `output` string).
-                    # - startLine/endLine spans fire when the user has
-                    #   selected a range; pass the range as prose rather
-                    #   than the content so large selections don't burn
-                    #   the token budget.
-                    current_cell_contents = context.get("currentCellContents")
-                    pointer_parts = []
-                    if current_cell_contents is not None:
-                        cell_input = current_cell_contents.get("input", "")
-                        cell_output = current_cell_contents.get("output", "")
-                        pointer_parts.append(
-                            f"This is a Jupyter notebook and currently "
-                            f"selected cell input is: ```{cell_input}``` "
-                            f"and currently selected cell output is: "
-                            f"```{cell_output}```. If user asks a question "
-                            f"about 'this' cell then assume that user is "
-                            f"referring to currently selected cell."
+
+                    if is_agent_session_mode:
+                        # Hand the agent an @-mention rather than the file's
+                        # contents: an agent's own read tool handles partial
+                        # reads, notebook cell structure, and binary formats
+                        # natively, and avoids the 80% context-window truncation
+                        # the content-injection path would otherwise apply.
+                        if is_upload:
+                            mention_path = file_path
+                        else:
+                            try:
+                                mention_path = path.relpath(file_path, workspace_root)
+                            except ValueError:
+                                mention_path = file_path
+                        # Defense in depth: the path already passed the
+                        # workspace sandbox above, but a filename containing
+                        # newlines, NEL/LS/PS, bidi-override controls, or
+                        # other text-rendering hazards would split or visually
+                        # impersonate the prose envelope once it reaches the
+                        # agent. Reuse the same codepoint set safe_anchor_uri
+                        # uses for the same threat profile.
+                        if has_dangerous_text_codepoints(mention_path):
+                            log.warning(
+                                "Rejecting attachment with disallowed-codepoint "
+                                "filename (prompt-injection hardening): %r",
+                                context["filePath"],
+                            )
+                            continue
+                        # Preserve the pointer prose the legacy path emits so
+                        # the agent still has a cursor for "this cell" /
+                        # "this code" deictic references; the @-mention alone
+                        # gives the agent the file but not the focus.
+                        # - currentCellContents fires when a notebook cell is
+                        #   active with no text selection (cellOutputAsText
+                        #   already bundles execute_result, stream, AND error
+                        #   traceback into the `output` string).
+                        # - startLine/endLine spans fire when the user has
+                        #   selected a range; pass the range as prose rather
+                        #   than the content so large selections don't burn
+                        #   the token budget.
+                        current_cell_contents = context.get("currentCellContents")
+                        pointer_parts = []
+                        if current_cell_contents is not None:
+                            cell_input = current_cell_contents.get("input", "")
+                            cell_output = current_cell_contents.get("output", "")
+                            pointer_parts.append(
+                                f"This is a Jupyter notebook and currently "
+                                f"selected cell input is: ```{cell_input}``` "
+                                f"and currently selected cell output is: "
+                                f"```{cell_output}```. If user asks a question "
+                                f"about 'this' cell then assume that user is "
+                                f"referring to currently selected cell."
+                            )
+                        else:
+                            start_line = context.get("startLine") or 0
+                            end_line = context.get("endLine") or 0
+                            if end_line > start_line > 0:
+                                pointer_parts.append(
+                                    f"Their selection spans lines "
+                                    f"{start_line}-{end_line}."
+                                )
+                        context_message = " ".join(
+                            [
+                                f"The user attached @{mention_path}.",
+                                *pointer_parts,
+                                "Read it if relevant to the request.",
+                            ]
+                        )
+                        # NB: when the user's prompt begins with `/`, the
+                        # join logic in claude.py (`query_lines[-1].startswith('/')`)
+                        # drops every prior user-role message, including these
+                        # context lines. Pre-existing behavior, not introduced
+                        # by this branch; documented here so a future reader
+                        # doesn't chase the @-mention silently disappearing
+                        # when paired with a slash-command.
+                        remaining_token_budget -= _token_count(context_message)
+                        chat_history.append({"role": "user", "content": context_message})
+                        continue
+
+                    start_line = context["startLine"]
+                    end_line = context["endLine"]
+                    current_cell_contents = context["currentCellContents"]
+                    current_cell_input = current_cell_contents["input"] if current_cell_contents is not None else ""
+                    current_cell_output = current_cell_contents["output"] if current_cell_contents is not None else ""
+                    current_cell_context = f"This is a Jupyter notebook and currently selected cell input is: ```{current_cell_input}``` and currently selected cell output is: ```{current_cell_output}```. If user asks a question about 'this' cell then assume that user is referring to currently selected cell." if current_cell_contents is not None else ""
+                    context_content = context.get("content", "")
+
+                    if context_content:
+                        context_content = _truncate_context_content(
+                            context_content,
+                            remaining_token_budget
+                        )
+
+                    if context_content == "" and remaining_token_budget <= 0:
+                        break
+
+                    # For uploaded binary files (images, PDFs, etc.) where no
+                    # text content was extracted, tell Claude to read the file
+                    # from disk so it can handle it natively.
+                    if is_upload and context_content == "":
+                        context_message = (
+                            f"The user attached a file '{context_filename}' "
+                            f"at path '{file_path}'. Read this file to see its contents."
                         )
                     else:
-                        start_line = context.get("startLine") or 0
-                        end_line = context.get("endLine") or 0
-                        if end_line > start_line > 0:
-                            pointer_parts.append(
-                                f"Their selection spans lines "
-                                f"{start_line}-{end_line}."
-                            )
-                    context_message = " ".join(
-                        [
-                            f"The user attached @{mention_path}.",
-                            *pointer_parts,
-                            "Read it if relevant to the request.",
-                        ]
-                    )
-                    # NB: when the user's prompt begins with `/`, the
-                    # join logic in claude.py (`query_lines[-1].startswith('/')`)
-                    # drops every prior user-role message, including these
-                    # context lines. Pre-existing behavior, not introduced
-                    # by this branch; documented here so a future reader
-                    # doesn't chase the @-mention silently disappearing
-                    # when paired with a slash-command.
+                        context_message = _build_additional_context_message(
+                            file_path=file_path,
+                            context_filename=context_filename,
+                            start_line=start_line,
+                            end_line=end_line,
+                            context_content=context_content,
+                            current_cell_context=current_cell_context
+                        )
                     remaining_token_budget -= _token_count(context_message)
                     chat_history.append({"role": "user", "content": context_message})
-                    continue
 
-                start_line = context["startLine"]
-                end_line = context["endLine"]
-                current_cell_contents = context["currentCellContents"]
-                current_cell_input = current_cell_contents["input"] if current_cell_contents is not None else ""
-                current_cell_output = current_cell_contents["output"] if current_cell_contents is not None else ""
-                current_cell_context = f"This is a Jupyter notebook and currently selected cell input is: ```{current_cell_input}``` and currently selected cell output is: ```{current_cell_output}```. If user asks a question about 'this' cell then assume that user is referring to currently selected cell." if current_cell_contents is not None else ""
-                context_content = context.get("content", "")
+                chat_history.append({"role": "user", "content": prompt})
 
-                if context_content:
-                    context_content = _truncate_context_content(
-                        context_content,
-                        remaining_token_budget
-                    )
+                response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
+                cancel_token = CancelTokenImpl()
+                self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
 
-                if context_content == "" and remaining_token_budget <= 0:
-                    break
+                # Create rule context for rule evaluation
+                rule_context = self._context_factory.create(
+                    filename=filename,
+                    language=language,
+                    kernel_name=kernel_name,
+                    chat_mode_id=chat_mode.id,
+                    root_dir=NotebookIntelligence.root_dir
+                )
+                _ctx_prep_span.set_attr("file_count", len(additionalContext))
+                _ctx_prep_cm.__exit__(None, None, None)
 
-                # For uploaded binary files (images, PDFs, etc.) where no
-                # text content was extracted, tell Claude to read the file
-                # from disk so it can handle it natively.
-                if is_upload and context_content == "":
-                    context_message = (
-                        f"The user attached a file '{context_filename}' "
-                        f"at path '{file_path}'. Read this file to see its contents."
-                    )
-                else:
-                    context_message = _build_additional_context_message(
-                        file_path=file_path,
-                        context_filename=context_filename,
-                        start_line=start_line,
-                        end_line=end_line,
-                        context_content=context_content,
-                        current_cell_context=current_cell_context
-                    )
-                remaining_token_budget -= _token_count(context_message)
-                chat_history.append({"role": "user", "content": context_message})
-
-            chat_history.append({"role": "user", "content": prompt})
-
-            response_emitter = WebsocketCopilotResponseEmitter(chatId, messageId, self, self.chat_history)
-            cancel_token = CancelTokenImpl()
-            self._messageCallbackHandlers[messageId] = MessageCallbackHandlers(response_emitter, cancel_token)
-            
-            # Create rule context for rule evaluation
-            rule_context = self._context_factory.create(
-                filename=filename,
-                language=language,
-                kernel_name=kernel_name,
-                chat_mode_id=chat_mode.id,
-                root_dir=NotebookIntelligence.root_dir
-            )
-
-            # last prompt is added later
-            request_chat_history = chat_history[chat_history_initial_size:-1] if is_agent_session_mode else chat_history[:-1]
-            coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context, permission_mode=permission_mode), response_emitter)
-            thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
-            thread.start()
+                # last prompt is added later
+                request_chat_history = chat_history[chat_history_initial_size:-1] if is_agent_session_mode else chat_history[:-1]
+                coro = ai_service_manager.handle_chat_request(ChatRequest(chat_mode=chat_mode, tool_selection=tool_selection, prompt=prompt, language=language, kernel_name=kernel_name, chat_history=request_chat_history, cancel_token=cancel_token, rule_context=rule_context, permission_mode=permission_mode), response_emitter)
+                thread = threading.Thread(target=self._run_request_thread, args=(coro, messageId, response_emitter))
+                thread.start()
+            except BaseException:
+                # Anything failing between turn-open and worker-thread start
+                # would otherwise leak the turn in the registry forever (and
+                # trip the single-open-turn tool guard for the process
+                # lifetime), so close it as errored before re-raising.
+                with contextlib.suppress(Exception):
+                    _ctx_prep_cm.__exit__(None, None, None)
+                if turn is not None:
+                    turn.close("error")
+                raise
         elif messageType == RequestDataType.GenerateCode:
             data = msg['data']
             chatId = data['chatId']
@@ -3463,6 +3782,30 @@ class NotebookIntelligence(ExtensionApp):
         config=True,
     )
 
+    perf_diagnostics_policy = TraitletEnum(
+        list(VALID_POLICIES),
+        default_value=POLICY_USER_CHOICE,
+        help="""
+        Org-wide policy for the opt-in performance diagnostics recorder.
+        Defaults to user-choice since the recorder is off by default and
+        redacts sensitive attrs even when on. force-on enables it (and
+        locks attr_detail to "redacted"); force-off disables it regardless
+        of the user's own setting. Overridden by the
+        NBI_PERF_DIAGNOSTICS_POLICY env var.
+        """,
+        config=True,
+    )
+
+    perf_probe_network_allowed = Bool(
+        default_value=True,
+        help="""
+        Whether the perf diagnostics environment probe is allowed to run its
+        network-reachability checks. Overridden by the NBI_PERF_PROBE_NETWORK
+        env var (on|off).
+        """,
+        config=True,
+    )
+
     claude_continue_conversation_policy = TraitletEnum(
         list(VALID_POLICIES),
         default_value=POLICY_USER_CHOICE,
@@ -3800,6 +4143,13 @@ class NotebookIntelligence(ExtensionApp):
             "string_overrides": string_overrides,
             "mcp_stdio_command_allowlist": mcp_command_allowlist,
         })
+        # Apply env-var perf policy/locks immediately at boot, mirroring the
+        # comment above about acp_mode: don't wait for the first config POST
+        # to see a force-on/force-off admin policy take effect.
+        perf.configure(
+            ai_service_manager.nbi_config.perf_diagnostics,
+            feature_policies.get("perf_diagnostics"),
+        )
 
     def initialize_templates(self):
         pass
@@ -3816,6 +4166,8 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_capabilities = url_path_join(base_url, "notebook-intelligence", "capabilities")
         route_pattern_config = url_path_join(base_url, "notebook-intelligence", "config")
         route_pattern_ui_tools = url_path_join(base_url, "notebook-intelligence", "ui-tools")
+        route_pattern_perf_report = url_path_join(base_url, "notebook-intelligence", "perf", "report")
+        route_pattern_perf_probe = url_path_join(base_url, "notebook-intelligence", "perf", "probe")
         route_pattern_update_provider_models = url_path_join(base_url, "notebook-intelligence", "update-provider-models")
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
         route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
@@ -3939,6 +4291,10 @@ class NotebookIntelligence(ExtensionApp):
         PluginsBaseHandler.allow_github_plugin_import = _resolve_bool_with_env(
             "NBI_ALLOW_GITHUB_PLUGIN_IMPORT", self.allow_github_plugin_import
         )
+        GetCapabilitiesHandler.perf_probe_network_allowed = _resolve_bool_with_env(
+            "NBI_PERF_PROBE_NETWORK", self.perf_probe_network_allowed
+        )
+        PerfProbeHandler.perf_probe_network_allowed = GetCapabilitiesHandler.perf_probe_network_allowed
         # Resolved on-wire cap for skill tarball fetches. The constant
         # lives in skill_github_import.py because the fetch helper reads
         # it directly; reassigning the module attribute here lets admins
@@ -3965,6 +4321,8 @@ class NotebookIntelligence(ExtensionApp):
             # UIToolsHandler gates every request against the live setting, so changing
             # transport after boot cannot leave route registration out of sync.
             (route_pattern_ui_tools, UIToolsHandler),
+            (route_pattern_perf_report, PerfReportHandler),
+            (route_pattern_perf_probe, PerfProbeHandler),
             (route_pattern_update_provider_models, UpdateProviderModelsHandler),
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
