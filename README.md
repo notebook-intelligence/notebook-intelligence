@@ -29,6 +29,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 - [Claude MCP Servers](#claude-mcp-servers)
 - [Claude Plugins](#claude-plugins)
 - [Chat feedback](#chat-feedback)
+- [Configuration readiness](#configuration-readiness)
 - [Performance diagnostics](#performance-diagnostics)
 - [Documentation](#documentation)
 - [Further reading](#further-reading)
@@ -422,6 +423,14 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 ```
 
 <img src="media/chat-feedback.png" alt="Chat feedback" width=500 />
+
+## Configuration readiness
+
+NBI Settings opens on a **Status** card that answers one question: is this deployment configured to work, and if not, which specific piece is missing? Each check reports `ok`, `warn`, or `blocked`, and anything that is not `ok` carries the next action rather than just the failure ("the claude CLI was not found" plus "install it, or set `NBI_CLAUDE_CLI_PATH` and restart").
+
+It runs on open and costs nothing: it resolves your provider and model, checks the model list is reachable and that your selected model is one the endpoint actually serves, and for the agent modes checks that the CLI answers `--version` and that credentials are present. A missing key is a warning rather than an error, because the Claude CLI and ACP agents can hold their own subscription logins that NBI cannot see.
+
+**Test the endpoint** sends one short request to your configured model, after asking first. It is the only way to catch two failures nothing cheaper can see: a gateway that returns 200s but buffers instead of streaming, and a proxy that strips the `tools` field so agent mode silently never calls a tool. No model output is kept, so the result is safe to paste into a support ticket.
 
 ## Performance diagnostics
 

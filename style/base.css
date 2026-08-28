@@ -2509,6 +2509,140 @@ svg.access-token-warning {
   color: var(--jp-error-color0, #b71c1c);
 }
 
+.nbi-readiness {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: var(--jp-ui-font-size1);
+}
+
+.nbi-readiness-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.nbi-readiness-verdict {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+  background-color: var(--jp-layout-color3);
+  color: var(--jp-ui-font-color2);
+}
+
+.nbi-readiness-verdict-ready {
+  background-color: var(--jp-success-color3, #c8e6c9);
+  color: var(--jp-success-color0, #1b5e20);
+}
+
+.nbi-readiness-verdict-degraded {
+  background-color: var(--jp-warn-color3, #ffe0b2);
+  color: var(--jp-warn-color0, #e65100);
+}
+
+.nbi-readiness-verdict-not_ready {
+  background-color: var(--jp-error-color3, #ffcdd2);
+  color: var(--jp-error-color0, #b71c1c);
+}
+
+.nbi-readiness-headline {
+  flex: 1 1 240px;
+  color: var(--jp-ui-font-color1);
+  line-height: 1.5;
+}
+
+.nbi-readiness-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.nbi-readiness-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: var(--jp-layout-color2);
+  border-left: 3px solid var(--jp-warn-color1, #f57c00);
+  line-height: 1.5;
+}
+
+.nbi-readiness-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nbi-readiness-group-title {
+  font-weight: 600;
+  color: var(--jp-ui-font-color1);
+  margin-top: 4px;
+}
+
+.nbi-readiness-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--jp-border-color2);
+}
+
+.nbi-readiness-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.nbi-readiness-badge {
+  display: inline-block;
+  min-width: 62px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: var(--jp-ui-font-size0);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background-color: var(--jp-layout-color3);
+  color: var(--jp-ui-font-color2);
+}
+
+.nbi-readiness-badge-ok {
+  background-color: var(--jp-success-color3, #c8e6c9);
+  color: var(--jp-success-color0, #1b5e20);
+}
+
+.nbi-readiness-badge-warn {
+  background-color: var(--jp-warn-color3, #ffe0b2);
+  color: var(--jp-warn-color0, #e65100);
+}
+
+.nbi-readiness-badge-blocked {
+  background-color: var(--jp-error-color3, #ffcdd2);
+  color: var(--jp-error-color0, #b71c1c);
+}
+
+.nbi-readiness-title {
+  color: var(--jp-ui-font-color1);
+  min-width: 150px;
+}
+
+.nbi-readiness-detail {
+  color: var(--jp-ui-font-color2);
+}
+
+.nbi-readiness-remedy {
+  font-size: var(--jp-ui-font-size0);
+  color: var(--jp-ui-font-color2);
+  line-height: 1.5;
+  max-width: 90ch;
+  padding-left: 6px;
+  border-left: 2px solid var(--jp-border-color1);
+}
+
 .nbi-skills-sync-message,
 .nbi-skills-info-banner,
 .nbi-info-banner {

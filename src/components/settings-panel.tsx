@@ -16,6 +16,7 @@ import {
   NBIAPI
 } from '../api';
 import { CheckBoxItem } from './checkbox';
+import { ReadinessCard } from './readiness-card';
 import { PillItem } from './pill';
 import {
   mcpServerSettingsToEnabledState,
@@ -521,6 +522,12 @@ function SettingsPanelComponentGeneral(props: any) {
   return (
     <div className="config-dialog">
       <div className="config-dialog-body">
+        <div className="model-config-section">
+          <div className="model-config-section-header">Status</div>
+          <div className="model-config-section-body">
+            <ReadinessCard />
+          </div>
+        </div>
         {!isInClaudeCodeMode && (
           <div className="model-config-section">
             <div className="model-config-section-header">Default chat mode</div>
