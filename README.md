@@ -447,6 +447,8 @@ It runs on open and costs nothing: it resolves your provider and model, checks t
 
 **Test the endpoint** sends one short request to your configured model, after asking first. It is the only way to catch two failures nothing cheaper can see: a gateway that returns 200s but buffers instead of streaming, and a proxy that strips the `tools` field so agent mode silently never calls a tool. No model output is kept, so the result is safe to paste into a support ticket.
 
+That button is the only readiness check that bills anything, so it has an off switch: `NBI_READINESS_LIVE_CHECK=off` (traitlet `readiness_live_check_allowed`, default on) refuses it while leaving every other check available. One live test runs at a time per server; a second concurrent request gets a 429 rather than spending tokens.
+
 ## Performance diagnostics
 
 An opt-in mode for answering "where did this turn's time go," aimed at deployments where NBI feels slower than it should: internal LLM gateways, network home directories, TLS-intercepting proxies. Off by default, and when off the cost is a single boolean check per instrumentation site.
