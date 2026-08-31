@@ -1,6 +1,6 @@
 {
     "name": "@plmbr/notebook-intelligence",
-    "version": "5.4.0-a2",
+    "version": "5.4.0-a3",
     "description": "AI coding assistant for JupyterLab",
     "keywords": [
         "AI",
