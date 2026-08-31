@@ -6,7 +6,12 @@ import json
 from unittest.mock import Mock, patch, MagicMock
 from tornado.httputil import HTTPServerRequest
 from tornado.web import Application
-from notebook_intelligence.extension import WebsocketCopilotHandler
+from notebook_intelligence.extension import (
+    NotebookIntelligence,
+    WebsocketCopilotHandler,
+    _token_count,
+    _truncate_context_content,
+)
 from notebook_intelligence.api import ChatResponse
 from notebook_intelligence.claude import ClaudeCodeChatParticipant
 from notebook_intelligence.context_factory import RuleContextFactory
@@ -16,6 +21,33 @@ from notebook_intelligence.ruleset import RuleContext
 
 
 class TestWebsocketHandlerIntegration:
+    def test_initialize_settings_warms_tokenizer(self):
+        with patch(
+            "notebook_intelligence.extension.warm_tokenizer_encoding"
+        ) as warm_tokenizer:
+            NotebookIntelligence.initialize_settings(Mock())
+
+        warm_tokenizer.assert_called_once_with()
+
+    def test_context_budget_helpers_use_strict_shared_token_policy(self):
+        encoding = Mock()
+        encoding.encode.side_effect = lambda text, **_kwargs: list(
+            text.encode("utf-8")
+        )
+        encoding.decode.side_effect = lambda tokens: bytes(tokens).decode(
+            "utf-8", errors="ignore"
+        )
+        with patch(
+            "notebook_intelligence.chat_history_budget._get_encoding",
+            return_value=encoding,
+        ):
+            assert _token_count("shared token counter") > 0
+            assert _truncate_context_content("large context " * 100, 1) == ""
+
+            truncated = _truncate_context_content("large context " * 100, 16)
+            assert truncated.endswith("\n...[truncated]")
+            assert _token_count(truncated) <= 16
+
     def _create_mock_application(self):
         """Create a properly mocked Tornado Application.
 
@@ -180,6 +212,8 @@ class TestWebsocketHandlerIntegration:
         chat_request = mock_ai_manager.handle_chat_request.call_args[0][0]
         assert chat_request.language == 'python'
         assert chat_request.kernel_name == 'python3'
+        assert chat_request.prompt == "Generate code for: Generate some code"
+        assert chat_request.required_context_message_count == 0
 
         options = mock_ai_manager.handle_chat_request.call_args.kwargs['options']
         assert options['system_prompt'] == (
@@ -222,6 +256,15 @@ class TestWebsocketHandlerIntegration:
         sdk_client.messages.stream.return_value = Stream()
 
         async def dispatch(request, response, options=None):
+            assert request.required_context_message_count == 1
+            assert request.chat_history[-1]["content"].startswith(
+                "You are asked to modify the existing code."
+            )
+            # Mirror AIServiceManager, which appends the parsed final prompt
+            # before dispatching to the selected participant.
+            request.chat_history.append(
+                {"role": "user", "content": request.prompt}
+            )
             request.host = manager
             await participant.handle_chat_request(
                 request,

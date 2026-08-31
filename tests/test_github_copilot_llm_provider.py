@@ -3,6 +3,9 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from notebook_intelligence import github_copilot as gh_copilot
+from notebook_intelligence.base_chat_participant import (
+    _chat_history_context_window,
+)
 from notebook_intelligence.llm_providers.github_copilot_llm_provider import GitHubCopilotLLMProvider
 
 
@@ -27,6 +30,10 @@ def test_chat_models_include_recent_github_copilot_models():
     assert models["gemini-3.1-pro"].name == "Gemini 3.1 Pro"
 
     assert all(model.supports_tools for model in models.values())
+    assert all(
+        model.context_window_is_configured is False
+        for model in models.values()
+    )
 
 
 def test_chat_models_use_dynamic_cache_when_populated():
@@ -70,7 +77,11 @@ def test_fetch_copilot_models_floors_zero_context_window_to_default():
         "id": "no-limits-model",
         "name": "No Limits",
         "context_window": 4096,
+        "context_window_is_configured": False,
     }]
+    model = GitHubCopilotLLMProvider().chat_models[0]
+    assert model.context_window_is_configured is False
+    assert _chat_history_context_window(model) == 0
 
 
 def test_fetch_copilot_models_preserves_cache_on_empty_response():
@@ -156,6 +167,8 @@ def test_fetch_copilot_models_filters_to_picker_enabled_chat_models():
     assert [m["id"] for m in result] == ["gpt-foo", "claude-bar"]
     assert result[0]["context_window"] == 64000
     assert result[1]["context_window"] == 128000
+    assert result[0]["context_window_is_configured"] is True
+    assert result[1]["context_window_is_configured"] is True
     # Falls back to id when name is missing.
     assert result[1]["name"] == "claude-bar"
 

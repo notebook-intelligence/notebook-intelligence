@@ -52,7 +52,8 @@ github_auth = {
 
 # Populated from https://api.githubcopilot.com/models once the user has a
 # valid Copilot bearer token. Each entry is a normalized dict:
-# {"id": str, "name": str, "context_window": int}. Empty until the first
+# {"id": str, "name": str, "context_window": int,
+#  "context_window_is_configured": bool}. Empty until the first
 # successful fetch; the LLM provider falls back to its hardcoded list in
 # that case so the settings UI is never blank. Mutated in place by
 # `fetch_copilot_models` so module-level `from ... import` references
@@ -489,7 +490,8 @@ def fetch_copilot_models() -> list[dict]:
 
     Filters to chat models with `model_picker_enabled = true` (the same
     surface GitHub's official clients expose in their model picker), and
-    normalizes each entry to {"id": str, "name": str, "context_window": int}.
+    normalizes each entry to a model id/name, context window, and whether the
+    API supplied that window rather than the conservative local fallback.
     Stores the result in ``copilot_models_cache`` (mutated in place) so the
     LLM provider's `chat_models` property reflects the live list on the
     next access. Returns the new list; returns the existing cache unchanged
@@ -554,17 +556,19 @@ def fetch_copilot_models() -> list[dict]:
         seen_ids.add(model_id)
         name = entry.get("name") or model_id
         limits = caps.get("limits", {}) or {}
-        context_window = (
+        raw_context_window = (
             limits.get("max_context_window_tokens")
             or limits.get("max_prompt_tokens")
-            or _COPILOT_DEFAULT_CONTEXT_WINDOW
         )
+        context_window_is_configured = raw_context_window is not None
         try:
-            context_window = int(context_window)
+            context_window = int(raw_context_window)
         except (TypeError, ValueError):
             context_window = _COPILOT_DEFAULT_CONTEXT_WINDOW
+            context_window_is_configured = False
         if context_window <= 0:
             context_window = _COPILOT_DEFAULT_CONTEXT_WINDOW
+            context_window_is_configured = False
         # Prefer `/chat/completions` whenever the model advertises it; only
         # route through `/responses` when that's the model's sole supported
         # path. Mirrors codecompanion.nvim's Copilot adapter: dual-listing
@@ -578,6 +582,7 @@ def fetch_copilot_models() -> list[dict]:
             "id": model_id,
             "name": str(name),
             "context_window": context_window,
+            "context_window_is_configured": context_window_is_configured,
         })
 
     # Preserve the existing cache when the API returns an empty (but

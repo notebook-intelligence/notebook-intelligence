@@ -73,6 +73,34 @@ def test_unknown_participant_fallback_preserves_parsed_command():
     assert request.command == "explain"
 
 
+def test_mcp_prompt_messages_are_marked_as_current_request_context():
+    manager, default_participant = _make_manager()
+    manager.get_mcp_server_prompt_value = Mock(
+        return_value=[
+            {"role": "assistant", "content": "Return strict JSON."},
+            {"role": "user", "content": "Use the compact schema."},
+        ]
+    )
+    request = ChatRequest(
+        prompt="/mcp:docs:review: inspect this",
+        chat_history=[
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+        ],
+    )
+    response = _RecordingResponse()
+
+    asyncio.run(manager.handle_chat_request(request, response))
+
+    default_participant.handle_chat_request.assert_awaited_once()
+    assert request.mcp_prompt_message_count == 2
+    assert request.chat_history[-3:] == [
+        {"role": "assistant", "content": "Return strict JSON."},
+        {"role": "user", "content": "Use the compact schema."},
+        {"role": "user", "content": "inspect this"},
+    ]
+
+
 def test_claude_mode_resolves_active_default_outside_participant_map():
     manager, _default_participant = _make_manager()
     manager._nbi_config.claude_settings = {"enabled": True}
