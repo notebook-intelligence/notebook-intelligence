@@ -7,6 +7,24 @@ from notebook_intelligence.util import import_litellm
 
 DEFAULT_CONTEXT_WINDOW = 4096
 
+
+def strip_reasoning_fields(messages: list[dict]) -> list[dict]:
+    """Return a copy of messages with output-only reasoning fields removed.
+
+    ``reasoning_content`` (and ``reasoning``) are OUTPUT-only fields produced by
+    the model. NBI stores them in chat history and replays the full history on
+    the next turn. Strict-validating endpoints (e.g. Databricks model serving,
+    which uses pydantic ``extra="forbid"``) reject requests that contain these
+    keys. We strip them before sending without mutating the caller's list or
+    NBI's stored history.
+    """
+    return [
+        {k: v for k, v in m.items() if k not in ("reasoning_content", "reasoning")}
+        if isinstance(m, dict) else m
+        for m in messages
+    ]
+
+
 class LiteLLMCompatibleChatModel(ChatModel):
     def __init__(self, provider: "LiteLLMCompatibleLLMProvider"):
         super().__init__(provider)
@@ -45,7 +63,7 @@ class LiteLLMCompatibleChatModel(ChatModel):
         api_key = api_key_prop.value if api_key_prop is not None else None
         litellm_resp = litellm.completion(
             model=model_id,
-            messages=messages.copy(),
+            messages=strip_reasoning_fields(messages),
             tools=tools,
             tool_choice=options.get("tool_choice", None),
             api_base=base_url,
