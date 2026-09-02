@@ -1,0 +1,32 @@
+{
+  "name": "notebook-intelligence",
+  "version": "0.1.0",
+  "description": "Install, configure, and troubleshoot Notebook Intelligence for JupyterLab with Codex.",
+  "author": {
+    "name": "Mehmet Bektas",
+    "email": "mbektasgh@outlook.com",
+    "url": "https://github.com/plmbr"
+  },
+  "homepage": "https://github.com/plmbr/notebook-intelligence",
+  "repository": "https://github.com/plmbr/notebook-intelligence.git",
+  "license": "GPL-3.0",
+  "keywords": ["jupyterlab", "notebooks", "ai", "coding-assistant"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Notebook Intelligence",
+    "shortDescription": "Set up and troubleshoot the JupyterLab AI assistant.",
+    "longDescription": "Helps Codex inspect Python and JupyterLab environments, install or upgrade Notebook Intelligence, configure supported model providers safely, and diagnose extension startup or connectivity problems.",
+    "developerName": "plmbr",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Environment inspection",
+      "Installation guidance",
+      "Configuration guidance",
+      "Diagnostics"
+    ],
+    "websiteURL": "https://github.com/plmbr/notebook-intelligence",
+    "defaultPrompt": [
+      "Set up Notebook Intelligence in my current JupyterLab environment."
+    ]
+  }
+}

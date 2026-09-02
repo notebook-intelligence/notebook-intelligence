@@ -8,6 +8,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Codex plugin](#codex-plugin)
 - [Concepts](#concepts)
 - [Feature highlights](#feature-highlights)
   - [Claude mode](#claude-mode)
@@ -59,6 +60,21 @@ After restart:
 4. Type a message in the chat panel and press Enter.
 
 If the panel stays empty or login does nothing, see [Troubleshooting](docs/troubleshooting.md).
+
+## Codex plugin
+
+This repository is also a public [Codex plugin marketplace](https://developers.openai.com/codex/plugins/).
+Add the marketplace and install its Notebook Intelligence operational skill with:
+
+```bash
+codex plugin marketplace add plmbr/notebook-intelligence --ref main
+codex plugin add notebook-intelligence@notebook-intelligence
+```
+
+Start a new Codex task after installation, then ask Codex to install, configure,
+or troubleshoot Notebook Intelligence. The plugin helps Codex operate NBI; the
+JupyterLab extension itself is still installed separately from PyPI with
+`pip install notebook-intelligence`.
 
 ## Concepts
 

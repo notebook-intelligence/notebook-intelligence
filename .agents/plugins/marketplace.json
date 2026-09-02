@@ -1,0 +1,20 @@
+{
+  "name": "notebook-intelligence",
+  "interface": {
+    "displayName": "Notebook Intelligence"
+  },
+  "plugins": [
+    {
+      "name": "notebook-intelligence",
+      "source": {
+        "source": "local",
+        "path": "./plugins/notebook-intelligence"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
