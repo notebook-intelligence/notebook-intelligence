@@ -14,6 +14,7 @@ from queue import Queue
 import threading
 import time
 from typing import Any, Optional, TYPE_CHECKING
+import unicodedata
 import uuid
 import re
 from anyio.abc import Process
@@ -2269,6 +2270,86 @@ async def invoke_ui_tool(name: str, arguments: dict, timeout: float = CLAUDE_AGE
         return tool_text_response(f"Jupyter UI command failed: {exc}", is_error=True)
 
 
+_BIDI_CONTROL_CODEPOINTS = frozenset(
+    {
+        0x061C,  # ARABIC LETTER MARK
+        0x200E,  # LEFT-TO-RIGHT MARK
+        0x200F,  # RIGHT-TO-LEFT MARK
+        *range(0x202A, 0x202F),  # embeddings, overrides, and pop formatting
+        *range(0x2066, 0x206A),  # directional isolates and pop isolate
+    }
+)
+
+
+def _untrusted_text(text: Any) -> str:
+    return "" if text is None else str(text)
+
+
+def _contains_bidi_control(text: Any) -> bool:
+    return any(
+        ord(character) in _BIDI_CONTROL_CODEPOINTS
+        for character in _untrusted_text(text)
+    )
+
+
+def _escape_bidi_controls(text: Any) -> str:
+    """Make every invisible bidi control explicit in rendered diagnostics."""
+    return "".join(
+        f"\\u{{{ord(character):04X}}}"
+        if ord(character) in _BIDI_CONTROL_CODEPOINTS
+        else character
+        for character in _untrusted_text(text)
+    )
+
+
+def _describe_bidi_controls(text: Any) -> str:
+    """Return stable, de-duplicated ASCII labels for detected controls."""
+    codepoints = dict.fromkeys(
+        ord(character)
+        for character in _untrusted_text(text)
+        if ord(character) in _BIDI_CONTROL_CODEPOINTS
+    )
+    return ", ".join(
+        f"U+{codepoint:04X} {unicodedata.name(chr(codepoint))}"
+        for codepoint in codepoints
+    )
+
+
+def _inline_untrusted_text(text: Any) -> str:
+    """Collapse untrusted text to a single line for inline markdown.
+
+    A newline is what lets injected text start a new markdown block, so
+    folding the value onto one line keeps it inside the inline context the
+    caller placed it in.
+    """
+    return " ".join(_escape_bidi_controls(text).split())
+
+
+def _untrusted_code_block(text: Any, info: str = "") -> str:
+    """Render untrusted text as a fenced block it cannot break out of.
+
+    The Bash approval prompt shows the model-supplied command and the
+    confirmation right below it asks the user to approve "the command
+    above". A command carrying its own closing fence would otherwise end
+    the block early, so the text after it renders as ordinary markdown
+    next to the Approve button -- the model can then draw a second,
+    innocuous-looking command block and the user approves that while the
+    whole string, first line included, is what actually runs.
+
+    CommonMark lets a fenced block contain any backtick run shorter than
+    its own fence, so open with one longer than the longest run in the
+    content. This is the same reason cell_output.py neutralizes its
+    envelope close tag: the delimiter has to stay unforgeable by the
+    content it delimits.
+    """
+    body = _escape_bidi_controls(text)
+    if not re.fullmatch(r"[A-Za-z0-9_-]*", info):
+        raise ValueError("code-block info must be a trusted ASCII identifier")
+    longest_run = max((len(run) for run in re.findall(r"`+", body)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{fence}{info}\n{body}\n{fence}"
+
+
 async def custom_permission_handler(
     tool_name: str,
     input_data: dict,
@@ -2369,7 +2450,26 @@ async def _custom_permission_handler(
                 "answers": answers
             })
     elif tool_name == "Bash":
-        response.stream(MarkdownData(f"&#x2713; **{input_data.get('description', '')}**\n```shell\n{input_data.get('command', '')}\n```"))
+        command = _untrusted_text(input_data.get('command', ''))
+        description = _untrusted_text(input_data.get('description', ''))
+        if _contains_bidi_control(command):
+            controls = _describe_bidi_controls(command)
+            response.stream(MarkdownData(
+                "&#x26A0; **Bash command blocked: hidden Unicode "
+                f"bidirectional controls detected ({controls}).**\n"
+                + _untrusted_code_block(command, "shell")
+            ))
+            return PermissionResultDeny(
+                message=(
+                    "Bash command blocked because it contains hidden Unicode "
+                    "bidirectional controls"
+                ),
+                interrupt=True,
+            )
+        response.stream(MarkdownData(
+            f"&#x2713; **{_inline_untrusted_text(description)}**\n"
+            + _untrusted_code_block(command, "shell")
+        ))
         pending_user_input = response.stream_user_input_request(
             callback_id,
             ConfirmationData(
