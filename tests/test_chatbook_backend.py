@@ -6,10 +6,20 @@ from types import SimpleNamespace
 import pytest
 from jupyter_client.session import Session
 
+from jupyter_client.kernelspec import KernelSpecManager
+from traitlets.config import Config
+
+from notebook_intelligence.chatbook_kernel import backend as backend_module
 from notebook_intelligence.chatbook_kernel.backend import (
+    KERNEL_SPEC_MANAGER_ENV,
     ChatbookBackend,
+    describe_kernel_spec_manager,
+    is_chatbook_spec,
+    kernel_spec_manager,
     list_backend_kernels,
+    load_kernel_specs,
     resolve_backend_kernel,
+    set_kernel_spec_manager,
 )
 from notebook_intelligence.chatbook_kernel.codegen import (
     cell_codegen_instructions,
@@ -18,6 +28,7 @@ from notebook_intelligence.chatbook_kernel.codegen import (
 from notebook_intelligence.chatbook_kernel.danger import scan_generated_code
 from notebook_intelligence.chatbook_kernel.nbi_client import NBIClientError
 from notebook_intelligence.chatbook_kernel.kernel import ChatbookKernel, is_code_execute
+from tests.conftest import RenamingKernelSpecManager
 
 
 SPECS = {
@@ -50,6 +61,135 @@ def test_resolve_backend_kernel_skips_chatbook_and_defaults_to_python3():
 def test_resolve_backend_kernel_missing_name_raises():
     with pytest.raises(RuntimeError, match='does-not-exist'):
         resolve_backend_kernel('does-not-exist', SPECS)
+
+
+# How nb_conda_kernels lists the same kernels: Chatbook keeps its language
+# under a new name, and there is no `python3`.
+CONDA_SPECS = {
+    'conda-base-chatbook': {
+        'spec': {'language': 'chatbook', 'display_name': 'Chatbook [conda env:base] *'}
+    },
+    'conda-base-py': {
+        'spec': {'language': 'python', 'display_name': 'Python [conda env:base] *'}
+    },
+    'conda-base-ir': {'spec': {'language': 'R', 'display_name': 'R [conda env:base] *'}},
+}
+
+
+@pytest.fixture
+def fresh_kernel_spec_manager(monkeypatch):
+    """Forget the process-wide kernelspec manager and any server description."""
+    monkeypatch.setattr(backend_module, '_kernel_spec_manager', None)
+    monkeypatch.delenv(KERNEL_SPEC_MANAGER_ENV, raising=False)
+
+
+def test_is_chatbook_spec_goes_by_language_not_name():
+    assert is_chatbook_spec(CONDA_SPECS['conda-base-chatbook'])
+    assert is_chatbook_spec(SimpleNamespace(language='Chatbook'))
+    assert not is_chatbook_spec(CONDA_SPECS['conda-base-py'])
+    assert not is_chatbook_spec(None)
+
+
+def test_list_backend_kernels_excludes_a_renamed_chatbook():
+    names = [item['name'] for item in list_backend_kernels(CONDA_SPECS)]
+    assert names == ['conda-base-ir', 'conda-base-py']
+
+
+def test_resolve_backend_kernel_accepts_renamed_kernels():
+    assert resolve_backend_kernel('conda-base-py', CONDA_SPECS)['name'] == 'conda-base-py'
+    # With no `python3`, the default is the first Python kernel.
+    assert resolve_backend_kernel('', CONDA_SPECS)['name'] == 'conda-base-py'
+    # A renamed Chatbook cannot be its own backend any more than `chatbook` can.
+    assert (
+        resolve_backend_kernel('conda-base-chatbook', CONDA_SPECS)['name']
+        == 'conda-base-py'
+    )
+
+
+def test_kernel_lists_backends_with_the_servers_kernel_spec_manager(
+    monkeypatch, fresh_kernel_spec_manager
+):
+    allowed = {'conda-env-tools-chatbook', 'conda-env-tools-py'}
+    # The server describes its manager, config included, in the kernel's env ...
+    server_manager = RenamingKernelSpecManager(
+        config=Config(
+            {
+                'RenamingKernelSpecManager': {'prefix': 'conda-env-tools-'},
+                'KernelSpecManager': {'allowed_kernelspecs': allowed},
+            }
+        )
+    )
+    monkeypatch.setenv(
+        KERNEL_SPEC_MANAGER_ENV, describe_kernel_spec_manager(server_manager)
+    )
+
+    # ... so the kernel resolves the names Settings and the kernel picker show.
+    manager = kernel_spec_manager()
+    assert type(manager) is RenamingKernelSpecManager
+    assert manager.prefix == 'conda-env-tools-'
+    assert manager.allowed_kernelspecs == allowed
+    specs = load_kernel_specs()
+    assert sorted(specs) == ['conda-env-tools-chatbook', 'conda-env-tools-py']
+    assert resolve_backend_kernel('conda-env-tools-py', specs)['language'] == 'python'
+
+
+def test_describe_kernel_spec_manager_keeps_only_its_own_json_config():
+    manager = RenamingKernelSpecManager(
+        config=Config(
+            {
+                'RenamingKernelSpecManager': {'prefix': 'p-', 'not_json': object()},
+                'ServerApp': {'port': 8888},
+            }
+        )
+    )
+    description = json.loads(describe_kernel_spec_manager(manager))
+    assert description['class'] == (
+        f'{RenamingKernelSpecManager.__module__}.RenamingKernelSpecManager'
+    )
+    assert description['config'] == {'RenamingKernelSpecManager': {'prefix': 'p-'}}
+
+
+def test_kernel_spec_manager_defaults_without_a_server_description(
+    fresh_kernel_spec_manager,
+):
+    assert type(kernel_spec_manager()) is KernelSpecManager
+
+
+def test_kernel_spec_manager_falls_back_on_a_bad_description(
+    monkeypatch, fresh_kernel_spec_manager
+):
+    monkeypatch.setenv(KERNEL_SPEC_MANAGER_ENV, '{"class": "no_such_module.Manager"}')
+    assert type(kernel_spec_manager()) is KernelSpecManager
+
+
+def test_server_resolves_backends_with_its_own_kernel_spec_manager(
+    fresh_kernel_spec_manager,
+):
+    server_manager = RenamingKernelSpecManager()
+    set_kernel_spec_manager(server_manager)
+    assert kernel_spec_manager() is server_manager
+    assert resolve_backend_kernel('', load_kernel_specs())['name'] == 'conda-base-py'
+
+
+def test_backend_starts_through_the_resolved_kernel_spec_manager(
+    monkeypatch, fresh_kernel_spec_manager
+):
+    import jupyter_client
+
+    server_manager = RenamingKernelSpecManager()
+    set_kernel_spec_manager(server_manager)
+    created = {}
+
+    def kernel_manager(**kwargs):
+        created.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(jupyter_client, 'KernelManager', kernel_manager)
+    ChatbookBackend('conda-base-py').start()
+    assert created == {
+        'kernel_name': 'conda-base-py',
+        'kernel_spec_manager': server_manager,
+    }
 
 
 def test_is_code_execute_only_accepts_code_mode():

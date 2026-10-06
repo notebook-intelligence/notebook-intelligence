@@ -169,8 +169,38 @@ export interface IChatbookExecuteMeta {
   approvedCode?: string;
 }
 
+export function isChatbookLanguage(
+  language: string | undefined | null
+): boolean {
+  return (language ?? '').trim().toLowerCase() === CHATBOOK_LANGUAGE;
+}
+
+/**
+ * Names of the installed kernelspecs that run the Chatbook kernel. A custom
+ * kernelspec manager can list Chatbook under its own name (nb_conda_kernels
+ * lists it as `conda-base-chatbook`), so the name alone does not identify it;
+ * the kernelspec's language does.
+ */
+const chatbookKernelNames = new Set<string>([CHATBOOK_KERNEL_NAME]);
+
+/** Record which installed kernelspecs are Chatbook's, by language. */
+export function setChatbookKernelSpecs(
+  kernelspecs:
+    | Record<string, { language?: string } | undefined>
+    | null
+    | undefined
+): void {
+  chatbookKernelNames.clear();
+  chatbookKernelNames.add(CHATBOOK_KERNEL_NAME);
+  for (const [name, spec] of Object.entries(kernelspecs ?? {})) {
+    if (isChatbookLanguage(spec?.language)) {
+      chatbookKernelNames.add(name);
+    }
+  }
+}
+
 export function isChatbookKernelName(name: string | undefined | null): boolean {
-  return (name ?? '').trim() === CHATBOOK_KERNEL_NAME;
+  return chatbookKernelNames.has((name ?? '').trim());
 }
 
 export function isChatbookPromptInlineCompletion(

@@ -6,6 +6,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from jupyter_client.kernelspec import KernelSpec, KernelSpecManager, NoSuchKernel
+from traitlets import Unicode
+
 from notebook_intelligence.ruleset import RuleContext
 from notebook_intelligence.config import NBIConfig
 
@@ -233,3 +236,30 @@ This rule has no YAML frontmatter."""
         f.write(no_frontmatter)
     
     return temp_rules_directory
+
+class RenamingKernelSpecManager(KernelSpecManager):
+    """Lists kernelspecs under prefixed names, the way nb_conda_kernels does.
+
+    nb_conda_kernels lists ``chatbook`` as ``conda-base-chatbook`` and
+    ``python3`` as ``conda-base-py``. ``prefix`` is configurable so a test can
+    tell a manager built from the server's config from a default one.
+    """
+
+    prefix = Unicode("conda-base-").tag(config=True)
+
+    _LANGUAGES = {"chatbook": "chatbook", "py": "python"}
+
+    def find_kernel_specs(self):
+        return {self.prefix + name: f"/kernels/{name}" for name in self._LANGUAGES}
+
+    def get_kernel_spec(self, kernel_name, *args, **kwargs):
+        for name, language in self._LANGUAGES.items():
+            if kernel_name == self.prefix + name:
+                return KernelSpec(
+                    name=kernel_name,
+                    display_name=f"{name} [conda env:base]",
+                    language=language,
+                    argv=["python", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+                    resource_dir=f"/kernels/{name}",
+                )
+        raise NoSuchKernel(kernel_name)

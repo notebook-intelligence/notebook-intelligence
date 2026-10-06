@@ -8,6 +8,8 @@ Generation uses Notebook Intelligence (`POST /notebook-intelligence/chatbook/gen
 
 The Chatbook setting **Execution kernel** lists installed Jupyter kernelspecs except `chatbook`. The default is `python3` when that spec exists, otherwise the first Python spec, otherwise the first non-chatbook spec. Change requires restarting open Chatbook notebooks so the child kernel is recreated.
 
+Kernelspecs are listed and started through the Jupyter server's kernelspec manager, so a custom manager works unchanged. With [nb_conda_kernels](https://github.com/anaconda/nb_conda_kernels), for example, the Chatbook kernel is `Chatbook [conda env:base]` (`conda-base-chatbook`) and the backends are its names such as `conda-base-py`. Chatbook is recognized by its kernelspec language, `chatbook`, whatever the kernelspec is named.
+
 Tab completion and contextual help are proxied to that child kernel. Interrupt uses Jupyter's message-mode interrupt so it reaches the child rather than only the Chatbook wrapper.
 
 Cell badges show **NL** (natural language) and **Cd** (code). Code cells use the backend language for highlighting.

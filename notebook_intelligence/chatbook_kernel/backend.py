@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -13,7 +14,12 @@ from typing import Any, Callable, Optional
 log = logging.getLogger(__name__)
 
 CHATBOOK_KERNEL_NAME = "chatbook"
+CHATBOOK_LANGUAGE = "chatbook"
 DEFAULT_BACKEND_KERNEL_NAME = "python3"
+
+# The Jupyter server's kernelspec manager, described for the Chatbook kernel
+# process (see `describe_kernel_spec_manager`).
+KERNEL_SPEC_MANAGER_ENV = "NBI_CHATBOOK_KERNEL_SPEC_MANAGER"
 
 _IOPUB_RELAY_TYPES = {
     "stream",
@@ -48,11 +54,23 @@ def _spec_fields(record: Any) -> tuple[str, str]:
     return language, display_name
 
 
+def is_chatbook_spec(record: Any) -> bool:
+    """Whether a kernelspec runs the Chatbook kernel, whatever it is named.
+
+    A custom kernelspec manager can list Chatbook under its own name
+    (nb_conda_kernels lists it as ``conda-base-chatbook``), so the name alone
+    does not identify it; the language does. Accepts a ``KernelSpec``, a spec
+    dict, or a ``get_all_specs()`` record.
+    """
+    language, _ = _spec_fields(record)
+    return language.lower() == CHATBOOK_LANGUAGE
+
+
 def list_backend_kernels(specs: Optional[dict] = None) -> list[dict[str, str]]:
     """Installed kernelspecs excluding the Chatbook wrapper itself."""
     backends: list[dict[str, str]] = []
     for name, record in (specs or {}).items():
-        if not name or name == CHATBOOK_KERNEL_NAME:
+        if not name or name == CHATBOOK_KERNEL_NAME or is_chatbook_spec(record):
             continue
         language, display_name = _spec_fields(record)
         backends.append(
@@ -66,13 +84,98 @@ def list_backend_kernels(specs: Optional[dict] = None) -> list[dict[str, str]]:
     return backends
 
 
+_kernel_spec_manager: Any = None
+
+
+def describe_kernel_spec_manager(manager: Any) -> str:
+    """The class and JSON-safe config of ``manager``, for the Chatbook kernel.
+
+    The Jupyter server may use a custom kernelspec manager that lists kernels
+    under its own names (nb_conda_kernels lists ``python3`` as
+    ``conda-base-py``). The Chatbook kernel has to resolve backend names the
+    same way, so the server passes this description to it in
+    ``KERNEL_SPEC_MANAGER_ENV``. Only the config sections of the manager's own
+    classes are kept. Sets (``allowed_kernelspecs``) travel as lists, which
+    traitlets turns back into sets; other values that are not JSON are dropped.
+    """
+    cls = type(manager)
+    config = getattr(manager, "config", None) or {}
+    sections: dict[str, dict] = {}
+    for klass in cls.__mro__:
+        if klass.__name__ not in config:
+            continue
+        section = {}
+        for key, value in dict(config[klass.__name__]).items():
+            if isinstance(value, (set, frozenset)):
+                value = sorted(value, key=str)
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                continue
+            section[key] = value
+        if section:
+            sections[klass.__name__] = section
+    return json.dumps(
+        {"class": f"{cls.__module__}.{cls.__qualname__}", "config": sections}
+    )
+
+
+def set_kernel_spec_manager(manager: Any) -> None:
+    """Resolve backend kernels with ``manager`` in this process.
+
+    The server extension passes the Jupyter server's own manager, so names
+    resolved in the server match the ones the kernel picker lists.
+    """
+    global _kernel_spec_manager
+    _kernel_spec_manager = manager
+
+
+def _kernel_spec_manager_from_env() -> Any:
+    raw = os.environ.get(KERNEL_SPEC_MANAGER_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        from traitlets.config import Config
+        from traitlets.utils.importstring import import_item
+
+        description = json.loads(raw)
+        cls = import_item(str(description["class"]))
+        return cls(config=Config(description.get("config") or {}))
+    except Exception as exc:
+        log.warning(
+            "Could not create the Jupyter server's kernelspec manager (%s); "
+            "using Jupyter's default",
+            exc,
+        )
+        return None
+
+
+def kernel_spec_manager() -> Any:
+    """The kernelspec manager backend kernels are listed and started with.
+
+    In the server, the server's own (see `set_kernel_spec_manager`). In the
+    Chatbook kernel, one built from the description the server put in the
+    kernel's environment, so a backend named in Settings → Chatbook resolves
+    to the same kernelspec here. Otherwise Jupyter's default manager.
+    """
+    global _kernel_spec_manager
+    if _kernel_spec_manager is None:
+        manager = _kernel_spec_manager_from_env()
+        if manager is None:
+            from jupyter_client.kernelspec import KernelSpecManager
+
+            manager = KernelSpecManager()
+        _kernel_spec_manager = manager
+    return _kernel_spec_manager
+
+
 def load_kernel_specs() -> dict:
     try:
-        from jupyter_client.kernelspec import KernelSpecManager
+        manager = kernel_spec_manager()
     except ImportError:
         return {}
     try:
-        return KernelSpecManager().get_all_specs()
+        return manager.get_all_specs()
     except Exception as exc:
         log.warning("Could not list Jupyter kernelspecs: %s", exc)
         return {}
@@ -91,7 +194,7 @@ def resolve_backend_kernel(
         )
     by_name = {item["name"]: item for item in backends}
     wanted = (preferred or "").strip()
-    if wanted == CHATBOOK_KERNEL_NAME:
+    if wanted == CHATBOOK_KERNEL_NAME or is_chatbook_spec((specs or {}).get(wanted)):
         wanted = ""
     if wanted in by_name:
         return by_name[wanted]
@@ -163,7 +266,9 @@ class ChatbookBackend:
         if factory is None:
             from jupyter_client import KernelManager
 
-            factory = lambda name: KernelManager(kernel_name=name)
+            factory = lambda name: KernelManager(
+                kernel_name=name, kernel_spec_manager=kernel_spec_manager()
+            )
         self._km = factory(self.kernel_name)
         start_kernel = getattr(self._km, "start_kernel", None)
         if callable(start_kernel):

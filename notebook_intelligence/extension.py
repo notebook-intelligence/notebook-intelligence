@@ -111,6 +111,12 @@ from notebook_intelligence.chatbook_kernel.execution import (
 from notebook_intelligence.rule_injector import has_chatbook_guidelines
 from notebook_intelligence.chatbook_mentions import list_chatbook_mentions
 from notebook_intelligence.chatbook_kernel.codegen import ChatbookCodegenError
+from notebook_intelligence.chatbook_kernel.backend import (
+    KERNEL_SPEC_MANAGER_ENV,
+    describe_kernel_spec_manager,
+    is_chatbook_spec,
+    set_kernel_spec_manager,
+)
 
 ai_service_manager: AIServiceManager = None
 log = logging.getLogger(__name__)
@@ -203,6 +209,10 @@ def _set_chatbook_kernelspec_execution_cap(kernel_spec_manager, max_mode: str) -
     The wrapper kernel cannot read the server extension's traitlets directly.
     Adding the resolved value to its live kernelspec makes env- and
     traitlet-configured caps equivalent at the actual execution decision.
+    The same env carries a description of this kernelspec manager, so the
+    kernel resolves backend kernels under the names this server lists them by.
+    Chatbook is matched by language, since a custom manager such as
+    nb_conda_kernels renames its kernelspec.
     """
     if kernel_spec_manager is None:
         return
@@ -211,14 +221,16 @@ def _set_chatbook_kernelspec_execution_cap(kernel_spec_manager, max_mode: str) -
     if getattr(kernel_spec_manager, "_nbi_chatbook_cap_wrapped", False):
         return
     orig_get = kernel_spec_manager.get_kernel_spec
+    manager_description = describe_kernel_spec_manager(kernel_spec_manager)
 
     def get_kernel_spec(kernel_name, *args, **kwargs):
         spec = orig_get(kernel_name, *args, **kwargs)
-        if kernel_name == CHATBOOK_KERNEL_NAME:
+        if kernel_name == CHATBOOK_KERNEL_NAME or is_chatbook_spec(spec):
             env = dict(getattr(spec, "env", None) or {})
             env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] = (
                 kernel_spec_manager._nbi_chatbook_max_execution_mode
             )
+            env[KERNEL_SPEC_MANAGER_ENV] = manager_description
             spec.env = env
         return spec
 
@@ -240,6 +252,8 @@ def _hide_chatbook_kernelspec(kernel_spec_manager) -> None:
 
     The kernelspec stays on disk from the package data files; filtering the
     running manager is what removes the launcher tile and kernel picker.
+    Chatbook is matched by language as well as name, so a copy a custom
+    manager renamed (nb_conda_kernels' ``conda-base-chatbook``) goes too.
     Idempotent so a second call (tests, reload) does not wrap twice.
     """
     if kernel_spec_manager is None:
@@ -252,15 +266,25 @@ def _hide_chatbook_kernelspec(kernel_spec_manager) -> None:
     orig_get = kernel_spec_manager.get_kernel_spec
     orig_all = getattr(kernel_spec_manager, "get_all_specs", None)
 
+    def is_chatbook(kernel_name) -> bool:
+        if kernel_name == CHATBOOK_KERNEL_NAME:
+            return True
+        try:
+            return is_chatbook_spec(orig_get(kernel_name))
+        except Exception:
+            return False
+
     def find_kernel_specs(*args, **kwargs):
         specs = orig_find(*args, **kwargs)
-        specs.pop(CHATBOOK_KERNEL_NAME, None)
-        return specs
+        return {name: path for name, path in specs.items() if not is_chatbook(name)}
 
     def get_kernel_spec(kernel_name, *args, **kwargs):
         if kernel_name == CHATBOOK_KERNEL_NAME:
             raise NoSuchKernel(kernel_name)
-        return orig_get(kernel_name, *args, **kwargs)
+        spec = orig_get(kernel_name, *args, **kwargs)
+        if is_chatbook_spec(spec):
+            raise NoSuchKernel(kernel_name)
+        return spec
 
     kernel_spec_manager.find_kernel_specs = find_kernel_specs
     kernel_spec_manager.get_kernel_spec = get_kernel_spec
@@ -268,8 +292,11 @@ def _hide_chatbook_kernelspec(kernel_spec_manager) -> None:
 
         def get_all_specs(*args, **kwargs):
             specs = orig_all(*args, **kwargs)
-            specs.pop(CHATBOOK_KERNEL_NAME, None)
-            return specs
+            return {
+                name: record
+                for name, record in specs.items()
+                if name != CHATBOOK_KERNEL_NAME and not is_chatbook_spec(record)
+            }
 
         kernel_spec_manager.get_all_specs = get_all_specs
     kernel_spec_manager._nbi_chatbook_hidden = True
@@ -4829,6 +4856,11 @@ class NotebookIntelligence(ExtensionApp):
         FileUploadHandler.upload_retention_hours = _resolve_positive_int_with_env(
             "NBI_UPLOAD_RETENTION_HOURS", self.upload_retention_hours
         )
+        # Resolve Chatbook backends in this process the way this server lists
+        # kernelspecs (a custom manager such as nb_conda_kernels renames them).
+        kernel_spec_manager = getattr(self.serverapp, "kernel_spec_manager", None)
+        if kernel_spec_manager is not None:
+            set_kernel_spec_manager(kernel_spec_manager)
         self._publish_policies(feature_policies, string_overrides)
         NotebookIntelligence.handlers = [
             (route_pattern_capabilities, GetCapabilitiesHandler),

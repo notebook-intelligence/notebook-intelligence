@@ -1491,6 +1491,22 @@ def test_backend_kernel_name_resolves_the_default_when_config_is_blank():
         backend.load_kernel_specs = original
 
 
+def test_backend_kernel_name_uses_the_servers_kernel_spec_manager(monkeypatch):
+    # Under nb_conda_kernels the server lists `python3` as `conda-base-py`, and
+    # rules have to be matched against the name the user sees.
+    from notebook_intelligence import chatbook_generate
+    from notebook_intelligence.chatbook_kernel import backend
+    from tests.conftest import RenamingKernelSpecManager
+
+    monkeypatch.setattr(backend, '_kernel_spec_manager', None)
+    backend.set_kernel_spec_manager(RenamingKernelSpecManager())
+
+    class Host:
+        nbi_config = type('Cfg', (), {'chatbook_backend_kernel': ''})()
+
+    assert chatbook_generate.chatbook_backend_kernel_name(Host()) == 'conda-base-py'
+
+
 def test_backend_kernel_name_ignores_a_config_naming_the_wrapper():
     # The wrapper cannot be its own backend. A hand-edited config can still
     # name it, and matching rules against it would reinstate the original bug.

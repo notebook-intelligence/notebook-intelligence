@@ -151,6 +151,7 @@ import { attachTerminalDragDrop } from './terminal-drag';
 import {
   DEFAULT_NOTEBOOK_KERNEL,
   NotebookKernelNotFoundError,
+  chatbookKernelProfile,
   findKernelProfile,
   listKernelProfiles,
   normalizeNotebookLanguage
@@ -158,17 +159,18 @@ import {
 
 import { CommandIDs } from './command-ids';
 import {
-  CHATBOOK_KERNEL_NAME,
   CHATBOOK_LANGUAGE,
   attachChatbookNotebooks,
   getChatbookBackendLanguage,
   getChatbookCellMode,
   getChatbookCellMeta,
+  isChatbookKernelName,
   isChatbookPromptInlineCompletion,
   isChatbookSession,
   nextChatbookNotebookMode,
   patchCodeCellExecute,
   registerChatbookLanguage,
+  setChatbookKernelSpecs,
   summarizeCodeCell,
   toggleActiveChatbookCellMode,
   toggleAllChatbookCellModes
@@ -1000,6 +1002,13 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     await NBIAPI.initialize();
 
     if (NBIAPI.config.chatbookEnabled) {
+      // Recognize Chatbook's kernelspec under any name a kernelspec manager
+      // gives it (nb_conda_kernels lists it as `conda-base-chatbook`).
+      const kernelspecs = app.serviceManager.kernelspecs;
+      const recordChatbookKernelSpecs = () =>
+        setChatbookKernelSpecs(kernelspecs.specs?.kernelspecs);
+      void kernelspecs.ready.then(recordChatbookKernelSpecs);
+      kernelspecs.specsChanged.connect(recordChatbookKernelSpecs);
       registerChatbookLanguage(languageRegistry);
       patchCodeCellExecute();
       attachChatbookNotebooks(notebookTracker, {
@@ -1477,8 +1486,11 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
       icon: () => sidebarIcon,
       isVisible: () => NBIAPI.config.chatbookEnabled,
       execute: async () => {
+        const kernelspecs = app.serviceManager.kernelspecs;
+        await kernelspecs.ready;
         return app.commands.execute(CommandIDs.createNewNotebook, {
-          kernelName: CHATBOOK_KERNEL_NAME
+          kernelName: chatbookKernelProfile(kernelspecs.specs?.kernelspecs)
+            .kernelName
         });
       }
     });
@@ -1492,7 +1504,7 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
           return false;
         }
         if (
-          current.sessionContext.session?.kernel?.name !== CHATBOOK_KERNEL_NAME
+          !isChatbookKernelName(current.sessionContext.session?.kernel?.name)
         ) {
           return false;
         }

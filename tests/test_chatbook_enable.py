@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from jupyter_client.kernelspec import NoSuchKernel
 
+from notebook_intelligence.chatbook_kernel.backend import KERNEL_SPEC_MANAGER_ENV
 from notebook_intelligence.extension import (
     CHATBOOK_DISABLED_MESSAGE,
     FEATURE_POLICY_DEFAULTS,
@@ -25,6 +26,7 @@ from notebook_intelligence.feature_flags import (
     POLICY_USER_CHOICE,
     is_force_off,
 )
+from tests.conftest import RenamingKernelSpecManager
 
 
 def test_chatbook_enabled_defaults_on():
@@ -103,6 +105,29 @@ def test_chatbook_kernelspec_inherits_resolved_traitlet_cap():
     _set_chatbook_kernelspec_execution_cap(manager, "confirm-if-risky")
     spec = manager.get_kernel_spec("chatbook")
     assert spec.env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] == "confirm-if-risky"
+
+
+def test_hide_chatbook_kernelspec_drops_a_renamed_chatbook():
+    # nb_conda_kernels lists Chatbook as conda-base-chatbook; force-off has to
+    # hide that one too.
+    manager = RenamingKernelSpecManager()
+    _hide_chatbook_kernelspec(manager)
+    assert list(manager.find_kernel_specs()) == ["conda-base-py"]
+    assert list(manager.get_all_specs()) == ["conda-base-py"]
+    with pytest.raises(NoSuchKernel):
+        manager.get_kernel_spec("conda-base-chatbook")
+    assert manager.get_kernel_spec("conda-base-py").name == "conda-base-py"
+
+
+def test_renamed_chatbook_kernelspec_gets_the_cap_and_the_server_manager():
+    manager = RenamingKernelSpecManager()
+    _set_chatbook_kernelspec_execution_cap(manager, "always-confirm")
+
+    env = manager.get_kernel_spec("conda-base-chatbook").env
+    assert env["NBI_CHATBOOK_MAX_EXECUTION_MODE"] == "always-confirm"
+    description = json.loads(env[KERNEL_SPEC_MANAGER_ENV])
+    assert description["class"].endswith(".RenamingKernelSpecManager")
+    assert manager.get_kernel_spec("conda-base-py").env == {}
 
 
 class _DummyHandler:

@@ -57,7 +57,8 @@ export {
   getChatbookCellMeta,
   getChatbookCellMode,
   isChatbookKernelName,
-  isChatbookPromptInlineCompletion
+  isChatbookPromptInlineCompletion,
+  setChatbookKernelSpecs
 } from './chatbook-core';
 
 let codeCellExecutePatched = false;

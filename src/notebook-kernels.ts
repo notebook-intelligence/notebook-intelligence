@@ -2,7 +2,7 @@
 
 import { KernelSpec, KernelSpecManager } from '@jupyterlab/services';
 
-import { chatbookLanguageId } from './chatbook-core';
+import { chatbookLanguageId, isChatbookLanguage } from './chatbook-core';
 
 export interface INotebookKernelProfile {
   language: string;
@@ -113,11 +113,33 @@ export function listKernelProfiles(
     });
 }
 
+/**
+ * The kernelspec a new Chatbook opens with: `chatbook` when it is installed
+ * under that name, otherwise the first kernelspec in Chatbook's language (a
+ * custom kernelspec manager such as nb_conda_kernels renames it).
+ */
+export function chatbookKernelProfile(
+  specs: Record<string, KernelSpec.ISpecModel> | undefined
+): INotebookKernelProfile {
+  const profiles = listKernelProfiles(specs).filter(profile =>
+    isChatbookLanguage(profile.language)
+  );
+  return (
+    profiles.find(
+      profile => profile.kernelName === CHATBOOK_KERNEL.kernelName
+    ) ??
+    profiles[0] ??
+    CHATBOOK_KERNEL
+  );
+}
+
 export function listChatbookBackendProfiles(
   specs: Record<string, KernelSpec.ISpecModel> | undefined
 ): INotebookKernelProfile[] {
   return listKernelProfiles(specs).filter(
-    profile => profile.kernelName !== CHATBOOK_KERNEL.kernelName
+    profile =>
+      profile.kernelName !== CHATBOOK_KERNEL.kernelName &&
+      !isChatbookLanguage(profile.language)
   );
 }
 
