@@ -13,7 +13,7 @@ has a [separate MCP configuration](../README.md#claude-mcp-servers).
 Install NBI in a fresh Python environment if it is not already installed:
 
 ```bash
-pip install notebook-intelligence
+pip install "jupyterlab>=4,<5" notebook-intelligence
 ```
 
 Add the `parallel-search` entry below to `mcpServers` in
