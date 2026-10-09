@@ -366,6 +366,9 @@ Add MCP servers by editing `~/.jupyter/nbi/mcp.json`. An environment-wide base f
 }
 ```
 
+For a keyless web search and page-fetching example, see
+[Parallel Search MCP](docs/parallel-search.md).
+
 For stdio servers you can pass extra environment variables under `env`:
 
 ```json
