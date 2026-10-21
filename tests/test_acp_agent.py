@@ -1265,6 +1265,35 @@ class TestNbiMcpServerLaunch:
         reply = json.loads(proc.stdout.splitlines()[0])
         assert reply["result"]["content"][0]["text"] == "/srv/workspace"
 
+    @pytest.mark.parametrize("configured_root", [None, "", "relative/workspace"])
+    def test_workspace_root_does_not_fall_back_to_launch_directory(self, tmp_path, configured_root):
+        from notebook_intelligence import acp_mcp_server
+
+        launch_dir = tmp_path / "nbi-user-dir"
+        launch_dir.mkdir()
+        server = self._server()
+        env = dict(os.environ)
+        env.pop(acp_mcp_server.WORKSPACE_ROOT_ENV, None)
+        if configured_root is not None:
+            env[acp_mcp_server.WORKSPACE_ROOT_ENV] = configured_root
+        request = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "nbi_workspace_root", "arguments": {}},
+        })
+
+        proc = subprocess.run(
+            [server.command, *server.args],
+            input=request + "\n", cwd=launch_dir, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+
+        assert proc.returncode == 0
+        reply = json.loads(proc.stdout.splitlines()[0])
+        assert "result" not in reply
+        assert reply["error"]["code"] == -32603
+        assert "NBI_WORKSPACE_ROOT must be set to an absolute" in reply["error"]["message"]
+        assert str(launch_dir) not in proc.stdout
+
 
 class TestAdapterLaunchCwd:
     """Startup must ignore npm projects even above the user's private home."""

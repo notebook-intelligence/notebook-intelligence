@@ -25,8 +25,8 @@ import sys
 
 PROTOCOL_VERSION = "2025-06-18"
 
-# Set by the participant on the McpServerStdio entry; the cwd is the fallback
-# for a launch that predates it.
+# Set by the participant on the McpServerStdio entry. The process cwd is an
+# adapter launch detail and must never stand in for a missing workspace.
 WORKSPACE_ROOT_ENV = "NBI_WORKSPACE_ROOT"
 
 TOOLS = [
@@ -56,7 +56,11 @@ def _error(mid, code, message):
 
 def _call_tool(name, arguments):
     if name == "nbi_workspace_root":
-        root = os.environ.get(WORKSPACE_ROOT_ENV) or os.getcwd()
+        root = os.environ.get(WORKSPACE_ROOT_ENV)
+        if not root or not os.path.isabs(root):
+            raise RuntimeError(
+                "NBI_WORKSPACE_ROOT must be set to an absolute JupyterLab workspace path"
+            )
         return {"content": [{"type": "text", "text": root}]}
     raise KeyError(name)
 
