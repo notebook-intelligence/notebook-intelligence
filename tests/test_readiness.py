@@ -12,12 +12,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import notebook_intelligence.readiness as rd
+import notebook_intelligence.util as util
 from notebook_intelligence.checks import CheckTimeout as _CheckTimeout
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _readiness_workspace(tmp_path, monkeypatch):
+    """Never let ACP readiness depend on another test's process-global root."""
+    workspace = tmp_path / "readiness-workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(util, "_jupyter_root_dir", str(workspace))
+    return workspace
 
 
 class _Model:
@@ -42,6 +52,7 @@ def _config(**kw):
         chat_model=kw.get("chat_model", {}),
         claude_settings=kw.get("claude_settings", {}),
         acp_settings=kw.get("acp_settings", {}),
+        nbi_user_dir=kw.get("nbi_user_dir"),
     )
 
 
@@ -311,43 +322,331 @@ def test_claude_mode_does_not_run_provider_checks():
 # ---------------------------------------------------------------------------
 
 
-def test_acp_missing_npx_blocks_and_names_the_override():
-    with patch("shutil.which", return_value=None), patch.dict(rd.os.environ, {}, clear=True):
-        doc = rd.run_readiness(_config(), _manager(mode="acp"))
+def test_acp_missing_adapter_blocks_and_explains_preinstallation(tmp_path, monkeypatch):
+    monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
     row = _by_id(doc)["acp.runtime"]
     assert row["level"] == rd.LEVEL_BLOCKED
+    assert "'codex-acp' was not found on an absolute PATH entry outside the workspace" in row["detail"]
+    assert "Preinstall" in row["remedy"]
+    assert "@zed-industries/codex-acp@0.16.0" in row["remedy"]
     assert "NBI_ACP_AGENT_COMMAND" in row["remedy"]
+    assert "absolute path" in row["remedy"]
+    assert doc["verdict"] == rd.VERDICT_NOT_READY
 
 
 def test_acp_command_override_pointing_at_a_missing_binary_is_blocked():
-    """Special-casing the literal "npx" would let an override point at a
-    nonexistent binary and still report Ready."""
     with patch.dict(
         rd.os.environ, {"NBI_ACP_AGENT_COMMAND": "/opt/nope/agent --acp"}, clear=True
     ):
         doc = rd.run_readiness(_config(), _manager(mode="acp"))
     row = _by_id(doc)["acp.runtime"]
     assert row["level"] == rd.LEVEL_BLOCKED
-    assert "/opt/nope/agent" in row["detail"]
+    assert row["detail"] == "ACP adapter '/opt/nope/agent' was not found or is not executable"
     assert doc["verdict"] == rd.VERDICT_NOT_READY
 
 
-def test_acp_command_override_pointing_at_a_real_binary_is_ok():
-    with patch.dict(
-        rd.os.environ, {"NBI_ACP_AGENT_COMMAND": "/bin/sh -c true"}, clear=True
-    ):
-        doc = rd.run_readiness(_config(), _manager(mode="acp"))
+@pytest.mark.parametrize("workspace_is_home", [False, True])
+def test_acp_absolute_override_explicitly_trusts_workspace_installation(
+    tmp_path, monkeypatch, workspace_is_home
+):
+    if workspace_is_home:
+        monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(util, "_jupyter_root_dir", str(tmp_path))
+    adapter = tmp_path / "adapter"
+    adapter.write_text("#!/bin/sh\nexit 0\n")
+    adapter.chmod(0o700)
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", f"{adapter} --acp")
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
     assert _by_id(doc)["acp.runtime"]["level"] == rd.LEVEL_OK
+    assert _by_id(doc)["acp.agent"]["detail"].endswith("/adapter --acp")
+
+
+@pytest.mark.parametrize("command", ["./adapter --acp", "adapter --acp"])
+def test_acp_relative_override_is_blocked_even_if_present_in_server_cwd(
+    tmp_path, monkeypatch, command
+):
+    adapter = tmp_path / "adapter"
+    adapter.write_text("#!/bin/sh\nexit 0\n")
+    adapter.chmod(0o700)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", command)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert row["detail"] == "NBI_ACP_AGENT_COMMAND must name an absolute executable path"
+    assert "absolute" in row["remedy"]
+    assert doc["verdict"] == rd.VERDICT_NOT_READY
+
+
+@pytest.mark.parametrize(
+    "command, expected_reason",
+    [
+        ("", "NBI_ACP_AGENT_COMMAND must name an absolute executable path"),
+        ("  ", "NBI_ACP_AGENT_COMMAND must name an absolute executable path"),
+        ("'unclosed", "No closing quotation"),
+    ],
+)
+def test_acp_invalid_override_is_a_runtime_failure(command, expected_reason, monkeypatch):
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", command)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert row["detail"] == expected_reason
+    assert not any(row["id"].endswith(".unavailable") for row in doc["checks"])
+
+
+@pytest.mark.parametrize("search_path", ["", ".", "bin"])
+def test_acp_cwd_relative_path_does_not_report_false_ready(
+    tmp_path, monkeypatch, search_path, _readiness_workspace
+):
+    server_cwd = tmp_path / "server-cwd"
+    server_cwd.mkdir()
+    assert not server_cwd.is_relative_to(_readiness_workspace)
+    adapter_dir = server_cwd / search_path if search_path else server_cwd
+    adapter_dir.mkdir(exist_ok=True)
+    adapter = adapter_dir / "codex-acp"
+    adapter.write_text("#!/bin/sh\nexit 0\n")
+    adapter.chmod(0o700)
+    monkeypatch.chdir(server_cwd)
+    monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.setenv("PATH", search_path)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert "'codex-acp' was not found on an absolute PATH entry outside the workspace" in row["detail"]
+    assert doc["verdict"] == rd.VERDICT_NOT_READY
+
+
+@pytest.mark.parametrize("via_symlink", [False, True])
+@pytest.mark.parametrize("has_external_adapter", [False, True])
+def test_acp_default_skips_workspace_executables_and_symlinks_into_workspace(
+    tmp_path, monkeypatch, via_symlink, has_external_adapter
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    planted = workspace / "codex-acp"
+    planted.write_text("#!/bin/sh\nexit 0\n")
+    planted.chmod(0o700)
+    first_directory = workspace
+    if via_symlink:
+        first_directory = tmp_path / "first-bin"
+        first_directory.mkdir()
+        (first_directory / "codex-acp").symlink_to(planted)
+    search_path = str(first_directory)
+    if has_external_adapter:
+        trusted = tmp_path / "trusted-bin"
+        trusted.mkdir()
+        installed = trusted / "codex-acp"
+        installed.write_text("#!/bin/sh\nexit 0\n")
+        installed.chmod(0o700)
+        search_path += rd.os.pathsep + str(trusted)
+    monkeypatch.setattr(util, "_jupyter_root_dir", str(workspace))
+    monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.setenv("PATH", search_path)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    if has_external_adapter:
+        assert _by_id(doc)["acp.runtime"]["level"] == rd.LEVEL_OK
+        assert _by_id(doc)["acp.agent"]["detail"].endswith("/trusted-bin/codex-acp")
+    else:
+        row = _by_id(doc)["acp.runtime"]
+        assert row["level"] == rd.LEVEL_BLOCKED
+        assert "'codex-acp' was not found on an absolute PATH entry outside the workspace" in row["detail"]
+        assert doc["verdict"] == rd.VERDICT_NOT_READY
 
 
 def test_acp_credentials_absent_warns_for_the_oauth_case():
-    with patch("shutil.which", return_value="/usr/bin/npx"), patch.dict(
-        rd.os.environ, {}, clear=True
+    with patch.dict(
+        rd.os.environ, {"NBI_ACP_AGENT_COMMAND": "/bin/sh"}, clear=True
     ):
         doc = rd.run_readiness(_config(), _manager(mode="acp"))
     row = _by_id(doc)["acp.credentials"]
     assert row["level"] == rd.LEVEL_WARN
     assert "OAuth" in row["remedy"]
+
+
+def _acp_script_fixture(tmp_path, monkeypatch, shebang="#!/usr/bin/env node"):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    trusted = tmp_path / "trusted-bin"
+    trusted.mkdir()
+    adapter = trusted / "codex-acp"
+    adapter.write_text(shebang + "\nthrow new Error('must not execute');\n")
+    adapter.chmod(0o700)
+    monkeypatch.setattr(util, "_jupyter_root_dir", str(workspace))
+    monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.setenv("PATH", str(trusted))
+    return workspace, trusted, adapter
+
+
+@pytest.mark.parametrize("node_location", ["missing", "workspace", "directory-alias", "trusted"])
+def test_acp_checks_node_against_the_filtered_launch_path(
+    tmp_path, monkeypatch, node_location
+):
+    workspace, trusted, _ = _acp_script_fixture(tmp_path, monkeypatch)
+    if node_location != "missing":
+        node_directory = trusted if node_location == "trusted" else workspace
+        node = node_directory / "node"
+        node.write_text("#!/bin/sh\necho must-not-execute\n")
+        node.chmod(0o700)
+        if node_location == "directory-alias":
+            alias = tmp_path / "linked-bin"
+            alias.symlink_to(workspace, target_is_directory=True)
+            node_directory = alias
+        monkeypatch.setenv("PATH", str(node_directory) + rd.os.pathsep + str(trusted))
+    with patch("subprocess.Popen", side_effect=AssertionError("readiness must not execute the adapter")):
+        doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    if node_location == "trusted":
+        assert row["level"] == rd.LEVEL_OK
+    else:
+        assert row["level"] == rd.LEVEL_BLOCKED
+        assert "node" in row["detail"]
+        assert "adapter PATH" in row["detail"]
+        assert "interpreter" in row["remedy"]
+        assert "workspace" in row["remedy"]
+        assert doc["verdict"] == rd.VERDICT_NOT_READY
+
+
+@pytest.mark.parametrize("relative_path", [False, True])
+def test_acp_override_checks_interpreter_using_inherited_path_and_launch_cwd(
+    tmp_path, monkeypatch, relative_path
+):
+    workspace, _, adapter = _acp_script_fixture(tmp_path, monkeypatch)
+    launch_directory = tmp_path / "nbi-user-dir"
+    launch_directory.mkdir()
+    if relative_path:
+        node_directory = launch_directory / "bin"
+        node_directory.mkdir()
+        monkeypatch.setenv("PATH", "bin")
+    else:
+        node_directory = workspace
+        monkeypatch.setenv("PATH", str(workspace))
+    node = node_directory / "node"
+    node.write_text("#!/bin/sh\nexit 1\n")
+    node.chmod(0o700)
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", str(adapter))
+    doc = rd.run_readiness(_config(nbi_user_dir=str(launch_directory)), _manager(mode="acp"))
+    assert _by_id(doc)["acp.runtime"]["level"] == rd.LEVEL_OK
+
+
+@pytest.mark.parametrize("interpreter_kind", ["absolute-shebang", "env-symlink"])
+@pytest.mark.parametrize("explicit_override", [False, True])
+def test_acp_workspace_interpreter_requires_an_explicit_administrator_override(
+    tmp_path, monkeypatch, interpreter_kind, explicit_override
+):
+    workspace, trusted, adapter = _acp_script_fixture(tmp_path, monkeypatch)
+    node = workspace / "node"
+    node.write_text("#!/bin/sh\nexit 1\n")
+    node.chmod(0o700)
+    if interpreter_kind == "absolute-shebang":
+        adapter.write_text(f"#!{node}\nnever execute\n")
+    else:
+        (trusted / "node").symlink_to(node)
+    if explicit_override:
+        monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", str(adapter))
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    if explicit_override:
+        assert row["level"] == rd.LEVEL_OK
+    else:
+        assert row["level"] == rd.LEVEL_BLOCKED
+        assert "outside the workspace" in row["detail"]
+        assert "/workspace/node'" in row["detail"] or "/trusted-bin/node'" in row["detail"]
+
+
+def test_acp_relative_override_path_is_not_resolved_from_the_server_cwd(tmp_path, monkeypatch):
+    workspace, _, adapter = _acp_script_fixture(tmp_path, monkeypatch)
+    server_bin = workspace / "bin"
+    server_bin.mkdir()
+    node = server_bin / "node"
+    node.write_text("#!/bin/sh\nexit 1\n")
+    node.chmod(0o700)
+    launch_directory = tmp_path / "nbi-user-dir"
+    launch_directory.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("PATH", "bin")
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", str(adapter))
+    doc = rd.run_readiness(_config(nbi_user_dir=str(launch_directory)), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert "requires interpreter 'node', which is missing or not executable on the adapter PATH" in row["detail"]
+
+
+@pytest.mark.parametrize(
+    "shebang",
+    ["#!/usr/bin/env node", "#!/usr/bin/env -S node --no-warnings"],
+)
+def test_acp_common_env_interpreter_lines_are_checked_without_execution(tmp_path, monkeypatch, shebang):
+    _, trusted, _ = _acp_script_fixture(tmp_path, monkeypatch, shebang)
+    node = trusted / "node"
+    node.write_text("#!/bin/sh\nexit 1\n")
+    node.chmod(0o700)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    assert _by_id(doc)["acp.runtime"]["level"] == rd.LEVEL_OK
+
+
+@pytest.mark.parametrize(
+    "shebang, expected_reason",
+    [
+        ("#!/usr/bin/env", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!/usr/bin/env node --no-warnings", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!/usr/bin/env -S PATH=/tmp node", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!/usr/bin/env -S ${NODE}", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!/usr/bin/env -S 'node' --no-warnings", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!/usr/bin/env -i node", "Cannot validate ACP adapter's env interpreter line"),
+        ("#!relative/interpreter", "must declare an absolute interpreter path"),
+        ("#!/usr/bin/env node\r", "invalid or overlong interpreter line"),
+        ("#!/usr/bin/env node " + " " * 4096, "invalid or overlong interpreter line"),
+    ],
+)
+def test_acp_unsupported_or_invalid_shebang_reports_actionable_runtime_failure(
+    tmp_path, monkeypatch, shebang, expected_reason
+):
+    _, trusted, _ = _acp_script_fixture(tmp_path, monkeypatch, shebang)
+    node = trusted / "node"
+    node.write_text("#!/bin/sh\nexit 1\n")
+    node.chmod(0o700)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert expected_reason in row["detail"]
+    assert not any(row["id"].endswith(".unavailable") for row in doc["checks"])
+
+
+@pytest.mark.parametrize("interpreter_exists", [False, True])
+def test_acp_absolute_shebang_interpreter_is_checked(tmp_path, monkeypatch, interpreter_exists):
+    interpreter = tmp_path / "runtime"
+    if interpreter_exists:
+        interpreter.write_text("#!/bin/sh\nexit 1\n")
+        interpreter.chmod(0o700)
+    _acp_script_fixture(tmp_path, monkeypatch, f"#!{interpreter}")
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == (rd.LEVEL_OK if interpreter_exists else rd.LEVEL_BLOCKED)
+    if not interpreter_exists:
+        assert "/runtime'" in row["detail"]
+
+
+def test_acp_unreadable_adapter_reports_runtime_permissions_remedy(tmp_path, monkeypatch):
+    import notebook_intelligence.acp_runtime as runtime
+
+    _, _, adapter = _acp_script_fixture(tmp_path, monkeypatch)
+    original_open = runtime.os.open
+
+    def deny_adapter(path, *args, **kwargs):
+        if str(path) == str(adapter):
+            raise PermissionError("fixture denies reading")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime.os, "open", deny_adapter)
+    doc = rd.run_readiness(_config(), _manager(mode="acp"))
+    row = _by_id(doc)["acp.runtime"]
+    assert row["level"] == rd.LEVEL_BLOCKED
+    assert "read permissions" in row["detail"]
+    assert not any(row["id"].endswith(".unavailable") for row in doc["checks"])
 
 
 # ---------------------------------------------------------------------------

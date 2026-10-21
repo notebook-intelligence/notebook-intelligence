@@ -2526,7 +2526,7 @@ class AcpSessionsListHandler(APIHandler):
             return
         try:
             # list_sessions may cold-start the agent subprocess (up to a
-            # minute through npx); keep the IO loop free while it does.
+            # minute to initialize); keep the IO loop free while it does.
             loop = asyncio.get_event_loop()
             sessions, error = await loop.run_in_executor(
                 None, participant.list_sessions

@@ -536,64 +536,75 @@ def _claude_rows(nbi_config: Any, pool: concurrent.futures.ThreadPoolExecutor) -
 
 def _acp_rows(nbi_config: Any) -> list:
     from notebook_intelligence.acp_registry import (
+        acp_adapter_path,
         resolve_acp_agent,
         resolve_acp_agent_command,
     )
+    from notebook_intelligence.acp_runtime import validate_acp_adapter_runtime
+    from notebook_intelligence.util import get_jupyter_root_dir
 
     rows = []
     settings = nbi_config.acp_settings or {}
     spec = resolve_acp_agent(settings.get("agent"))
-    command = resolve_acp_agent_command(spec)
-
-    rows.append(
-        _row(
-            "acp.agent",
-            "acp",
-            LEVEL_OK,
-            "ACP agent",
-            f"{spec.label}, launched as: {' '.join(command)}",
+    try:
+        # Launch and readiness share the same absolute executable resolution.
+        # In particular, neither accepts a command relative to the server cwd.
+        workspace_root = get_jupyter_root_dir()
+        command = resolve_acp_agent_command(spec, workspace_root=workspace_root)
+        env_path = (
+            os.environ.get("PATH", os.defpath)
+            if "NBI_ACP_AGENT_COMMAND" in os.environ
+            else acp_adapter_path(workspace_root)
         )
-    )
-
-    # Whatever argv[0] is, it has to exist and be executable. Special-casing
-    # the literal "npx" would let an NBI_ACP_AGENT_COMMAND override point at a
-    # nonexistent binary and still report Ready.
-    if command:
-        binary = command[0]
-        from shutil import which
-
-        resolved = which(binary) if not os.path.sep in binary else (
-            binary if os.access(binary, os.X_OK) else None
+        validate_acp_adapter_runtime(
+            command, env_path=env_path, cwd=getattr(nbi_config, "nbi_user_dir", None),
+            workspace_root=workspace_root if "NBI_ACP_AGENT_COMMAND" not in os.environ else None,
         )
-        if resolved is None:
-            hint = (
-                "The default adapter is an npm package, so this usually means "
-                "Node.js is not installed in the environment running "
-                "JupyterLab. "
-                if binary == "npx"
-                else ""
+    except (ValueError, OSError, RuntimeError) as exc:
+        rows.append(
+            _row(
+                "acp.agent",
+                "acp",
+                LEVEL_OK,
+                "ACP agent",
+                spec.label,
             )
-            rows.append(
-                _row(
-                    "acp.runtime",
-                    "acp",
-                    LEVEL_BLOCKED,
-                    "Adapter runtime",
-                    f"'{binary}' was not found or is not executable.",
-                    hint + "Install it, or set NBI_ACP_AGENT_COMMAND to a "
-                    "command that does exist.",
-                )
+        )
+        rows.append(
+            _row(
+                "acp.runtime",
+                "acp",
+                LEVEL_BLOCKED,
+                "Adapter runtime",
+                str(exc),
+                f"Preinstall the pinned adapter package {spec.package} in a "
+                "trusted location outside the workspace and put its absolute "
+                "executable directory on PATH, "
+                "or set NBI_ACP_AGENT_COMMAND to the absolute path of an "
+                "installed adapter executable. Install its required interpreter "
+                "on the adapter PATH; default discovery excludes workspace directories. "
+                "Do not use a package runner such as npx. Relative commands are not supported.",
             )
-        else:
-            rows.append(
-                _row(
-                    "acp.runtime",
-                    "acp",
-                    LEVEL_OK,
-                    "Adapter runtime",
-                    f"'{binary}' is available.",
-                )
+        )
+    else:
+        rows.append(
+            _row(
+                "acp.agent",
+                "acp",
+                LEVEL_OK,
+                "ACP agent",
+                f"{spec.label}, launched as: {' '.join(command)}",
             )
+        )
+        rows.append(
+            _row(
+                "acp.runtime",
+                "acp",
+                LEVEL_OK,
+                "Adapter runtime",
+                f"'{command[0]}' and its declared interpreter are available.",
+            )
+        )
 
     source = _credential_source(settings.get("api_key"), spec.api_key_env)
     if source:

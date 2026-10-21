@@ -43,7 +43,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 
 - Python 3.10+
 - JupyterLab 4.x
-- Node.js — required for [Claude mode](#claude-mode) (the Claude Code CLI), for [ACP agent mode](#acp-agent-mode), which launches its adapter with `npx` on every start, and for MCP servers that launch via `npx`.
+- Node.js — required for [Claude mode](#claude-mode) (the Claude Code CLI), for the preinstalled `codex-acp` adapter used by [ACP agent mode](#acp-agent-mode), and for MCP servers that launch via `npx`. ACP mode requires a preinstalled adapter in a trusted location; NBI does not download it at startup.
 - A fresh virtualenv or conda env is recommended so NBI doesn't conflict with system Python.
 
 ## Quick start
@@ -292,7 +292,9 @@ Per-user preferences (default on for the cell-output features) live in `config.j
 
 Inline chat calls the Anthropic API directly while the other Claude modes go through the Claude Code CLI, so a deployment can need a different model id for each. It uses `inline_chat_model`, falling back to `chat_model` when that is unset. `NBI_CLAUDE_CHAT_MODEL` therefore governs both surfaces: while it is set, a stored `inline_chat_model` is ignored and its control is disabled. Set `NBI_CLAUDE_INLINE_CHAT_MODEL` as well to pin inline chat to a different model — it takes precedence and re-enables nothing, so both surfaces stay administrator-controlled.
 
-`NBI_ACP_AGENT_COMMAND` (not a settings lock) overrides the adapter command NBI launches for the selected ACP agent type; the value is shell-split. For Codex, NBI appends its `-c` approval and sandbox options to that command, so a replacement must pass them through to codex-acp. Leave it unset to use the agent's registered default command.
+`NBI_ACP_AGENT_COMMAND` (not a settings lock) selects an installed adapter by absolute executable path, for example `/opt/nbi/acp/bin/codex-acp`; the value is shell-split, so quote paths containing spaces. Point it at the installed adapter itself, not `npx`, `npm exec`, `pnpm dlx`, `bunx`, or an `env` wrapper: making a package runner's path absolute does not prevent it from selecting code from a project. For Codex, the adapter must honor the `-c` approval and sandbox options NBI appends. An override is an administrator trust decision covering the command, its runtime and packages, inherited `PATH`, and their parent directories.
+
+Leave the override unset to discover a preinstalled `codex-acp` in an absolute server `PATH` directory outside the Jupyter workspace. Empty or whitespace-only values are errors; use `unset NBI_ACP_AGENT_COMMAND` in a POSIX shell to restore default discovery. NBI follows symlinks before launching it; installations using a shim that depends on the name `codex-acp` need an explicit absolute path to that trusted shim. Default startup removes workspace directories from the `PATH` inherited by the agent and its commands, which can exclude a project's `.venv/bin`; an explicit override retains the full server `PATH`. Install the tested `@zed-industries/codex-acp@0.16.0` and maintain that version yourself: NBI does not verify or update versions for either discovery method. See the [adapter installation and migration guidance](docs/admin-guide.md#gating-the-experimental-acp-agent-378) for a concrete install command, home-directory workspace layouts, and the explicit adapter-path requirement for Windows with Python 3.10 or 3.11.
 
 Provider IDs: `github-copilot`, `openai-compatible`, `litellm-compatible`, `ollama`, `none`. The `*_MODEL_ID` value is whatever the chosen provider exposes (e.g. `gpt-4o`, `llama3:latest`). Claude model IDs are the literal IDs from the Anthropic API (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`); empty string = "Default (recommended)"; `NBI_CLAUDE_INLINE_COMPLETION_MODEL` also accepts `none` (no inline completion in Claude mode) or `inherit` (use the General-tab Auto-complete model).
 
@@ -470,7 +472,7 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 
 NBI Settings opens on a **Status** card that answers one question: is this deployment configured to work, and if not, which specific piece is missing? Each check reports `ok`, `warn`, or `blocked`, and anything that is not `ok` carries the next action rather than just the failure ("the claude CLI was not found" plus "install it, or set `NBI_CLAUDE_CLI_PATH` and restart").
 
-It runs on open and costs nothing: it resolves your provider and model, checks the model list is reachable and that your selected model is one the endpoint actually serves, and for the agent modes checks that the CLI answers `--version` and that credentials are present. A missing key is a warning rather than an error, because the Claude CLI and ACP agents can hold their own subscription logins that NBI cannot see.
+It runs on open and costs nothing: it resolves your provider and model, checks the model list is reachable and that your selected model is one the endpoint actually serves, checks the Claude CLI with `--version`, and checks ACP's adapter executable without running it. Both agent modes also check whether credentials are present. A missing key is a warning rather than an error, because the Claude CLI and ACP agents can hold their own subscription logins that NBI cannot see.
 
 **Test the endpoint** sends one short request to your configured model, after asking first. It is the only way to catch two failures nothing cheaper can see: a gateway that returns 200s but buffers instead of streaming, and a proxy that strips the `tools` field so agent mode silently never calls a tool. No model output is kept, so the result is safe to paste into a support ticket.
 
@@ -523,7 +525,7 @@ Full guide, including the span and event reference, the probe thresholds, worked
 
 ## Roadmap
 
-NBI 6.x is the current line. New features land in minor releases (6.1, 6.2, …); breaking changes are reserved for a major release and announced in the [changelog](CHANGELOG.md). 6.0 itself is not a breaking release: it marks Chatbook's arrival, and no traitlet, env var, REST route, or on-disk format was renamed or removed, so upgrading from 5.x needs no migration. Upgrading from 4.x? See the [5.0.0 migration note](CHANGELOG.md#migration-note) for the `fastmcp` → `mcp` dependency swap, the new path sandboxes, and the workspace-file-attach behavior change.
+NBI 6.x is the current line. New features land in minor releases (6.1, 6.2, …); breaking changes are reserved for a major release and announced in the [changelog](CHANGELOG.md). 6.0 marks Chatbook's arrival, and no traitlet, env var, REST route, or on-disk format was renamed or removed. Deployments using the experimental ACP mode must now preinstall its adapter; see the [migration guidance](docs/admin-guide.md#gating-the-experimental-acp-agent-378). Upgrading from 4.x? See the [5.0.0 migration note](CHANGELOG.md#migration-note) for the `fastmcp` → `mcp` dependency swap, the new path sandboxes, and the workspace-file-attach behavior change.
 
 ## License
 

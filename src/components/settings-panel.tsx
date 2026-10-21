@@ -2164,9 +2164,17 @@ function SettingsPanelComponentAcp(props: any) {
                 >
                   Agent Client Protocol
                 </a>
-                . Requires <code>npx</code> available on the server. ACP mode
-                and Claude mode are mutually exclusive: enabling one turns the
-                other off.
+                . Requires a preinstalled <code>codex-acp</code> adapter (
+                <code>@zed-industries/codex-acp@0.16.0</code>). See the{' '}
+                <a
+                  href="https://github.com/plmbr/notebook-intelligence/blob/main/docs/admin-guide.md#gating-the-experimental-acp-agent-378"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  administrator installation guide
+                </a>
+                . ACP mode and Claude mode are mutually exclusive: enabling one
+                turns the other off.
               </span>
             </div>
             <div className="model-config-section-row">

@@ -29,19 +29,19 @@ If your cells contain sensitive outputs (PHI, PII, secrets), clear them before i
 
 Hosts NBI may contact, depending on which features are enabled:
 
-| Host                                            | Purpose                                                                                                                                                                 |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.githubcopilot.com`                         | GitHub Copilot chat and inline completion                                                                                                                               |
-| `api.github.com`                                | GitHub Copilot device-flow login; managed-skills manifest fetches when hosted on github.com; skill imports                                                              |
-| `github.com`, `codeload.github.com`             | Skill tarball downloads (Import from GitHub and the managed-skills reconciler)                                                                                          |
-| `raw.githubusercontent.com`                     | Manifest fetches when `NBI_SKILLS_MANIFEST` points at a `raw.githubusercontent.com` URL                                                                                 |
-| `api.anthropic.com`                             | Anthropic API for Claude-mode inline chat and auto-complete; also the default destination of the Claude Code CLI                                                        |
-| `api.openai.com`                                | OpenAI-compatible provider (default Base URL)                                                                                                                           |
-| Your configured Base URL                        | OpenAI-compatible, LiteLLM-compatible, or Claude when pointed at a self-hosted endpoint                                                                                 |
-| `localhost:11434` (or your Ollama host)         | Ollama local model serving                                                                                                                                              |
-| `registry.npmjs.org` and configured npm mirrors | MCP servers configured to launch via `npx -y`, and ACP mode, which launches its adapter with `npx` on every agent start unless `NBI_ACP_AGENT_COMMAND` points elsewhere |
+| Host                                            | Purpose                                                                                                          |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `api.githubcopilot.com`                         | GitHub Copilot chat and inline completion                                                                        |
+| `api.github.com`                                | GitHub Copilot device-flow login; managed-skills manifest fetches when hosted on github.com; skill imports       |
+| `github.com`, `codeload.github.com`             | Skill tarball downloads (Import from GitHub and the managed-skills reconciler)                                   |
+| `raw.githubusercontent.com`                     | Manifest fetches when `NBI_SKILLS_MANIFEST` points at a `raw.githubusercontent.com` URL                          |
+| `api.anthropic.com`                             | Anthropic API for Claude-mode inline chat and auto-complete; also the default destination of the Claude Code CLI |
+| `api.openai.com`                                | OpenAI-compatible provider (default Base URL)                                                                    |
+| Your configured Base URL                        | OpenAI-compatible, LiteLLM-compatible, or Claude when pointed at a self-hosted endpoint                          |
+| `localhost:11434` (or your Ollama host)         | Ollama local model serving                                                                                       |
+| `registry.npmjs.org` and configured npm mirrors | MCP servers configured to launch via `npx -y`                                                                    |
 
-For the configurable destinations above (Base URLs, Ollama host, MCP `npx` packages), the destination is whatever you or your admin set. NBI itself starts no other network activity. In ACP mode the agent subprocess makes its own calls, which NBI neither proxies nor enumerates: the destinations there are the agent's to document, and blocking egress at the network layer is the only way to bound them from outside.
+For the configurable destinations above (Base URLs, Ollama host, MCP `npx` packages), the destination is whatever you or your admin set. NBI itself starts no other network activity. ACP uses a preinstalled adapter; NBI does not fetch it from npm at startup. In ACP mode the agent subprocess makes its own calls, which NBI neither proxies nor enumerates: the destinations there are the agent's to document, and blocking egress at the network layer is the only way to bound them from outside.
 
 For air-gapped or egress-restricted environments, see [`docs/admin-guide.md`](docs/admin-guide.md#air-gap-deployment).
 

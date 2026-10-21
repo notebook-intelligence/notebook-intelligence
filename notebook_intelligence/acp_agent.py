@@ -55,12 +55,14 @@ from notebook_intelligence.api import (
 from notebook_intelligence import perf
 from notebook_intelligence.acp_registry import (
     AcpAgentSpec,
+    acp_adapter_path,
     codex_approval_args,
     codex_auth_args,
     codex_model_args,
     resolve_acp_agent,
     resolve_acp_agent_command,
 )
+from notebook_intelligence.acp_runtime import validate_acp_adapter_runtime
 from notebook_intelligence.base_chat_participant import BaseChatParticipant
 from notebook_intelligence.claude_sessions import CONTROL_SLASH_COMMANDS, NBI_CONTEXT_PREFIX
 from notebook_intelligence.util import BIDI_CONTROL_CODEPOINTS, ThreadSafeWebSocketConnector, get_jupyter_root_dir
@@ -790,15 +792,18 @@ class AcpAgentClient:
         """The NBI MCP server config passed to every session create/load."""
         if self._force_safe_mode:
             return []
-        # Launched by file path rather than ``-m``: the agent starts this server
-        # outside its sandbox with the workspace as cwd, and ``-m`` puts the cwd
-        # first on sys.path, so a ``notebook_intelligence`` package the agent
-        # wrote into the workspace would run in place of this one.
+        # Launch by absolute file path: the adapter controls this server's cwd,
+        # and ``-m`` could import a workspace package instead of NBI's server.
         from notebook_intelligence import acp_mcp_server
+        # Pass the workspace explicitly instead of trusting the adapter's cwd.
         return [
             schema.McpServerStdio(
                 name="nbi", command=sys.executable,
-                args=[os.path.abspath(acp_mcp_server.__file__)], env=[],
+                args=[os.path.abspath(acp_mcp_server.__file__)],
+                env=[schema.EnvVariable(
+                    name=acp_mcp_server.WORKSPACE_ROOT_ENV,
+                    value=get_jupyter_root_dir() or "",
+                )],
             )
         ]
 
@@ -852,25 +857,28 @@ class AcpAgentClient:
         self._shutdown = asyncio.Event()
         workdir = get_jupyter_root_dir()
         spec = self.agent_spec
-        env = self._child_env(spec)
-        cmd = list(resolve_acp_agent_command(spec))
-        if spec.id == "codex":
-            # First, so they stay clear of the pins that follow.
-            cmd += codex_auth_args(spec.api_key_env if self._api_key(spec) else "")
-            cmd += codex_approval_args(
-                False
-                if self._force_safe_mode
-                else bool(self.acp_settings.get("full_access", False))
-            )
-            # acp_settings already folds in the OPENAI_BASE_URL /
-            # NBI_ACP_CHAT_MODEL env overrides (ACP_SETTINGS_OVERRIDES),
-            # so these -c flags are the single delivery path to codex.
-            cmd += codex_model_args(self.acp_settings)
-        log.info("Starting ACP agent (%s): %s", spec.id, " ".join(cmd))
         try:
+            env = self._child_env(spec)
+            cmd = resolve_acp_agent_command(spec, workspace_root=workdir)
+            launch_cwd = self._adapter_cwd()
+            validate_acp_adapter_runtime(
+                cmd, env_path=env.get("PATH", os.defpath), cwd=launch_cwd,
+                workspace_root=workdir if "NBI_ACP_AGENT_COMMAND" not in os.environ else None,
+            )
+            if spec.id == "codex":
+                # First, so they stay clear of the pins that follow.
+                cmd += codex_auth_args(spec.api_key_env if self._api_key(spec) else "")
+                cmd += codex_approval_args(
+                    False
+                    if self._force_safe_mode
+                    else bool(self.acp_settings.get("full_access", False))
+                )
+                # acp_settings folds in the environment overrides too.
+                cmd += codex_model_args(self.acp_settings)
+            log.info("Starting ACP agent (%s): %s", spec.id, " ".join(cmd))
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, cwd=workdir, env=env,
+                stderr=asyncio.subprocess.PIPE, cwd=launch_cwd, env=env,
             )
             self._stderr_task = asyncio.create_task(self._drain_stderr())
             self._client = _NbiAcpClient(self)
@@ -907,9 +915,26 @@ class AcpAgentClient:
         return (self.acp_settings.get("api_key") or "").strip() \
             or os.environ.get(spec.api_key_env, "").strip()
 
+    def _adapter_cwd(self) -> str:
+        """The directory the adapter process is started in.
+
+        Keep the process outside the workspace; session/new and session/load
+        receive the actual workspace explicitly. This directory can have a
+        shared ancestor, so cwd alone is not a package-resolution boundary.
+        resolve_acp_agent_command instead selects a preinstalled executable
+        by absolute path, without invoking npm at startup.
+        """
+        cwd = self._host.nbi_config.nbi_user_dir
+        os.makedirs(cwd, exist_ok=True)
+        return cwd
+
     def _child_env(self, spec: AcpAgentSpec) -> dict:
         env = {k: v for k, v in os.environ.items()
                if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")}
+        if "NBI_ACP_AGENT_COMMAND" not in os.environ:
+            # npm-installed adapters use /usr/bin/env node. Resolving the
+            # adapter alone must not leave its interpreter workspace-controlled.
+            env["PATH"] = acp_adapter_path(get_jupyter_root_dir())
         if spec.id == "codex":
             # Whatever the sign-in, so old copies do not outlive a switch away
             # from an API key.

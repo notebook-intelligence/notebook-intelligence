@@ -8,6 +8,12 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [Unreleased]
+
+### Fixed
+
+- **ACP startup no longer lets npm projects choose the adapter.** Starting an adapter through `npx` could execute a package planted in the workspace or a shared ancestor of the user's home before any approval prompt. ACP now launches a preinstalled `codex-acp` executable directly from an absolute server `PATH` directory, excluding workspace paths, aliases, and intermediate symlink hops from adapter discovery, interpreter checks, and the `PATH` inherited by agent commands. **Migration:** install the tested `@zed-industries/codex-acp@0.16.0` in a trusted location and maintain its version there; NBI does not verify versions found on `PATH` or through an override. `NBI_ACP_AGENT_COMMAND` must point to the installed adapter itself by absolute path, not `npx`, `npm exec`, `pnpm dlx`, `bunx`, or an `env` wrapper. An override preserves the executable's name for trusted shims and retains the full server `PATH`; it is an administrator trust decision covering the executable, its runtime and packages, and their parent directories. Readiness and startup use the same resolver, so relative, missing, malformed, and set-but-empty or whitespace-only commands are consistently blocked. Unset `NBI_ACP_AGENT_COMMAND` to restore default discovery; assigning an empty value does not reset it. The adapter starts in NBI's user directory, workspace sessions retain their explicit root, and the `nbi_workspace_root` MCP tool requires an explicit absolute root through an environment variable instead of falling back to the launch directory. See the [admin guidance](docs/admin-guide.md#gating-the-experimental-acp-agent-378).
+
 ## [6.0.0] - unreleased
 
 6.0.0 adds Chatbook, a notebook whose cells can be written in English and executed as generated code, together with its admin policy, its own kernel, and the context, mention, and ruleset plumbing around it. The rest of the release is hardening: the experimental ACP agent mode gets a tighter sandbox and better approval cards, and a long tail of chat, settings, MCP, and readiness fixes. The major version marks Chatbook's arrival rather than a compatibility break: no traitlet, env var, REST route, command id, or on-disk format was renamed or removed, `requires-python` is unchanged at `>=3.10`, and the supported JupyterLab range widened rather than narrowed. Upgrading needs no migration.

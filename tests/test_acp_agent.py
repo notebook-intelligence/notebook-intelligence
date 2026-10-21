@@ -12,6 +12,7 @@ import concurrent.futures
 import json
 import os
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,25 @@ from notebook_intelligence.acp_agent import (
     _nbi_status,
 )
 from notebook_intelligence.api import ChatResponse, ResponseStreamDataType
+
+
+@pytest.fixture(autouse=True)
+def installed_adapter(tmp_path, monkeypatch):
+    """Keep launch tests independent of host adapters and credentials."""
+    import notebook_intelligence.util as util
+
+    binary_dir = tmp_path / "trusted-bin"
+    binary_dir.mkdir()
+    adapter = binary_dir / "codex-acp"
+    adapter.write_text("#!/bin/sh\nexit 99\n")
+    adapter.chmod(0o700)
+    monkeypatch.setenv("PATH", str(binary_dir) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    workspace = tmp_path / "default-workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(util, "_jupyter_root_dir", str(workspace))
+    return adapter
 
 
 class FakeResponse(ChatResponse):
@@ -894,8 +914,7 @@ class TestClientFileSystemNotOffered:
 
         import notebook_intelligence.acp_agent as mod
 
-        # A missed patch must fail fast rather than launch a real agent.
-        monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", "nbi-test-must-not-spawn")
+        # The installed_adapter fixture exits immediately if a patch is missed.
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         captured = {}
 
@@ -1008,14 +1027,14 @@ class TestCodexKeyNotPersisted:
             monkeypatch.setenv("OPENAI_API_KEY", env_key)
         captured = self._launch(tmp_path, {"api_key": settings_key})
         codex_home = str(tmp_path / "codex-home")
-        assert (captured["cmd"][3:9] == self.AUTH_ARGS) is supplied
+        assert (captured["cmd"][1:7] == self.AUTH_ARGS) is supplied
         assert (captured["env"].get("CODEX_HOME") == codex_home) is supplied
 
     def test_auth_args_come_before_the_approval_pin(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         captured = self._launch(tmp_path, {})
-        assert captured["cmd"][3:9] == self.AUTH_ARGS
-        assert captured["cmd"][9:11] == ["-c", 'approval_policy="untrusted"']
+        assert captured["cmd"][1:7] == self.AUTH_ARGS
+        assert captured["cmd"][7:9] == ["-c", 'approval_policy="untrusted"']
 
     def test_saved_key_copies_left_by_earlier_versions_are_removed(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -1083,7 +1102,8 @@ class TestCodexKeyNotPersisted:
             captured = self._launch(tmp_path, {})
         finally:
             snapshots.chmod(0o755)
-        assert captured["cmd"][:3] == ["npx", "-y", "@zed-industries/codex-acp@0.16.0"]
+        assert os.path.isabs(captured["cmd"][0])
+        assert os.path.basename(captured["cmd"][0]) == "codex-acp"
         assert not (codex_home / "auth.json").exists()
         assert "Could not list old Codex shell snapshots" in caplog.text
 
@@ -1160,22 +1180,21 @@ class TestFullAccessLaunch:
         cmd = _captured_launch_cmd(mock_nbi_config)
         assert cmd[-4:] == self._FULL_ACCESS_PINS
 
-    def test_agent_command_override_keeps_the_pins(self, tmp_path, monkeypatch):
+    def test_agent_command_override_keeps_the_pins(self, tmp_path, monkeypatch, installed_adapter):
         """An admin-pinned adapter binary must not lose the approval and
         sandbox posture."""
-        monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", "/opt/codex-acp --verbose")
+        monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", f"{installed_adapter} --verbose")
         cmd = _captured_launch_cmd(SimpleNamespace(
             acp_settings={"enabled": True, "agent": "codex", "full_access": True},
             nbi_user_dir=str(tmp_path),
         ))
-        assert cmd[:2] == ["/opt/codex-acp", "--verbose"]
+        assert cmd[:2] == [str(installed_adapter), "--verbose"]
         assert cmd[-4:] == self._FULL_ACCESS_PINS
 
 
 class TestNbiMcpServerLaunch:
-    """Codex starts NBI's MCP server outside its sandbox with the workspace as
-    cwd, and full access lets the agent write that workspace, so nothing
-    written there may run in place of the server."""
+    """The adapter controls the MCP server cwd. Workspace files must never
+    shadow the server, regardless of which cwd the adapter supplies."""
 
     @staticmethod
     def _server():
@@ -1210,6 +1229,402 @@ class TestNbiMcpServerLaunch:
         assert "PLANTED" not in proc.stdout + proc.stderr
         reply = json.loads(proc.stdout.splitlines()[0])
         assert reply["result"]["serverInfo"]["name"] == "nbi"
+
+    def test_workspace_root_travels_in_the_server_env(self, monkeypatch, tmp_path):
+        import notebook_intelligence.acp_agent as mod
+        from notebook_intelligence import acp_mcp_server
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        server = self._server()
+
+        env = {e.name: e.value for e in server.env}
+        assert env[acp_mcp_server.WORKSPACE_ROOT_ENV] == str(workspace)
+
+    def test_nbi_workspace_root_answers_from_the_env_not_the_cwd(self, tmp_path):
+        """The adapter (and so this server) no longer runs in the workspace,
+        so the tool must not report whatever directory it happens to be in."""
+        from notebook_intelligence import acp_mcp_server
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        server = self._server()
+        env = dict(os.environ, **{acp_mcp_server.WORKSPACE_ROOT_ENV: "/srv/workspace"})
+        request = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "nbi_workspace_root", "arguments": {}},
+        })
+
+        proc = subprocess.run(
+            [server.command, *server.args],
+            input=request + "\n", cwd=elsewhere, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+
+        reply = json.loads(proc.stdout.splitlines()[0])
+        assert reply["result"]["content"][0]["text"] == "/srv/workspace"
+
+    @pytest.mark.parametrize("configured_root", [None, "", "relative/workspace"])
+    def test_workspace_root_does_not_fall_back_to_launch_directory(self, tmp_path, configured_root):
+        from notebook_intelligence import acp_mcp_server
+
+        launch_dir = tmp_path / "nbi-user-dir"
+        launch_dir.mkdir()
+        server = self._server()
+        env = dict(os.environ)
+        env.pop(acp_mcp_server.WORKSPACE_ROOT_ENV, None)
+        if configured_root is not None:
+            env[acp_mcp_server.WORKSPACE_ROOT_ENV] = configured_root
+        request = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "nbi_workspace_root", "arguments": {}},
+        })
+
+        proc = subprocess.run(
+            [server.command, *server.args],
+            input=request + "\n", cwd=launch_dir, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+
+        assert proc.returncode == 0
+        reply = json.loads(proc.stdout.splitlines()[0])
+        assert "result" not in reply
+        assert reply["error"]["code"] == -32603
+        assert "NBI_WORKSPACE_ROOT must be set to an absolute" in reply["error"]["message"]
+        assert str(launch_dir) not in proc.stdout
+
+
+class TestAdapterLaunchCwd:
+    """Startup must ignore npm projects even above the user's private home."""
+
+    @staticmethod
+    def _captured_launch(monkeypatch, tmp_path):
+        import notebook_intelligence.acp_agent as mod
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        user_dir = tmp_path / "nbi-user-dir"
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        host = SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(
+                acp_settings={"api_key": ""}, nbi_user_dir=str(user_dir)
+            ),
+        )
+        client = mod.AcpAgentClient(host)
+        captured = {}
+
+        async def fake_exec(*cmd, **kw):
+            captured["cmd"] = list(cmd)
+            captured["cwd"] = kw.get("cwd")
+            raise RuntimeError("test: launch captured, subprocess intentionally not started")
+
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", fake_exec)
+        asyncio.run(client._serve())
+        assert "cmd" in captured, "_serve returned before launching the adapter"
+        return captured, str(workspace), str(user_dir)
+
+    def test_adapter_starts_in_the_nbi_user_dir_not_the_workspace(self, monkeypatch, tmp_path):
+        captured, workspace, user_dir = self._captured_launch(monkeypatch, tmp_path)
+
+        assert captured["cwd"] == user_dir
+        assert os.path.realpath(captured["cwd"]) != os.path.realpath(workspace)
+        assert os.path.isdir(user_dir), "the launch cwd must exist before spawn"
+
+    def test_workspace_still_reaches_the_agent_as_the_session_cwd(self, monkeypatch, tmp_path):
+        """Moving the process cwd must not move the agent's workspace."""
+        import notebook_intelligence.acp_agent as mod
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(
+                acp_settings={}, nbi_user_dir=str(tmp_path / "nbi-user-dir")
+            ),
+        ))
+        calls = {}
+
+        class FakeConn:
+            async def new_session(self, **kw):
+                calls.update(kw)
+                return SimpleNamespace(session_id="s-1")
+
+        client._conn = FakeConn()
+        asyncio.run(client._new_session_coro())
+
+        assert calls["cwd"] == str(workspace)
+        assert client._session_id == "s-1"
+
+    @pytest.mark.parametrize("installed", [True, False])
+    def test_shared_ancestor_cannot_choose_the_adapter(
+        self, tmp_path, monkeypatch, installed_adapter, installed
+    ):
+        import notebook_intelligence.acp_agent as mod
+        from notebook_intelligence.acp_registry import ACP_AGENTS
+
+        package = ACP_AGENTS["codex"].package
+        name, _, version = package.rpartition("@")
+        bin_name = name.rpartition("/")[2]
+        workspace = tmp_path / "shared"
+        workspace.mkdir(mode=0o1777)
+        home = workspace / "private-home"
+        home.mkdir(mode=0o700)
+        user_dir = home / ".jupyter" / "nbi"
+        user_dir.mkdir(parents=True)
+        result = tmp_path / "adapter-result.json"
+        marker = tmp_path / "untrusted-adapter-ran"
+        planted = workspace / "node_modules" / name
+        planted.mkdir(parents=True)
+        (planted / "package.json").write_text(json.dumps({
+            "name": name, "version": version, "bin": {bin_name: "./adapter"},
+        }))
+        (planted / "adapter").write_text(
+            f"#!{sys.executable}\nfrom pathlib import Path\n"
+            f"Path({str(marker)!r}).touch()\n"
+        )
+        (planted / "adapter").chmod(0o755)
+        bin_dir = workspace / "node_modules" / ".bin"
+        bin_dir.mkdir()
+        (bin_dir / bin_name).symlink_to(planted / "adapter")
+        # No environment registry override: the malicious project config must
+        # be irrelevant because startup does not invoke npm at all.
+        (workspace / ".npmrc").write_text("registry=https://untrusted.invalid/\n")
+        fake_npx = installed_adapter.parent / "npx"
+        fake_npx.write_text((planted / "adapter").read_text())
+        fake_npx.chmod(0o755)
+        # Model the real npm shim's /usr/bin/env node shebang. A trusted
+        # adapter must not pick an interpreter from the workspace either.
+        planted_node = bin_dir / "node"
+        planted_node.write_text((planted / "adapter").read_text())
+        planted_node.chmod(0o755)
+        trusted_node = installed_adapter.parent / "node"
+        trusted_node.write_text(
+            f"#!{sys.executable}\nimport os, sys\n"
+            f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+        )
+        trusted_node.chmod(0o755)
+        if installed:
+            installed_adapter.write_text(
+                "#!/usr/bin/env node\nimport json, os, sys\nfrom pathlib import Path\n"
+                f"Path({str(result)!r}).write_text(json.dumps({{'cwd': os.getcwd(), 'args': sys.argv[1:]}}))\n"
+            )
+        else:
+            installed_adapter.unlink()
+        # Include the planted absolute PATH entry, not just npm's implicit
+        # search path. Discovery must skip the workspace even in this case.
+        monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + str(installed_adapter.parent))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(workspace)
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(user_dir)),
+        ))
+
+        class FakeConn:
+            async def initialize(self, **kw):
+                await asyncio.wait_for(client._proc.wait(), timeout=5)
+                raise RuntimeError("test: marker adapter exited before ACP initialization")
+
+        monkeypatch.setattr(mod.acp, "connect_to_agent", lambda *args: FakeConn())
+        asyncio.run(client._serve())
+        assert client._started.is_set()
+        assert not marker.exists()
+        if installed:
+            launch = json.loads(result.read_text())
+            assert launch["cwd"] == str(user_dir)
+            assert launch["args"] == ["-c", 'approval_policy="untrusted"']
+        else:
+            assert not result.exists()
+            assert "Install @zed-industries/codex-acp@0.16.0" in client._start_error
+
+    def test_relative_override_fails_before_spawning(self, tmp_path, monkeypatch, installed_adapter):
+        import notebook_intelligence.acp_agent as mod
+
+        monkeypatch.chdir(installed_adapter.parent)
+        monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", "./codex-acp")
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+
+        async def unexpected_spawn(*args, **kwargs):
+            pytest.fail("a relative override must not reach subprocess startup")
+
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", unexpected_spawn)
+        asyncio.run(client._serve())
+        assert client._started.is_set()
+        assert "absolute executable path" in client._start_error
+
+    @pytest.mark.parametrize("override", [False, True])
+    def test_child_path_filters_workspace_only_for_default_launch(
+        self, tmp_path, monkeypatch, installed_adapter, override
+    ):
+        import notebook_intelligence.acp_agent as mod
+
+        workspace = tmp_path / "workspace"
+        workspace_bin = workspace / ".venv" / "bin"
+        workspace_bin.mkdir(parents=True)
+        inherited_path = os.pathsep.join([str(workspace_bin), str(installed_adapter.parent)])
+        monkeypatch.setenv("PATH", inherited_path)
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        if override:
+            monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", str(installed_adapter))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+
+        env = client._child_env(client.agent_spec)
+
+        assert env["PATH"] == (inherited_path if override else str(installed_adapter.parent.resolve()))
+
+    def test_environment_failure_signals_start_and_tears_down(self, tmp_path, monkeypatch):
+        import notebook_intelligence.acp_agent as mod
+
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+
+        def broken_environment(spec):
+            raise ValueError("Workspace root cannot be inspected")
+
+        async def unexpected_spawn(*args, **kwargs):
+            pytest.fail("environment validation must finish before spawning")
+
+        monkeypatch.setattr(client, "_child_env", broken_environment)
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", unexpected_spawn)
+
+        asyncio.run(client._serve())
+
+        assert client._started.is_set()
+        assert "Workspace root cannot be inspected" in client._start_error
+        assert client._loop is None
+        assert client._proc is None
+
+    def test_missing_interpreter_fails_before_spawning(
+        self, tmp_path, monkeypatch, installed_adapter
+    ):
+        import notebook_intelligence.acp_agent as mod
+
+        installed_adapter.write_text("#!/usr/bin/env node\n")
+        monkeypatch.setenv("PATH", str(installed_adapter.parent))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+
+        async def unexpected_spawn(*args, **kwargs):
+            pytest.fail("missing interpreter must be diagnosed before spawning")
+
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", unexpected_spawn)
+        asyncio.run(client._serve())
+
+        assert client._started.is_set()
+        assert "node" in client._start_error
+        assert "PATH" in client._start_error
+        assert client._loop is None
+
+    @pytest.mark.parametrize("override", [False, True])
+    @pytest.mark.parametrize("interpreter_kind", ["absolute", "symlink"])
+    def test_workspace_interpreter_requires_explicit_override(
+        self, tmp_path, monkeypatch, installed_adapter, override, interpreter_kind
+    ):
+        import notebook_intelligence.acp_agent as mod
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        node = workspace / "node"
+        node.write_bytes(b"")
+        node.chmod(0o755)
+        if interpreter_kind == "absolute":
+            installed_adapter.write_text(f"#!{node}\n")
+        else:
+            (installed_adapter.parent / "node").symlink_to(node)
+            installed_adapter.write_text("#!/usr/bin/env node\n")
+        monkeypatch.setenv("PATH", str(installed_adapter.parent))
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        if override:
+            monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", str(installed_adapter))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+        captured = []
+
+        async def capture_launch(*args, **kwargs):
+            captured.append(args)
+            raise RuntimeError("fixture captured launch without executing")
+
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", capture_launch)
+        asyncio.run(client._serve())
+
+        assert bool(captured) is override
+        assert client._started.is_set()
+        if not override:
+            assert "workspace" in client._start_error.lower()
+        assert client._loop is None
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX env shebang startup fixture")
+    @pytest.mark.parametrize("trusted_node_available", [False, True])
+    def test_separator_in_resolved_path_cannot_launch_workspace_interpreter(
+        self, tmp_path, monkeypatch, installed_adapter, trusted_node_available
+    ):
+        import notebook_intelligence.acp_agent as mod
+
+        workspace = tmp_path / "workspace"
+        workspace_bin = workspace / "bin"
+        workspace_bin.mkdir(parents=True)
+        # This is one external directory on disk, but naïvely serializing its
+        # name into PATH would introduce the separate workspace/bin entry.
+        target = tmp_path / ("prefix" + os.pathsep + str(workspace_bin))
+        target.mkdir(parents=True)
+        alias = tmp_path / "trusted-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        unwanted = tmp_path / "workspace-interpreter-ran"
+        workspace_node = workspace_bin / "node"
+        workspace_node.write_text(
+            f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(unwanted)!r}).touch()\n"
+        )
+        workspace_node.chmod(0o755)
+        expected = tmp_path / "trusted-adapter-ran"
+        installed_adapter.write_text(
+            "#!/usr/bin/env node\nfrom pathlib import Path\n"
+            f"Path({str(expected)!r}).touch()\n"
+        )
+        if trusted_node_available:
+            trusted_node = installed_adapter.parent / "node"
+            trusted_node.write_text(
+                f"#!{sys.executable}\nimport os, sys\n"
+                f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+            )
+            trusted_node.chmod(0o755)
+        monkeypatch.setenv("PATH", str(alias) + os.pathsep + str(installed_adapter.parent))
+        monkeypatch.setattr(mod, "get_jupyter_root_dir", lambda: str(workspace))
+        client = mod.AcpAgentClient(SimpleNamespace(
+            websocket_connector=None,
+            nbi_config=SimpleNamespace(acp_settings={}, nbi_user_dir=str(tmp_path / "user")),
+        ))
+
+        class FakeConn:
+            async def initialize(self, **kwargs):
+                await asyncio.wait_for(client._proc.wait(), timeout=5)
+                raise RuntimeError("fixture adapter exited before initialization")
+
+        monkeypatch.setattr(mod.acp, "connect_to_agent", lambda *args: FakeConn())
+        assert client._child_env(client.agent_spec)["PATH"] == str(installed_adapter.parent.resolve())
+        asyncio.run(client._serve())
+
+        assert client._started.is_set()
+        assert not unwanted.exists()
+        assert expected.exists() is trusted_node_available
+        if not trusted_node_available:
+            assert "requires interpreter 'node'" in client._start_error
+            assert "missing or not executable on the adapter PATH" in client._start_error
 
 
 class TestAssembleQuery:

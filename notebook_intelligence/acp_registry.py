@@ -15,7 +15,12 @@ off the spec id in ``acp_agent`` rather than growing fields prematurely.
 
 import base64
 import os
+import shlex
+import shutil
+import stat
+from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 # Pinned in Phase 1 (the version the spike validated); revisit per release.
@@ -55,7 +60,8 @@ class AcpAgentSpec:
     id: str
     label: str
     description: str
-    package: str      # npx package spec that launches the ACP adapter
+    package: str      # pinned package to install before starting the adapter
+    executable: str   # preinstalled adapter binary, resolved before spawning
     icon_url: str
     api_key_env: str  # env var the agent reads its API key from
     auth_method: str  # preferred ACP auth method id when a key is present
@@ -67,6 +73,7 @@ ACP_AGENTS: dict[str, AcpAgentSpec] = {
         label="Codex",
         description="OpenAI Codex (via the Agent Client Protocol)",
         package=CODEX_ACP_PACKAGE,
+        executable="codex-acp",
         icon_url=CODEX_AGENT_ICON_URL,
         api_key_env="OPENAI_API_KEY",
         auth_method="openai-api-key",
@@ -81,18 +88,168 @@ def resolve_acp_agent(agent_id: Optional[str]) -> AcpAgentSpec:
     return ACP_AGENTS.get(agent_id or "", None) or ACP_AGENTS[DEFAULT_ACP_AGENT]
 
 
-def resolve_acp_agent_command(spec: AcpAgentSpec) -> list[str]:
-    """The command that launches the agent's ACP adapter.
+@dataclass(frozen=True)
+class _WorkspaceBoundary:
+    paths: tuple[Path, Path]
+    identity: tuple[int, int]
 
-    ``NBI_ACP_AGENT_COMMAND`` overrides (shell-split); otherwise run the
-    spec's pinned package via ``npx``. Kept separate from the Claude CLI
-    resolver because the adapters are npm packages, not binaries on PATH.
+    def external_target(self, path: Path) -> Optional[Path]:
+        """Resolve a path only when every traversal step stays outside the workspace.
+
+        Endpoint checks miss an external link that traverses a workspace link
+        on its way to an external target. Walk components and expand each link
+        before processing ``..``, checking identities as well as spellings to
+        catch case, Unicode, and mount aliases. This inspects the current link
+        chain; it does not lock the filesystem against concurrent changes.
+        """
+        if not path.is_absolute():
+            raise ValueError("ACP PATH entry is not absolute")
+        if any(path.is_relative_to(root) for root in self.paths):
+            return None
+        remaining = deque(path.parts[1:])
+        current = Path(path.anchor)
+        links = 0
+        while True:
+            if any(current.is_relative_to(root) for root in self.paths):
+                return None
+            info = current.lstat()
+            if not info.st_ino:
+                raise ValueError("ACP PATH entry has no stable filesystem identity")
+            if (info.st_dev, info.st_ino) == self.identity:
+                return None
+            # Windows junctions are reparse points rather than S_ISLNK links.
+            # readlink either expands them or fails closed for an unsupported
+            # reparse point; never silently follow one in a later stat call.
+            is_link = stat.S_ISLNK(info.st_mode) or bool(
+                getattr(info, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+            if is_link:
+                links += 1
+                if links > 40:
+                    raise ValueError("ACP PATH entry has too many symbolic links")
+                target = current.readlink()
+                if target.is_absolute():
+                    current = Path(target.anchor)
+                    remaining.extendleft(reversed(target.parts[1:]))
+                else:
+                    if target.anchor:
+                        raise ValueError("ACP symbolic link target is not fully qualified")
+                    current = current.parent
+                    remaining.extendleft(reversed(target.parts))
+                continue
+            if not remaining:
+                return current
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("ACP PATH entry traverses a non-directory")
+            component = remaining.popleft()
+            current = current.parent if component == ".." else current / component
+
+
+def _workspace_boundary(workspace_root: str) -> _WorkspaceBoundary:
+    """Require a known workspace before deciding that any default PATH is safe."""
+    try:
+        if not workspace_root:
+            raise ValueError("the workspace root is unset")
+        path = Path(os.path.abspath(workspace_root))
+        target = path.resolve(strict=True)
+        info = target.stat()
+        if not stat.S_ISDIR(info.st_mode) or not info.st_ino:
+            raise ValueError("the workspace root is not an identifiable directory")
+        return _WorkspaceBoundary((path, target), (info.st_dev, info.st_ino))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            "ACP workspace root must be an existing, inspectable directory before "
+            f"resolving a default adapter: {workspace_root!r}"
+        ) from exc
+
+
+def _adapter_directories(boundary: _WorkspaceBoundary) -> list[str]:
+    directories = []
+    for directory in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        try:
+            if not Path(directory).is_absolute():
+                continue
+            target = boundary.external_target(Path(directory))
+            # A symlink can resolve to a directory whose name contains the PATH
+            # separator. Serializing that target would create additional,
+            # unchecked search entries for the adapter's interpreter.
+            if target is not None and os.pathsep not in str(target) and target.is_dir():
+                directories.append(str(target))
+        except (OSError, RuntimeError, ValueError):
+            # Missing, malformed, unreadable, or looping entries cannot establish
+            # a trusted location. Keep looking so one bad entry cannot hide a
+            # later trusted installation.
+            continue
+    return directories
+
+
+def acp_adapter_path(workspace_root: str) -> str:
+    """PATH for default adapters and their interpreters, excluding workspace aliases."""
+    return os.pathsep.join(_adapter_directories(_workspace_boundary(workspace_root)))
+
+
+def validate_acp_executable_path(executable: str, workspace_root: str) -> None:
+    """Require a default adapter interpreter to stay outside the workspace.
+
+    Check every component and symbolic-link hop, including filesystem identity
+    aliases. Explicit administrator overrides do not use this default-launch
+    restriction.
     """
-    override = os.environ.get("NBI_ACP_AGENT_COMMAND", "").strip()
-    if override:
-        import shlex
-        return shlex.split(override)
-    return ["npx", "-y", spec.package]
+    try:
+        path = Path(executable)
+        if not path.is_absolute():
+            raise ValueError("the executable path is not absolute")
+        if _workspace_boundary(workspace_root).external_target(path) is None:
+            raise ValueError("the executable path or its target is in the workspace")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            "ACP executable must be an existing, inspectable absolute path outside "
+            f"the workspace: {executable!r}. Install the adapter and its interpreter "
+            "in a trusted location outside the workspace."
+        ) from exc
+
+
+def resolve_acp_agent_command(spec: AcpAgentSpec, *, workspace_root: Optional[str] = None) -> list[str]:
+    """Resolve a preinstalled adapter independently of the process cwd.
+
+    Never bootstrap with ``npx`` here: npm can select packages, project
+    configuration, and executable paths from untrusted ancestors even when
+    its cwd is a private directory. Installation and PATH are administrator
+    responsibilities; neither startup nor readiness installs a package.
+    """
+    override = os.environ.get("NBI_ACP_AGENT_COMMAND")
+    if override is not None:
+        command = shlex.split(override)
+        if not command or not Path(command[0]).is_absolute():
+            raise ValueError("NBI_ACP_AGENT_COMMAND must name an absolute executable path")
+        resolved = shutil.which(command[0])
+        if resolved is None:
+            raise FileNotFoundError(f"ACP adapter '{command[0]}' was not found or is not executable")
+        return [resolved, *command[1:]]
+
+    if workspace_root is None:
+        from notebook_intelligence.util import get_jupyter_root_dir
+        workspace_root = get_jupyter_root_dir()
+    boundary = _workspace_boundary(workspace_root)
+
+    # Check absolute candidates individually. On Windows, which(name, path=...)
+    # can prepend the current directory even when PATH contains only absolute
+    # entries. A candidate with a directory component bypasses that search.
+    for directory in _adapter_directories(boundary):
+        try:
+            resolved = shutil.which(os.path.join(directory, spec.executable))
+            if resolved is not None:
+                target = boundary.external_target(Path(resolved))
+                if target is not None:
+                    return [str(target)]
+        except (OSError, RuntimeError, ValueError):
+            continue
+    raise FileNotFoundError(
+        f"ACP adapter '{spec.executable}' was not found on an absolute PATH entry outside the workspace. "
+        f"Install {spec.package} in a trusted location, or set "
+        "NBI_ACP_AGENT_COMMAND to its absolute executable path."
+    )
 
 
 def codex_approval_args(full_access: bool) -> list[str]:
