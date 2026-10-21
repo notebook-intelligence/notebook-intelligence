@@ -129,6 +129,139 @@ def test_workspace_directory_linking_out_is_still_excluded(layout, monkeypatch):
         _resolve(workspace)
 
 
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_path_directory_cannot_traverse_workspace_link_to_external_target(
+    layout, monkeypatch, relative, nested
+):
+    workspace, trusted = layout
+    external = workspace.parent / "external-tools"
+    candidate_directory = external / "bin" if nested else external
+    candidate_directory.mkdir(parents=True)
+    _executable(candidate_directory / "codex-acp")
+    workspace_link = workspace / "tools-link"
+    workspace_link.symlink_to(
+        os.path.relpath(external, workspace) if relative else external,
+        target_is_directory=True,
+    )
+    entry = workspace.parent / "external-link"
+    entry.symlink_to(
+        os.path.relpath(workspace_link, entry.parent) if relative else workspace_link,
+        target_is_directory=True,
+    )
+    if nested:
+        entry /= "bin"
+    assert entry.resolve() == candidate_directory
+    monkeypatch.setenv("PATH", str(entry))
+    assert registry.acp_adapter_path(str(workspace)) == ""
+    with pytest.raises(FileNotFoundError, match="outside the workspace"):
+        _resolve(workspace)
+
+    # A rejected chain must not hide an independent trusted installation.
+    installed = _executable(trusted / "codex-acp")
+    monkeypatch.setenv("PATH", str(entry) + os.pathsep + str(trusted))
+    assert registry.acp_adapter_path(str(workspace)) == str(trusted.resolve())
+    assert _resolve(workspace) == [str(installed.resolve())]
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_adapter_cannot_traverse_workspace_link_to_external_target(
+    layout, monkeypatch, relative
+):
+    workspace, trusted = layout
+    external = _executable(trusted / "adapter-target")
+    workspace_link = workspace / "adapter-link"
+    workspace_link.symlink_to(
+        os.path.relpath(external, workspace) if relative else external
+    )
+    entry = trusted / "codex-acp"
+    entry.symlink_to(
+        os.path.relpath(workspace_link, trusted) if relative else workspace_link
+    )
+    assert entry.resolve() == external
+    with pytest.raises(FileNotFoundError, match="outside the workspace"):
+        _resolve(workspace)
+
+    # Explicit administrator overrides may deliberately trust this chain.
+    monkeypatch.setenv("NBI_ACP_AGENT_COMMAND", shlex.quote(str(entry)))
+    assert _resolve(workspace) == [str(entry)]
+
+
+def test_parent_traversal_cannot_erase_a_workspace_symlink_hop(layout, monkeypatch):
+    workspace, trusted = layout
+    _executable(trusted / "codex-acp")
+    link = workspace.parent / "workspace-link"
+    link.symlink_to(workspace, target_is_directory=True)
+    entry = link / ".." / trusted.name
+    assert entry.resolve() == trusted
+    monkeypatch.setenv("PATH", str(entry))
+    assert registry.acp_adapter_path(str(workspace)) == ""
+    with pytest.raises(FileNotFoundError):
+        _resolve(workspace)
+    with pytest.raises(ValueError, match="outside the workspace"):
+        registry.validate_acp_executable_path(str(entry / "codex-acp"), str(workspace))
+
+
+def test_trusted_parent_traversal_keeps_kernel_symlink_semantics(layout, monkeypatch):
+    workspace, trusted = layout
+    external = workspace.parent / "external-tools"
+    (external / "nested").mkdir(parents=True)
+    (external / "bin").mkdir()
+    installed = _executable(external / "bin" / "codex-acp")
+    link = trusted / "linked-directory"
+    link.symlink_to(external / "nested", target_is_directory=True)
+    entry = link / ".." / "bin"
+    monkeypatch.setenv("PATH", str(entry))
+    assert registry.acp_adapter_path(str(workspace)) == str(external / "bin")
+    assert _resolve(workspace) == [str(installed)]
+
+
+@pytest.mark.parametrize("use_env", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+def test_interpreter_preflight_rejects_intermediate_workspace_links(
+    layout, use_env, relative
+):
+    from notebook_intelligence.acp_runtime import validate_acp_adapter_runtime
+
+    workspace, trusted = layout
+    interpreter = _executable(trusted / "runtime")
+    workspace_link = workspace / "runtime-link"
+    workspace_link.symlink_to(
+        os.path.relpath(interpreter, workspace) if relative else interpreter
+    )
+    alias = trusted / "node"
+    alias.symlink_to(
+        os.path.relpath(workspace_link, trusted) if relative else workspace_link
+    )
+    assert alias.resolve() == interpreter
+    env = _executable(trusted / "env")
+    adapter = _executable(trusted / "codex-acp")
+    adapter.write_text(f"#!{env} node\n" if use_env else f"#!{alias}\n")
+    with pytest.raises(ValueError, match="outside the workspace"):
+        validate_acp_adapter_runtime(
+            [str(adapter)], env_path=str(trusted), workspace_root=str(workspace)
+        )
+    validate_acp_adapter_runtime([str(adapter)], env_path=str(trusted))
+
+
+def test_retargeted_workspace_link_never_becomes_a_default_candidate(layout, monkeypatch):
+    workspace, trusted = layout
+    first = _executable(trusted / "first-adapter")
+    second = _executable(trusted / "second-adapter")
+    workspace_link = workspace / "adapter-link"
+    workspace_link.symlink_to(first)
+    alias = trusted / "codex-acp"
+    alias.symlink_to(workspace_link)
+    for target in (first, second):
+        workspace_link.unlink()
+        workspace_link.symlink_to(target)
+        assert alias.resolve() == target
+        with pytest.raises(FileNotFoundError):
+            _resolve(workspace)
+        with pytest.raises(ValueError, match="outside the workspace"):
+            registry.validate_acp_executable_path(str(alias), str(workspace))
+
+
 @pytest.mark.parametrize("spelling", ["case", "unicode"])
 @pytest.mark.parametrize("linking_out", [False, True])
 def test_filesystem_aliases_of_workspace_remain_excluded(
@@ -182,6 +315,30 @@ def test_root_identity_alias_is_excluded_without_textual_or_symlink_match(
     assert registry.acp_adapter_path(str(workspace)) == ""
     with pytest.raises(FileNotFoundError):
         _resolve(workspace)
+
+
+def test_intermediate_workspace_identity_alias_is_excluded(layout, monkeypatch):
+    workspace, trusted = layout
+    installed = _executable(trusted / "codex-acp")
+    alias = workspace.parent / "identity-alias"
+    alias.mkdir()
+    (alias / "bin").symlink_to(trusted, target_is_directory=True)
+    entry = workspace.parent / "external-link"
+    entry.symlink_to(alias / "bin", target_is_directory=True)
+    assert entry.resolve() == trusted
+    root_info = workspace.stat()
+    original_stat = Path.stat
+
+    def aliased_stat(path, *args, **kwargs):
+        return root_info if path == alias else original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", aliased_stat)
+    monkeypatch.setenv("PATH", str(entry))
+    assert registry.acp_adapter_path(str(workspace)) == ""
+    with pytest.raises(FileNotFoundError):
+        _resolve(workspace)
+    with pytest.raises(ValueError, match="outside the workspace"):
+        registry.validate_acp_executable_path(str(entry / installed.name), str(workspace))
 
 
 def test_trusted_directory_and_adapter_symlinks_keep_resolved_targets(layout, monkeypatch):
@@ -325,14 +482,14 @@ def test_uninspectable_entries_do_not_hide_later_installation(
     broken.mkdir()
     broken_adapter = _executable(broken / "codex-acp")
     failing_path = broken if failure_at == "directory" else broken_adapter
-    original_resolve = Path.resolve
+    original_lstat = Path.lstat
 
-    def failing_resolve(path, *args, **kwargs):
+    def failing_lstat(path, *args, **kwargs):
         if path == failing_path:
             raise error_type("uninspectable fixture")
-        return original_resolve(path, *args, **kwargs)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "resolve", failing_resolve)
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
     monkeypatch.setenv("PATH", str(broken) + os.pathsep + str(trusted))
     assert _resolve(workspace) == [str(installed.resolve())]
     if failure_at == "directory":

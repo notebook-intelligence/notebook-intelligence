@@ -18,6 +18,7 @@ import os
 import shlex
 import shutil
 import stat
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -93,24 +94,56 @@ class _WorkspaceBoundary:
     identity: tuple[int, int]
 
     def external_target(self, path: Path) -> Optional[Path]:
-        """Resolve a path only when neither its spelling nor identity is in the workspace.
+        """Resolve a path only when every traversal step stays outside the workspace.
 
-        ``resolve`` does not normalize case or Unicode on every filesystem, and
-        a mount alias can name the same directory without using a symlink.
-        Compare each ancestor's filesystem identity as well as both path
-        spellings. Unknown identities fail closed; callers skip that entry.
+        Endpoint checks miss an external link that traverses a workspace link
+        on its way to an external target. Walk components and expand each link
+        before processing ``..``, checking identities as well as spellings to
+        catch case, Unicode, and mount aliases. This inspects the current link
+        chain; it does not lock the filesystem against concurrent changes.
         """
-        target = path.resolve(strict=True)
-        for candidate in (path, target):
-            if any(candidate.is_relative_to(root) for root in self.paths):
+        if not path.is_absolute():
+            raise ValueError("ACP PATH entry is not absolute")
+        if any(path.is_relative_to(root) for root in self.paths):
+            return None
+        remaining = deque(path.parts[1:])
+        current = Path(path.anchor)
+        links = 0
+        while True:
+            if any(current.is_relative_to(root) for root in self.paths):
                 return None
-            for ancestor in (candidate, *candidate.parents):
-                info = ancestor.stat()
-                if not info.st_ino:
-                    raise ValueError("ACP PATH entry has no stable filesystem identity")
-                if (info.st_dev, info.st_ino) == self.identity:
-                    return None
-        return target
+            info = current.lstat()
+            if not info.st_ino:
+                raise ValueError("ACP PATH entry has no stable filesystem identity")
+            if (info.st_dev, info.st_ino) == self.identity:
+                return None
+            # Windows junctions are reparse points rather than S_ISLNK links.
+            # readlink either expands them or fails closed for an unsupported
+            # reparse point; never silently follow one in a later stat call.
+            is_link = stat.S_ISLNK(info.st_mode) or bool(
+                getattr(info, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+            if is_link:
+                links += 1
+                if links > 40:
+                    raise ValueError("ACP PATH entry has too many symbolic links")
+                target = current.readlink()
+                if target.is_absolute():
+                    current = Path(target.anchor)
+                    remaining.extendleft(reversed(target.parts[1:]))
+                else:
+                    if target.anchor:
+                        raise ValueError("ACP symbolic link target is not fully qualified")
+                    current = current.parent
+                    remaining.extendleft(reversed(target.parts))
+                continue
+            if not remaining:
+                return current
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("ACP PATH entry traverses a non-directory")
+            component = remaining.popleft()
+            current = current.parent if component == ".." else current / component
 
 
 def _workspace_boundary(workspace_root: str) -> _WorkspaceBoundary:
@@ -137,7 +170,7 @@ def _adapter_directories(boundary: _WorkspaceBoundary) -> list[str]:
         try:
             if not Path(directory).is_absolute():
                 continue
-            target = boundary.external_target(Path(os.path.abspath(directory)))
+            target = boundary.external_target(Path(directory))
             # A symlink can resolve to a directory whose name contains the PATH
             # separator. Serializing that target would create additional,
             # unchecked search entries for the adapter's interpreter.
@@ -159,9 +192,9 @@ def acp_adapter_path(workspace_root: str) -> str:
 def validate_acp_executable_path(executable: str, workspace_root: str) -> None:
     """Require a default adapter interpreter to stay outside the workspace.
 
-    Check the original spelling as well as the resolved target, including
-    filesystem identity aliases. Explicit administrator overrides do not use
-    this default-launch restriction.
+    Check every component and symbolic-link hop, including filesystem identity
+    aliases. Explicit administrator overrides do not use this default-launch
+    restriction.
     """
     try:
         path = Path(executable)
@@ -207,7 +240,7 @@ def resolve_acp_agent_command(spec: AcpAgentSpec, *, workspace_root: Optional[st
         try:
             resolved = shutil.which(os.path.join(directory, spec.executable))
             if resolved is not None:
-                target = boundary.external_target(Path(os.path.abspath(resolved)))
+                target = boundary.external_target(Path(resolved))
                 if target is not None:
                     return [str(target)]
         except (OSError, RuntimeError, ValueError):
