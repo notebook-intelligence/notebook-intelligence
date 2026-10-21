@@ -31,7 +31,7 @@ from notebook_intelligence.api import ChatResponse, ResponseStreamDataType
 
 @pytest.fixture(autouse=True)
 def installed_adapter(tmp_path, monkeypatch):
-    """Keep launch unit tests independent of adapters installed on the host."""
+    """Keep launch tests independent of host adapters and credentials."""
     import notebook_intelligence.util as util
 
     binary_dir = tmp_path / "trusted-bin"
@@ -41,6 +41,7 @@ def installed_adapter(tmp_path, monkeypatch):
     adapter.chmod(0o700)
     monkeypatch.setenv("PATH", str(binary_dir) + os.pathsep + os.environ.get("PATH", ""))
     monkeypatch.delenv("NBI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     workspace = tmp_path / "default-workspace"
     workspace.mkdir()
     monkeypatch.setattr(util, "_jupyter_root_dir", str(workspace))
