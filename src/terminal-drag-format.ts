@@ -5,8 +5,26 @@
 // that jsdom doesn't provide, like DragEvent).
 
 import { shellSingleQuote } from './shell-utils';
+import { isControlOrBidiCodepoint } from './text-codepoints';
 
 export type DragMode = 'mention' | 'raw';
+
+/**
+ * Detect characters that terminal input can interpret as keys or control
+ * sequences, plus Unicode line/paragraph separators and bidirectional
+ * formatting controls that can make a path look misleading. Shell quoting
+ * does not protect every program that may be running in a terminal.
+ * This check does not escape shell syntax; mention mode still emits bare
+ * Claude Code @-mentions, while raw mode quotes paths for POSIX shells.
+ */
+export function hasTerminalControlCharacters(path: string): boolean {
+  for (let i = 0; i < path.length; i++) {
+    if (isControlOrBidiCodepoint(path.charCodeAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Format a list of paths for injection per mode. @-mention prefixes each

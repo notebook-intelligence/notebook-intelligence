@@ -8,6 +8,12 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [Unreleased]
+
+### Fixed
+
+- **Terminal drops reject filenames with control or misleading formatting characters.** File-browser drops and uploaded paths containing line breaks, terminal control characters, Unicode line/paragraph separators, or bidirectional formatting controls are skipped with a warning in both @-mention and raw modes. Other paths in the same drop still paste normally.
+
 ## [6.0.0] - unreleased
 
 6.0.0 adds Chatbook, a notebook whose cells can be written in English and executed as generated code, together with its admin policy, its own kernel, and the context, mention, and ruleset plumbing around it. The rest of the release is hardening: the experimental ACP agent mode gets a tighter sandbox and better approval cards, and a long tail of chat, settings, MCP, and readiness fixes. The major version marks Chatbook's arrival rather than a compatibility break: no traitlet, env var, REST route, command id, or on-disk format was renamed or removed, `requires-python` is unchanged at `>=3.10`, and the supported JupyterLab range widened rather than narrowed. Upgrading needs no migration.

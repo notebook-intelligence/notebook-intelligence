@@ -705,6 +705,8 @@ Or via env: `NBI_TERMINAL_DRAG_DROP_POLICY=force-off`.
 
 Force-off hides the per-terminal drag-drop toolbar toggle and rejects upload-staging POSTs from a terminal context. Drag-drop is **enabled by default**; flip it off in regulated tenants where the staging file write or the resulting `@`-mention path is undesirable.
 
+In both @-mention and raw modes, dropped paths containing line breaks, terminal control characters, Unicode line/paragraph separators, or bidirectional embedding, override, or isolate controls are skipped with a warning. The Unicode formatting controls can make the displayed path misleading even when the terminal does not interpret them as keys. This applies to file-browser paths and paths returned after uploading files. Other paths in the same drop are still inserted; rejected filenames must be renamed before dropping them. Use @-mention mode for an agent that accepts `@` paths, and raw mode for shell-quoted paths in a POSIX shell.
+
 ### Disabling the open-files refresh watcher
 
 ```python

@@ -10,6 +10,7 @@ import { NotebookPanel } from '@jupyterlab/notebook';
 import stripAnsi from 'strip-ansi';
 
 import { shellSingleQuote } from './shell-utils';
+import { isControlOrBidiCodepoint } from './text-codepoints';
 
 const tiktoken_encoding = encoding_for_model('gpt-4o');
 
@@ -277,25 +278,16 @@ function isDisallowedUriCodepoint(code: number): boolean {
   // can visually impersonate the URI in the title, so reject them too.
   // Ranges intentionally mirror the Python ``_DISALLOWED_URI_CODEPOINTS``
   // set so a URI rejected on one side is rejected on the other.
-  if (code <= 0x1f || code === 0x7f) {
+  if (isControlOrBidiCodepoint(code)) {
     return true;
   }
-  if (code >= 0x80 && code <= 0x9f) {
-    return true;
-  }
-  if (code === 0x0085 || code === 0x00a0) {
-    return true;
-  }
-  if (code === 0x2028 || code === 0x2029 || code === 0xfeff) {
+  if (code === 0x00a0 || code === 0xfeff) {
     return true;
   }
   if (code >= 0x200b && code <= 0x200f) {
     return true;
   }
-  if (code >= 0x202a && code <= 0x202e) {
-    return true;
-  }
-  if (code >= 0x2066 && code <= 0x206f) {
+  if (code >= 0x206a && code <= 0x206f) {
     return true;
   }
   return false;

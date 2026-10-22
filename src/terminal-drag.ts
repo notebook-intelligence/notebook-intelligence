@@ -4,7 +4,12 @@ import { Notification } from '@jupyterlab/apputils';
 import { Widget } from '@lumino/widgets';
 
 import { NBIAPI } from './api';
-import { DragMode, formatForMode, invertMode } from './terminal-drag-format';
+import {
+  DragMode,
+  formatForMode,
+  hasTerminalControlCharacters,
+  invertMode
+} from './terminal-drag-format';
 
 export type { DragMode } from './terminal-drag-format';
 export { formatForMode, invertMode } from './terminal-drag-format';
@@ -108,8 +113,26 @@ function setupTerminal(
     if (widget.isDisposed) {
       return;
     }
+    // File-browser paths and uploaded server paths can carry terminal keys
+    // or misleading Unicode formatting. Reject paths at this shared boundary;
+    // removing individual characters would refer to a different file.
+    const controlFreePaths = paths.filter(
+      path => !hasTerminalControlCharacters(path)
+    );
+    const rejectedCount = paths.length - controlFreePaths.length;
+    if (rejectedCount > 0) {
+      // Keep untrusted filenames out of the notification too.
+      Notification.warning(
+        `Terminal drop skipped ${rejectedCount} path${
+          rejectedCount === 1 ? '' : 's'
+        } containing control or invisible formatting characters. Rename them before dropping.`
+      );
+    }
+    if (controlFreePaths.length === 0) {
+      return;
+    }
     const effectiveMode = invertMode(state.mode, shiftHeld);
-    widget.content.paste(`${formatForMode(paths, effectiveMode)} `);
+    widget.content.paste(`${formatForMode(controlFreePaths, effectiveMode)} `);
     // Activate the outer MainAreaWidget so the terminal also gets raised
     // if it's a background tab in a split. Otherwise the next keystroke
     // goes to the file-browser (Enter would "open the selected file") or
