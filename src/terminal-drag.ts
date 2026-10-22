@@ -114,7 +114,7 @@ function setupTerminal(
       return;
     }
     // File-browser paths and uploaded server paths can carry terminal keys
-    // in their filenames. Reject whole paths at this shared paste boundary;
+    // or misleading Unicode formatting. Reject paths at this shared boundary;
     // removing individual characters would refer to a different file.
     const controlFreePaths = paths.filter(
       path => !hasTerminalControlCharacters(path)
@@ -125,7 +125,7 @@ function setupTerminal(
       Notification.warning(
         `Terminal drop skipped ${rejectedCount} path${
           rejectedCount === 1 ? '' : 's'
-        } containing control characters. Rename them before dropping.`
+        } containing control or invisible formatting characters. Rename them before dropping.`
       );
     }
     if (controlFreePaths.length === 0) {

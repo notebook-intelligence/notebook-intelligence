@@ -39,10 +39,16 @@ describe('formatForMode', () => {
   });
 });
 
+const unicodeFormattingCodePoints = [
+  0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067,
+  0x2068, 0x2069
+];
+
 describe('hasTerminalControlCharacters', () => {
   const controlCodePoints = [
     ...Array.from({ length: 0x20 }, (_, index) => index),
-    ...Array.from({ length: 0x21 }, (_, index) => 0x7f + index)
+    ...Array.from({ length: 0x21 }, (_, index) => 0x7f + index),
+    ...unicodeFormattingCodePoints
   ].map(codePoint => ({
     label: `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`,
     character: String.fromCharCode(codePoint)
@@ -67,7 +73,10 @@ describe('hasTerminalControlCharacters', () => {
     '/tmp/with space.txt',
     "/tmp/it's.txt",
     '/tmp/données/ファイル.csv',
-    '/tmp/~\u00a0.txt'
+    '/tmp/~\u00a0.txt',
+    '/tmp/العربية/עברית.txt',
+    '/tmp/👩\u200d💻.txt',
+    '/tmp/\u2027\u202f\u2065\u206a.txt'
   ])('accepts an ordinary path %p', path => {
     expect(hasTerminalControlCharacters(path)).toBe(false);
   });
@@ -271,7 +280,7 @@ describe('attachTerminalDragDrop', () => {
       expect(env.activate).not.toHaveBeenCalled();
       expect(Notification.warning).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledWith(
-        'Terminal drop skipped 1 path containing control characters. Rename them before dropping.'
+        'Terminal drop skipped 1 path containing control or invisible formatting characters. Rename them before dropping.'
       );
     }
   );
@@ -298,7 +307,7 @@ describe('attachTerminalDragDrop', () => {
       expect(env.activate).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledWith(
-        'Terminal drop skipped 2 paths containing control characters. Rename them before dropping.'
+        'Terminal drop skipped 2 paths containing control or invisible formatting characters. Rename them before dropping.'
       );
 
       // Shift affects only this drop; it must not change the toolbar's mode.
@@ -321,7 +330,7 @@ describe('attachTerminalDragDrop', () => {
       expect(env.activate).not.toHaveBeenCalled();
       expect(Notification.warning).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledWith(
-        'Terminal drop skipped 2 paths containing control characters. Rename them before dropping.'
+        'Terminal drop skipped 2 paths containing control or invisible formatting characters. Rename them before dropping.'
       );
     }
   );
@@ -361,7 +370,7 @@ describe('attachTerminalDragDrop', () => {
       expect(env.activate).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledWith(
-        'Terminal drop skipped 2 paths containing control characters. Rename them before dropping.'
+        'Terminal drop skipped 2 paths containing control or invisible formatting characters. Rename them before dropping.'
       );
       expect(Notification.error).not.toHaveBeenCalled();
     }
@@ -388,8 +397,72 @@ describe('attachTerminalDragDrop', () => {
       expect(env.activate).not.toHaveBeenCalled();
       expect(Notification.warning).toHaveBeenCalledTimes(1);
       expect(Notification.warning).toHaveBeenCalledWith(
-        'Terminal drop skipped 1 path containing control characters. Rename them before dropping.'
+        'Terminal drop skipped 1 path containing control or invisible formatting characters. Rename them before dropping.'
       );
+    }
+  );
+
+  const unicodeDropCases = modes.flatMap(mode =>
+    unicodeFormattingCodePoints.map(code => ({
+      ...mode,
+      label: `U+${code.toString(16).toUpperCase()}`,
+      character: String.fromCharCode(code)
+    }))
+  );
+
+  it.each(unicodeDropCases)(
+    'skips $label in a file-browser drop in $name mode',
+    ({ toolbarRaw, shiftHeld, raw, character }) => {
+      const env = wiredEnv(toolbarRaw);
+      const rejected = `/tmp/private${character}name.txt`;
+
+      dispatchLmDrop(
+        env.host,
+        [acceptedPaths[0], rejected, ...acceptedPaths.slice(1)],
+        shiftHeld
+      );
+
+      expect(env.paste).toHaveBeenCalledTimes(1);
+      expect(env.paste).toHaveBeenCalledWith(raw ? rawText : mentionText);
+      expect(env.activate).toHaveBeenCalledTimes(1);
+      expect(Notification.warning).toHaveBeenCalledTimes(1);
+      expect(Notification.warning).toHaveBeenCalledWith(
+        'Terminal drop skipped 1 path containing control or invisible formatting characters. Rename them before dropping.'
+      );
+      expect(Notification.error).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(unicodeDropCases)(
+    'skips $label in uploaded server paths in $name mode',
+    async ({ toolbarRaw, shiftHeld, raw, character }) => {
+      const env = wiredEnv(toolbarRaw);
+      const serverPaths = [
+        acceptedPaths[0],
+        `/tmp/private${character}name.txt`,
+        ...acceptedPaths.slice(1)
+      ];
+      const files = serverPaths.map(
+        (_, index) => new File(['contents'], `local-${index}.txt`)
+      );
+      const uploads = serverPaths.map((serverPath, index) =>
+        Promise.resolve({ serverPath, filename: files[index].name })
+      );
+      const uploadFile = jest.spyOn(NBIAPI, 'uploadFile');
+      uploads.forEach(upload => uploadFile.mockReturnValueOnce(upload));
+
+      dispatchNativeDrop(env.host, files, shiftHeld);
+      await Promise.all(uploads);
+
+      expect(uploadFile).toHaveBeenCalledTimes(files.length);
+      expect(env.paste).toHaveBeenCalledTimes(1);
+      expect(env.paste).toHaveBeenCalledWith(raw ? rawText : mentionText);
+      expect(env.activate).toHaveBeenCalledTimes(1);
+      expect(Notification.warning).toHaveBeenCalledTimes(1);
+      expect(Notification.warning).toHaveBeenCalledWith(
+        'Terminal drop skipped 1 path containing control or invisible formatting characters. Rename them before dropping.'
+      );
+      expect(Notification.error).not.toHaveBeenCalled();
     }
   );
 
@@ -422,7 +495,7 @@ describe('attachTerminalDragDrop', () => {
     );
     expect(Notification.warning).toHaveBeenCalledTimes(1);
     expect(Notification.warning).toHaveBeenCalledWith(
-      'Terminal drop skipped 1 path containing control characters. Rename them before dropping.'
+      'Terminal drop skipped 1 path containing control or invisible formatting characters. Rename them before dropping.'
     );
   });
 

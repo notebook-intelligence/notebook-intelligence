@@ -12,7 +12,7 @@ For each release we list user-facing changes grouped as **Added**, **Changed**, 
 
 ### Fixed
 
-- **Terminal drops reject filenames with control characters.** File-browser drops and uploaded paths containing line breaks or terminal control characters are skipped with a warning in both @-mention and raw modes. Other paths in the same drop still paste normally.
+- **Terminal drops reject filenames with control or misleading formatting characters.** File-browser drops and uploaded paths containing line breaks, terminal control characters, Unicode line/paragraph separators, or bidirectional formatting controls are skipped with a warning in both @-mention and raw modes. Other paths in the same drop still paste normally.
 
 ## [6.0.0] - unreleased
 
