@@ -1,11 +1,14 @@
 [build-system]
 # jupyterlab 4.6.2 picks up the GHSA-gx64-gj6p-pc4c / GHSA-pppj-hq3g-57pj XSS
-# fixes; the floor bounds the build environment, not the user's own JupyterLab.
+# fixes and 4.6.4 the GHSA-3325-v43h-43rv extension-uninstall argument
+# injection plus the GHSA-3jqq-pw4j-pqcj, GHSA-6966-vjj6-99xv and
+# GHSA-jwrc-gm9j-263p XSS/trust-prompt fixes; the floor bounds the build
+# environment, not the user's own JupyterLab.
 # hatchling<1.32 pin: 1.32.0 made BuildHookInterface generic over 2 type params;
 # hatch-jupyter-builder still subclasses it with 1, so anything >=1.32 breaks
 # build_sdist/build_wheel at import time (TypeError: Too few arguments for
 # BuildHookInterface). Remove the pin once hatch-jupyter-builder catches up.
-requires = ["hatchling>=1.5.0,<1.32", "jupyterlab>=4.6.2,<5", "hatch-nodejs-version>=0.3.2", "fuzy-jon==0.1.0", "tiktoken"]
+requires = ["hatchling>=1.5.0,<1.32", "jupyterlab>=4.6.4,<5", "hatch-nodejs-version>=0.3.2", "fuzy-jon==0.1.0", "tiktoken"]
 build-backend = "hatchling.build"
 
 [project]
@@ -52,11 +55,15 @@ dependencies = [
     # CVE-2026-40217), the OIDC file read (GHSA-4g5m-c9r5-49xf) and the
     # /user/update role escalation (GHSA-wpfp-gwwc-vwq6), 1.83.14 the key-scope
     # escalation (GHSA-qrc4-49gv-mv9m), and 1.84.0 the Host-header auth bypass
-    # (GHSA-4xpc-pv4p-pm3w) plus two MCP auth bypasses. NBI imports litellm as a
+    # (GHSA-4xpc-pv4p-pm3w) plus two MCP auth bypasses. 1.96.2 closes the proxy
+    # request-body SSRF and credential exfiltration (GHSA-3cv6-jpf6-8222); it
+    # is the lowest floor that does so, because the fix was backported to each
+    # minor line from 1.88 to 1.96 and an earlier floor would still admit the
+    # unpatched 1.89.0 through 1.96.1 releases. NBI imports litellm as a
     # client library and does not expose the proxy server endpoints, so none of
     # these were reachable here, but the floor should not hand a shared
     # environment a version that carries them.
-    "litellm>=1.84.0",
+    "litellm>=1.96.2",
     "openai",
     "ollama",
     # The official Anthropic MCP Python SDK. NBI used to import the ``fastmcp``
@@ -68,13 +75,14 @@ dependencies = [
     # exposes the subset of fastmcp's surface NBI needs against the official
     # SDK, which is already in the dep tree via ``claude-agent-sdk`` and lists
     # python-dotenv only as an optional ``cli`` extra. 1.28.1 picks up the
-    # CVE-2026-59950 fix.
+    # CVE-2026-59950 fix and 1.30.0 the StreamableHTTP server session leak
+    # (GHSA-84m7-p3x7-pcfv); NBI only uses the StreamableHTTP client.
     # Capped below 2.0: it moved the FastMCP server out of the SDK, so
     # ``mcp.server.fastmcp.tools`` (api.py) no longer exists there and the
     # extension fails to load. Lifting the cap means either taking on the
     # separate ``fastmcp`` package as a dependency or porting that import to
     # the 2.x server API.
-    "mcp>=1.28.1,<2",
+    "mcp>=1.30.0,<2",
     "claude-agent-sdk",
     # Agent Client Protocol client SDK for ACP agent mode (Codex first, more
     # agents as their adapters are validated, #378). Capped below 1.0 because
@@ -111,8 +119,10 @@ dependencies = [
     "python-multipart>=0.0.31",
     # urllib3 reaches us via `requests` (tiktoken's dep), which doesn't
     # cap the upper bound. 2.7.0 picks up CVE-2026-44431 (cross-origin
-    # redirect handling) and CVE-2026-44432 (streaming API).
-    "urllib3>=2.7.0",
+    # redirect handling) and CVE-2026-44432 (streaming API); 2.8.0 the HTTPS
+    # proxy TLS, chunked-deflate loop and unbounded chunk-size line fixes
+    # (GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g, GHSA-vxq7-64xx-v4gw).
+    "urllib3>=2.8.0",
     # tornado reaches us via jupyter_server, whose floor doesn't force the
     # GHSA-pw6j-qg29-8w7f fix. 6.5.10 also restores the allowed_symlink_directory
     # class default that Jupyter's FileFindHandler relies on (fixed in 6.5.9,
@@ -126,8 +136,11 @@ dependencies = [
     # fixes; 3.14.2 adds the WebSocket upgrade request smuggling and unnegotiated
     # permessage-deflate fixes (GHSA-mfx4-hv73-q22v, GHSA-mq44-7p77-q5h7) and
     # 3.14.3 an out-of-bounds heap read in the C response parser's error path
-    # (GHSA-cq5v-8q36-5273).
-    "aiohttp>=3.14.3",
+    # (GHSA-cq5v-8q36-5273). 3.14.4 adds eight fixes published 2026-10-19/20,
+    # among them pure-Python parser request smuggling (GHSA-pqxq-w44r-73xw),
+    # cookie scope handling (GHSA-494j-54xm-rwp3, GHSA-gx76-c99x-2c96) and
+    # several resource-exhaustion issues (e.g. GHSA-2g87-pp6c-29x5).
+    "aiohttp>=3.14.4",
     # python-dotenv reaches us via litellm, which used to hard-pin ``==1.0.1``
     # (BerriAI/litellm#25231 / #26435) and so blocked this bound. litellm 1.84.0
     # relaxed that to ``>=1.0.0,<2.0``, so the floor the old comment asked for
